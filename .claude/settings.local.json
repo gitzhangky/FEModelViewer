@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(brew --version)",
+      "Bash(brew list:*)",
+      "Bash(brew info:*)",
+      "Bash(cmake:*)",
+      "Bash(make)",
+      "Bash(c++ -std=c++17 -fsyntax-only -I/opt/homebrew/include -I/opt/homebrew/Cellar/glm/1.0.3/include FENode.h FEElement.h FEGroup.h FEField.h FEModel.h FEMeshConverter.h)",
+      "Bash(ls:*)",
+      "Bash(mkdir:*)",
+      "Bash(open:*)",
+      "Bash(wc:*)",
+      "Bash(g++ -std=c++17 -I/opt/homebrew/opt/qt@5/include -I/opt/homebrew/opt/qt@5/include/QtCore -I/opt/homebrew/Cellar/glm/1.0.3/include -F/opt/homebrew/opt/qt@5/lib -framework QtCore test_parse.cpp FEModel.cpp FEField.cpp FEMeshConverter.cpp -o test_parse 2>&1)",
+      "Bash(./test_parse)",
+      "Bash(xxd /Users/zhangkaiyuan/Downloads/MakeAbaqusInputFile.jl-main/test/tests_output/RVE_inp_files_common_data/Matrix-ele_conn_5.inp)",
+      "Bash(kill %1)",
+      "Bash(file:*)",
+      "Bash(python3:*)",
+      "Bash(git init:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
+    ]
+  }
+}
