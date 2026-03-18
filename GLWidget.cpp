@@ -149,7 +149,7 @@ void GLWidget::fitToModel(const glm::vec3& center, float size) {
     cam_.distance = size * 1.5f;
     cam_.maxDist = size * 10.0f;
     cam_.minDist = size * 0.05f;
-    cam_.panSensitivity = size * 0.001f;
+    cam_.panSensitivity = 0.001f;
     cam_.yaw = 30.0f;
     cam_.pitch = 25.0f;
     update();
@@ -544,8 +544,8 @@ void GLWidget::mouseMoveEvent(QMouseEvent* e) {
             return;
     }
 
-    if (e->buttons() & Qt::LeftButton)  cam_.rotate(dx, dy);
-    if (e->buttons() & Qt::RightButton) cam_.pan(dx, dy);
+    if (e->buttons() & Qt::LeftButton)                              cam_.rotate(dx, dy);
+    if (e->buttons() & (Qt::RightButton | Qt::MiddleButton))        cam_.pan(dx, dy);
 
     update();
 }
@@ -570,6 +570,8 @@ void GLWidget::mouseReleaseEvent(QMouseEvent* e) {
 }
 
 void GLWidget::wheelEvent(QWheelEvent* e) {
+    // 按住中键或右键拖动时忽略滚轮，防止平移与缩放同时触发
+    if (e->buttons() & (Qt::MiddleButton | Qt::RightButton)) return;
     cam_.zoom(e->angleDelta().y() / 120.0f);
     update();
 }

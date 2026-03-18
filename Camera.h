@@ -22,8 +22,8 @@ public:
     glm::vec3 target{0.0f, 0.0f, 0.0f};      // 相机注视的目标点（世界坐标）
 
     // ── 灵敏度参数 ──
-    float rotateSensitivity = 0.3f;           // 旋转灵敏度（像素 -> 角度的映射系数）
-    float panSensitivity    = 0.002f;         // 平移灵敏度（像素 -> 世界单位的映射系数）
+    float rotateSensitivity = 0.15f;          // 旋转灵敏度（像素 -> 角度的映射系数）
+    float panSensitivity    = 0.001f;         // 平移灵敏度（相对于当前距离的比例系数）
     float zoomSensitivity   = 0.3f;           // 缩放灵敏度（滚轮增量 -> 距离变化的映射系数）
     float minDist = 0.1f, maxDist = 50.0f;    // 缩放距离的上下限
 

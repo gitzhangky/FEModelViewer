@@ -42,17 +42,15 @@ void Camera::rotate(float dx, float dy) {
 }
 
 void Camera::pan(float dx, float dy) {
-    float ry = glm::radians(yaw);
+    // 从视线方向和世界 up 推导出相机坐标系的真实 right 和 up 向量
+    // 这样无论相机俯仰多少度，平移方向都与屏幕像素方向完全对齐
+    glm::vec3 viewDir = glm::normalize(target - eye());
+    glm::vec3 worldUp(0.0f, 1.0f, 0.0f);
+    glm::vec3 right  = glm::normalize(glm::cross(viewDir, worldUp));
+    glm::vec3 up     = glm::cross(right, viewDir);
 
-    // 根据当前 yaw 角度计算相机坐标系的右方向（在 XZ 平面上）
-    glm::vec3 right(cos(ry), 0.0f, -sin(ry));
-    // 上方向固定为世界 Y 轴
-    glm::vec3 up(0.0f, 1.0f, 0.0f);
-
-    // 平移速度与距离成正比：距离远时平移快，距离近时平移细腻
     float speed = distance * panSensitivity;
 
-    // 移动目标点（反向移动以匹配鼠标拖拽的直觉方向）
     target -= right * dx * speed;
     target += up    * dy * speed;
 }

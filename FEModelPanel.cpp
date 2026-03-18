@@ -18,6 +18,7 @@
 #include <QFile>
 #include <QTextStream>
 #include <QFileInfo>
+#include <QSettings>
 #include <QDir>
 #include <QRegExp>
 #include <QProgressDialog>
@@ -189,12 +190,16 @@ QGroupBox* FEModelPanel::createOptionGroup() {
 // ════════════════════════════════════════════════════════════
 
 void FEModelPanel::loadModelFromFile() {
+    QSettings settings("FEModelViewer", "FEModelViewer");
+    QString lastDir = settings.value("lastOpenDir", QString()).toString();
+
     QString path = QFileDialog::getOpenFileName(
         this, "打开有限元模型",
-        QString(),
+        lastDir,
         "ABAQUS (*.inp *.odb);;ABAQUS Input (*.inp);;ABAQUS ODB (*.odb);;所有文件 (*)");
 
     if (path.isEmpty()) return;
+    settings.setValue("lastOpenDir", QFileInfo(path).absolutePath());
 
     // ODB 是 ABAQUS 私有二进制格式，无法直接解析
     if (path.endsWith(".odb", Qt::CaseInsensitive)) {
