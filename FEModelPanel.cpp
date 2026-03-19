@@ -22,8 +22,13 @@
 #include <QDir>
 #include <QRegExp>
 #include <QProgressDialog>
+#include <QProgressBar>
 #include <QApplication>
+#include <QElapsedTimer>
+#include <QThread>
+#include <QEventLoop>
 #include <functional>
+#include <atomic>
 
 // ════════════════════════════════════════════════════════════
 // 构造函数
@@ -192,11 +197,28 @@ QGroupBox* FEModelPanel::createOptionGroup() {
 void FEModelPanel::loadModelFromFile() {
     QSettings settings("FEModelViewer", "FEModelViewer");
     QString lastDir = settings.value("lastOpenDir", QString()).toString();
+    // 如果上次目录无效，使用桌面作为起始位置（加载快）
+    if (lastDir.isEmpty() || !QDir(lastDir).exists()) {
+        lastDir = QDir::homePath() + "/Desktop";
+        if (!QDir(lastDir).exists()) lastDir = QDir::homePath();
+    }
 
-    QString path = QFileDialog::getOpenFileName(
-        this, "打开有限元模型",
-        lastDir,
-        "ABAQUS (*.inp *.odb);;ABAQUS Input (*.inp);;ABAQUS ODB (*.odb);;所有文件 (*)");
+    // macOS 16 + Qt5 原生 NSOpenPanel 不弹窗，使用 Qt 自带对话框
+    // 不设自定义样式，保持系统默认外观
+    QFileDialog dialog(this, "打开有限元模型", lastDir,
+                       "所有支持格式 (*.inp *.bdf *.fem *.odb);;"
+                       "ABAQUS Input (*.inp);;"
+                       "Nastran BDF (*.bdf *.fem);;"
+                       "ABAQUS ODB (*.odb);;"
+                       "所有文件 (*)");
+    dialog.setFileMode(QFileDialog::ExistingFile);
+    dialog.setAcceptMode(QFileDialog::AcceptOpen);
+    dialog.setOption(QFileDialog::DontUseNativeDialog, true);
+    dialog.setStyleSheet("");  // 清除继承的父级样式，使用系统默认
+    dialog.resize(720, 480);
+
+    if (dialog.exec() != QDialog::Accepted) return;
+    QString path = dialog.selectedFiles().first();
 
     if (path.isEmpty()) return;
     settings.setValue("lastOpenDir", QFileInfo(path).absolutePath());
@@ -216,59 +238,134 @@ void FEModelPanel::loadModelFromFile() {
     currentRenderData_.clear();
 
     // ── 进度对话框 ──
-    QProgressDialog progress("正在加载模型...", QString(), 0, 3, this);
-    progress.setWindowModality(Qt::WindowModal);
-    progress.setMinimumDuration(0);
-    progress.setCancelButton(nullptr);
-    progress.show();
-    QApplication::processEvents();
+    QProgressDialog dlg("正在加载模型...", QString(), 0, 1000, this);
+    dlg.setWindowModality(Qt::WindowModal);
+    dlg.setMinimumDuration(0);
+    dlg.setCancelButton(nullptr);
+    dlg.setStyleSheet(
+        "QProgressDialog { background: #1e1e2e; }"
+        "QLabel { color: #cdd6f4; font-size: 13px; }"
+        "QProgressBar {"
+        "  border: 1px solid #45475a; border-radius: 5px;"
+        "  background: #313244; text-align: center;"
+        "  color: #cdd6f4; font-size: 11px; height: 18px; }"
+        "QProgressBar::chunk {"
+        "  background: qlineargradient(x1:0, y1:0, x2:1, y2:0,"
+        "    stop:0 #a6e3a1, stop:1 #94e2d5);"
+        "  border-radius: 4px; }"
+    );
+    dlg.setValue(0);
+    dlg.show();
 
-    // 步骤 1：解析文件
-    progress.setLabelText("正在解析文件...");
-    progress.setValue(0);
-    QApplication::processEvents();
+    // ── 后台线程做所有重计算，原子变量传进度 ──
+    std::atomic<int>  targetVal{0};    // 目标进度 0-1000
+    std::atomic<int>  phase{0};        // 0=解析 1=渲染 2=完成
+    std::atomic<int>  elemCount{0};    // 单元数（供标签显示）
+    bool workerOk = false;
+    FEModel           resultModel;
+    FERenderData      resultRender;
 
-    bool ok = false;
-    if (path.endsWith(".inp", Qt::CaseInsensitive)) {
-        ok = parseAbaqusInp(path);
+    QThread* worker = QThread::create([&]() {
+        // 阶段 1：解析文件 (0-500)
+        phase.store(0);
+        bool ok = false;
+        if (path.endsWith(".inp", Qt::CaseInsensitive)) {
+            ok = parseAbaqusInp(path, resultModel, [&](int pct) {
+                targetVal.store(pct * 5);
+            });
+        } else if (path.endsWith(".bdf", Qt::CaseInsensitive) ||
+                   path.endsWith(".fem", Qt::CaseInsensitive)) {
+            ok = parseNastranBdf(path, resultModel, [&](int pct) {
+                targetVal.store(pct * 5);
+            });
+        }
+        workerOk = ok;
+        if (!ok || resultModel.isEmpty()) {
+            phase.store(2);
+            return;
+        }
+        resultModel.name = QFileInfo(path).baseName().toStdString();
+        resultModel.filePath = path.toStdString();
+        elemCount.store(resultModel.elementCount());
+        targetVal.store(500);
+
+        // 阶段 2：生成渲染数据 (500-950)
+        phase.store(1);
+        resultRender = FEMeshConverter::toRenderData(resultModel, [&](int pct) {
+            targetVal.store(500 + pct * 450 / 100);
+        });
+        targetVal.store(950);
+        phase.store(2);
+    });
+
+    // ── 主线程：轮询驱动进度条（兼容 macOS Cocoa） ──
+    worker->start();
+    int displayed = 0;
+    while (!worker->isFinished()) {
+        int target = targetVal.load();
+
+        // ease-out 插值
+        if (displayed < target) {
+            int diff = target - displayed;
+            int step = qMax(1, diff / 4);
+            displayed = qMin(displayed + step, target);
+        }
+        dlg.setValue(displayed);
+
+        // 阶段文字
+        int p = phase.load();
+        if (p == 0) {
+            int pct = targetVal.load() / 5;
+            dlg.setLabelText(pct < 50 ? "正在解析节点数据..." : "正在解析单元数据...");
+        } else if (p == 1) {
+            dlg.setLabelText(QString("正在生成渲染数据（%1 个单元）...").arg(elemCount.load()));
+        } else {
+            dlg.setLabelText("正在更新显示...");
+        }
+
+        // 直接驱动事件循环，避免嵌套 QEventLoop 与 Cocoa 冲突
+        QApplication::processEvents(QEventLoop::AllEvents);
+        worker->wait(16);  // 等待最多 16ms（~60fps），不阻塞主线程
     }
+    worker->wait();
+    delete worker;
 
-    if (!ok || currentModel_.isEmpty()) {
-        progress.close();
+    // ── 检查结果 ──
+    if (!workerOk || resultModel.isEmpty()) {
+        dlg.close();
         QMessageBox::warning(this, "加载失败",
             QString("无法解析模型文件或文件中无有效数据。\n\n"
                     "解析结果：节点 %1，单元 %2")
-            .arg(currentModel_.nodeCount())
-            .arg(currentModel_.elementCount()));
+            .arg(resultModel.nodeCount())
+            .arg(resultModel.elementCount()));
         return;
     }
 
-    currentModel_.name = QFileInfo(path).baseName().toStdString();
-    currentModel_.filePath = path.toStdString();
+    currentModel_ = resultModel;
+    currentRenderData_ = resultRender;
 
-    // 步骤 2：生成渲染数据
-    progress.setLabelText(QString("正在生成渲染数据（%1 个单元）...")
-                          .arg(currentModel_.elementCount()));
-    progress.setValue(1);
-    QApplication::processEvents();
-
-    currentRenderData_ = FEMeshConverter::toRenderData(currentModel_);
-
-    // 步骤 3：更新显示
-    progress.setLabelText("正在更新显示...");
-    progress.setValue(2);
-    QApplication::processEvents();
+    // ── 收尾动画 ──
+    dlg.setLabelText("正在更新显示...");
+    while (displayed < 1000) {
+        int diff = 1000 - displayed;
+        displayed = qMin(displayed + qMax(1, diff / 3), 1000);
+        dlg.setValue(displayed);
+        QApplication::processEvents();
+        QThread::msleep(16);
+    }
 
     updateInfoLabels();
-    emit meshGenerated(currentRenderData_.mesh, currentModel_.computeCenter(), currentModel_.computeSize(), currentRenderData_.triangleToElement, currentRenderData_.triangleToFace);
+    emit meshGenerated(currentRenderData_.mesh, currentModel_.computeCenter(),
+                       currentModel_.computeSize(), currentRenderData_.triangleToElement,
+                       currentRenderData_.triangleToFace);
 
-    progress.setValue(3);
+    dlg.close();
     qDebug("loadModelFromFile: loaded '%s' - nodes=%d, elements=%d, triangles=%d",
            qPrintable(path), currentModel_.nodeCount(), currentModel_.elementCount(),
            currentRenderData_.triangleCount());
 }
 
-bool FEModelPanel::parseAbaqusInp(const QString& filePath) {
+bool FEModelPanel::parseAbaqusInp(const QString& filePath, FEModel& model, const std::function<void(int)>& progress) {
     // ── 工具 lambda ──
 
     // ABAQUS 单元类型名 → ElementType
@@ -361,7 +458,10 @@ bool FEModelPanel::parseAbaqusInp(const QString& filePath) {
         return QString();
     };
 
-    // ── 递归读取文件，展开所有 INCLUDE 为行列表 ──
+    // ── 递归读取文件，展开所有 INCLUDE 为行列表（0-40%）──
+    const qint64 mainFileSize = std::max((qint64)1, QFileInfo(filePath).size());
+    qint64 bytesRead = 0;
+
     std::function<QStringList(const QString&)> readWithIncludes;
     readWithIncludes = [&](const QString& path) -> QStringList {
         QFile f(path);
@@ -372,6 +472,12 @@ bool FEModelPanel::parseAbaqusInp(const QString& filePath) {
         QTextStream stream(&f);
         while (!stream.atEnd()) {
             QString line = stream.readLine();
+            bytesRead += line.size() + 1;
+            if (progress) {
+                int pct = static_cast<int>(std::min(bytesRead * 40 / mainFileSize, (qint64)40));
+                progress(pct);
+            }
+
             QString trimmed = line.trimmed();
 
             // 处理 *INCLUDE
@@ -389,8 +495,9 @@ bool FEModelPanel::parseAbaqusInp(const QString& filePath) {
 
     // ── 展开所有行 ──
     QStringList allLines = readWithIncludes(filePath);
+    if (progress) progress(40);
 
-    // ── 解析 ──
+    // ── 解析（40-100%）──
     enum Section { None, Node, Element } section = None;
     ElementType currentElemType = ElementType::HEX8;
     int expectedNodeCount = 8;
@@ -399,13 +506,20 @@ bool FEModelPanel::parseAbaqusInp(const QString& filePath) {
 
     auto flushPendingElement = [&]() {
         if (pendingElemId >= 0 && !pendingNodeIds.empty()) {
-            currentModel_.addElement(pendingElemId, currentElemType, pendingNodeIds);
+            model.addElement(pendingElemId, currentElemType, pendingNodeIds);
             pendingElemId = -1;
             pendingNodeIds.clear();
         }
     };
 
+    const int totalLines = allLines.size();
+    const int lineReportInterval = std::max(1, totalLines / 100);
+    int lineIndex = 0;
+
     for (const auto& rawLine : allLines) {
+        if (progress && (++lineIndex % lineReportInterval == 0)) {
+            progress(40 + lineIndex * 60 / totalLines);
+        }
         QString line = rawLine.trimmed();
 
         if (line.isEmpty()) continue;
@@ -442,7 +556,7 @@ bool FEModelPanel::parseAbaqusInp(const QString& filePath) {
                 float x = parts[1].toFloat();
                 float y = parts[2].toFloat();
                 float z = parts[3].toFloat();
-                currentModel_.addNode(id, glm::vec3(x, y, z));
+                model.addNode(id, glm::vec3(x, y, z));
             }
         } else if (section == Element) {
             QStringList parts = splitLine(line);
@@ -467,14 +581,14 @@ bool FEModelPanel::parseAbaqusInp(const QString& filePath) {
     flushPendingElement();
 
     qDebug("parseAbaqusInp: nodes=%d, elements=%d",
-           (int)currentModel_.nodes.size(),
-           (int)currentModel_.elements.size());
+           (int)model.nodes.size(),
+           (int)model.elements.size());
 
     // 找出缺失的单元 ID
-    if ((int)currentModel_.elements.size() < 800) {
+    if ((int)model.elements.size() < 800) {
         QString missing;
         for (int i = 1; i <= 800; ++i) {
-            if (currentModel_.elements.find(i) == currentModel_.elements.end()) {
+            if (model.elements.find(i) == model.elements.end()) {
                 if (!missing.isEmpty()) missing += ", ";
                 missing += QString::number(i);
             }
@@ -484,12 +598,361 @@ bool FEModelPanel::parseAbaqusInp(const QString& filePath) {
 
     // 检查单元类型分布
     int hex8 = 0, wedge6 = 0, other = 0;
-    for (const auto& [id, elem] : currentModel_.elements) {
+    for (const auto& [id, elem] : model.elements) {
         if (elem.type == ElementType::HEX8) hex8++;
         else if (elem.type == ElementType::WEDGE6) wedge6++;
         else other++;
     }
     qDebug("  HEX8=%d, WEDGE6=%d, other=%d", hex8, wedge6, other);
+
+    return true;
+}
+
+// ════════════════════════════════════════════════════════════
+// Nastran BDF/FEM 解析
+// ════════════════════════════════════════════════════════════
+
+bool FEModelPanel::parseNastranBdf(const QString& filePath, FEModel& model, const std::function<void(int)>& progress) {
+    QFile f(filePath);
+    if (!f.open(QIODevice::ReadOnly | QIODevice::Text))
+        return false;
+
+    // 读取全部行（0-15%）
+    const qint64 fileSize = std::max((qint64)1, QFileInfo(filePath).size());
+    qint64 bytesRead = 0;
+    QStringList allLines;
+    {
+        QTextStream stream(&f);
+        while (!stream.atEnd()) {
+            QString line = stream.readLine();
+            bytesRead += line.size() + 1;
+            if (progress) {
+                int pct = static_cast<int>(std::min(bytesRead * 15 / fileSize, (qint64)15));
+                progress(pct);
+            }
+            allLines.append(line);
+        }
+    }
+    f.close();
+    if (progress) progress(15);
+
+    const int totalLines = allLines.size();
+    const int lineReportInterval = std::max(1, totalLines / 100);
+
+    // ── Nastran 字段解析工具 ──
+
+    // 解析 Nastran 实数（支持隐式指数：如 "1.5-3" → "1.5e-3"）
+    auto parseNastranReal = [](const QString& s) -> double {
+        QString t = s.trimmed();
+        if (t.isEmpty()) return 0.0;
+        // 处理隐式指数：数字中间的 +/- 是指数符号
+        // 例如 "1.5-3" → "1.5e-3", "2.0+1" → "2.0e+1"
+        // 但不处理开头的 +/- 号
+        for (int i = 1; i < t.size(); ++i) {
+            QChar c = t[i];
+            if ((c == '+' || c == '-') && t[i-1] != 'e' && t[i-1] != 'E'
+                && t[i-1] != 'd' && t[i-1] != 'D'
+                && t[i-1] != '+' && t[i-1] != '-') {
+                // 前一个字符是数字或小数点 → 隐式指数
+                if (t[i-1].isDigit() || t[i-1] == '.') {
+                    t.insert(i, 'e');
+                    break;
+                }
+            }
+        }
+        t.replace(QChar('d'), QChar('e'), Qt::CaseInsensitive);
+        return t.toDouble();
+    };
+
+    // 将一行拆分为字段（自动检测自由格式/小字段/大字段）
+    auto splitBdfFields = [](const QString& line) -> QStringList {
+        QStringList fields;
+        if (line.contains(',')) {
+            // 自由格式：逗号分隔
+            for (const auto& f : line.split(','))
+                fields.append(f.trimmed());
+        } else {
+            // 固定格式：第一个字段 8 字符，后续每 8 或 16 字符
+            QString first = line.left(8).trimmed();
+            fields.append(first);
+            bool largeField = first.endsWith('*');
+            int fieldWidth = largeField ? 16 : 8;
+            int pos = 8;
+            while (pos < line.size()) {
+                int end = qMin(pos + fieldWidth, line.size());
+                fields.append(line.mid(pos, end - pos).trimmed());
+                pos = end;
+            }
+        }
+        return fields;
+    };
+
+    // ── 合并续行（15-25%）──
+    // Nastran 固定格式：cols 1-8=卡名, cols 9-72=数据, cols 73-80=续行标记
+    // 续行行：cols 1-8=续行标记(+或*), cols 9-72=数据, cols 73-80=下一续行标记
+    QStringList mergedLines;
+    {
+        QString current;
+        bool currentIsFreeFormat = false;
+        const int mergeTotal = allLines.size();
+        const int mergeReportInterval = std::max(1, mergeTotal / 10);
+        int mergeIndex = 0;
+
+        for (const auto& rawLine : allLines) {
+            if (progress && (++mergeIndex % mergeReportInterval == 0)) {
+                progress(15 + mergeIndex * 10 / mergeTotal);  // 15-25%
+            }
+            QString line = rawLine;
+            // 去除行尾注释（$ 后的内容）
+            int dollarPos = line.indexOf('$');
+            if (dollarPos >= 0) line = line.left(dollarPos);
+            if (line.trimmed().isEmpty()) continue;
+
+            // 检查是否是续行（以 +, * 开头）
+            QChar firstChar = line.trimmed().at(0);
+            bool isContinuation = (firstChar == '+' || firstChar == '*')
+                                  && !current.isEmpty();
+
+            if (isContinuation) {
+                if (currentIsFreeFormat) {
+                    // 自由格式续行
+                    QString continuation = line.trimmed();
+                    if (continuation.startsWith('+') || continuation.startsWith('*')) {
+                        int commaPos = continuation.indexOf(',');
+                        if (commaPos >= 0) continuation = continuation.mid(commaPos + 1);
+                        else continuation = continuation.mid(8);
+                    }
+                    current += "," + continuation;
+                } else {
+                    // 固定格式续行：只取 cols 9-72 的数据部分
+                    int dataEnd = qMin(72, line.size());
+                    QString contData = (dataEnd > 8) ? line.mid(8, dataEnd - 8) : "";
+                    current += contData;
+                }
+            } else {
+                // 新卡：保存上一条
+                if (!current.isEmpty()) mergedLines.append(current);
+                currentIsFreeFormat = line.contains(',');
+                if (!currentIsFreeFormat) {
+                    // 固定格式：只取 cols 1-72（去掉续行标记字段）
+                    current = line.left(qMin(72, line.size()));
+                } else {
+                    current = line;
+                }
+            }
+        }
+        if (!current.isEmpty()) mergedLines.append(current);
+    }
+    if (progress) progress(25);
+
+    // ── CORD2R 坐标系数据结构 ──
+    struct CoordSys {
+        int id = 0;
+        int rid = 0;       // 参考坐标系 ID（0 = 全局）
+        glm::dvec3 A{0};   // 原点
+        glm::dvec3 B{0};   // Z 轴方向点
+        glm::dvec3 C{0};   // XZ 平面内的点
+        glm::dmat3 R{1};   // 旋转矩阵（解析后计算）
+        glm::dvec3 origin{0}; // 全局原点（解析后计算）
+        bool resolved = false;
+    };
+    std::unordered_map<int, CoordSys> coordSystems;
+
+    // 临时存储 GRID 的原始数据（坐标系变换需要先解析所有 CORD2R）
+    struct RawGrid {
+        int id;
+        int cp;        // 坐标系 ID
+        glm::dvec3 xyz;
+    };
+    std::vector<RawGrid> rawGrids;
+
+    // ── 第一遍：解析 CORD2R 和 GRID，收集单元（25-80%）──
+    int lineIndex = 0;
+    const int mergedTotal2 = mergedLines.size();
+    const int mergedReportInterval = std::max(1, mergedTotal2 / 100);
+
+    for (const auto& line : mergedLines) {
+        if (progress && (++lineIndex % mergedReportInterval == 0)) {
+            progress(25 + lineIndex * 55 / mergedTotal2);  // 25-80%
+        }
+
+        QStringList fields = splitBdfFields(line);
+        if (fields.isEmpty()) continue;
+
+        QString card = fields[0].toUpper().remove('*');
+
+        // ── CORD2R: 矩形坐标系 ──
+        if (card == "CORD2R") {
+            if (fields.size() < 6) continue;
+            CoordSys cs;
+            cs.id  = fields[1].toInt();
+            cs.rid = fields[2].toInt();
+            cs.A.x = parseNastranReal(fields[3]);
+            cs.A.y = parseNastranReal(fields[4]);
+            cs.A.z = (fields.size() > 5)  ? parseNastranReal(fields[5])  : 0.0;
+            cs.B.x = (fields.size() > 6)  ? parseNastranReal(fields[6])  : 0.0;
+            cs.B.y = (fields.size() > 7)  ? parseNastranReal(fields[7])  : 0.0;
+            cs.B.z = (fields.size() > 8)  ? parseNastranReal(fields[8])  : 0.0;
+            cs.C.x = (fields.size() > 9)  ? parseNastranReal(fields[9])  : 0.0;
+            cs.C.y = (fields.size() > 10) ? parseNastranReal(fields[10]) : 0.0;
+            cs.C.z = (fields.size() > 11) ? parseNastranReal(fields[11]) : 0.0;
+            coordSystems[cs.id] = cs;
+        }
+        // ── GRID: 节点（暂存，后续变换） ──
+        else if (card == "GRID") {
+            if (fields.size() < 5) continue;
+            RawGrid g;
+            g.id = fields[1].toInt();
+            g.cp = fields[2].toInt();
+            g.xyz.x = parseNastranReal(fields[3]);
+            g.xyz.y = parseNastranReal(fields[4]);
+            g.xyz.z = (fields.size() > 5) ? parseNastranReal(fields[5]) : 0.0;
+            rawGrids.push_back(g);
+        }
+        // ── 单元卡 ──
+        else if (card == "CTETRA") {
+            if (fields.size() < 6) continue;
+            int eid = fields[1].toInt();
+            std::vector<int> nids;
+            for (int i = 3; i < fields.size() && !fields[i].isEmpty(); ++i)
+                nids.push_back(fields[i].toInt());
+            if (nids.size() >= 10)
+                model.addElement(eid, ElementType::TET10, std::vector<int>(nids.begin(), nids.begin() + 10));
+            else if (nids.size() >= 4)
+                model.addElement(eid, ElementType::TET4, std::vector<int>(nids.begin(), nids.begin() + 4));
+        }
+        else if (card == "CHEXA") {
+            if (fields.size() < 6) continue;
+            int eid = fields[1].toInt();
+            std::vector<int> nids;
+            for (int i = 3; i < fields.size() && !fields[i].isEmpty(); ++i)
+                nids.push_back(fields[i].toInt());
+            if (nids.size() >= 20)
+                model.addElement(eid, ElementType::HEX20, std::vector<int>(nids.begin(), nids.begin() + 20));
+            else if (nids.size() >= 8)
+                model.addElement(eid, ElementType::HEX8, std::vector<int>(nids.begin(), nids.begin() + 8));
+        }
+        else if (card == "CPENTA") {
+            if (fields.size() < 6) continue;
+            int eid = fields[1].toInt();
+            std::vector<int> nids;
+            for (int i = 3; i < fields.size() && !fields[i].isEmpty(); ++i)
+                nids.push_back(fields[i].toInt());
+            if (nids.size() >= 6)
+                model.addElement(eid, ElementType::WEDGE6, std::vector<int>(nids.begin(), nids.begin() + 6));
+        }
+        else if (card == "CPYRAM") {
+            if (fields.size() < 6) continue;
+            int eid = fields[1].toInt();
+            std::vector<int> nids;
+            for (int i = 3; i < fields.size() && !fields[i].isEmpty(); ++i)
+                nids.push_back(fields[i].toInt());
+            if (nids.size() >= 5)
+                model.addElement(eid, ElementType::PYRAMID5, std::vector<int>(nids.begin(), nids.begin() + 5));
+        }
+        else if (card == "CTRIA3") {
+            if (fields.size() < 6) continue;
+            int eid = fields[1].toInt();
+            model.addElement(eid, ElementType::TRI3,
+                {fields[3].toInt(), fields[4].toInt(), fields[5].toInt()});
+        }
+        else if (card == "CTRIA6") {
+            if (fields.size() < 9) continue;
+            int eid = fields[1].toInt();
+            std::vector<int> nids;
+            for (int i = 3; i < 9 && i < fields.size(); ++i)
+                nids.push_back(fields[i].toInt());
+            model.addElement(eid, ElementType::TRI6, nids);
+        }
+        else if (card == "CQUAD4") {
+            if (fields.size() < 7) continue;
+            int eid = fields[1].toInt();
+            model.addElement(eid, ElementType::QUAD4,
+                {fields[3].toInt(), fields[4].toInt(), fields[5].toInt(), fields[6].toInt()});
+        }
+        else if (card == "CQUAD8") {
+            if (fields.size() < 11) continue;
+            int eid = fields[1].toInt();
+            std::vector<int> nids;
+            for (int i = 3; i < 11 && i < fields.size(); ++i)
+                nids.push_back(fields[i].toInt());
+            model.addElement(eid, ElementType::QUAD8, nids);
+        }
+        else if (card == "CBAR" || card == "CBEAM") {
+            if (fields.size() < 5) continue;
+            int eid = fields[1].toInt();
+            model.addElement(eid, ElementType::BAR2,
+                {fields[3].toInt(), fields[4].toInt()});
+        }
+    }
+
+    // ── 解析 CORD2R 坐标系变换矩阵（支持链式引用） ──
+    std::function<void(CoordSys&)> resolveCoordSys;
+    resolveCoordSys = [&](CoordSys& cs) {
+        if (cs.resolved) return;
+        cs.resolved = true;  // 防止循环引用
+
+        // 如果引用了其他坐标系，先解析引用的坐标系
+        // 然后将 A, B, C 从引用坐标系变换到全局
+        if (cs.rid != 0) {
+            auto it = coordSystems.find(cs.rid);
+            if (it != coordSystems.end()) {
+                resolveCoordSys(it->second);
+                CoordSys& ref = it->second;
+                cs.A = ref.origin + ref.R * cs.A;
+                cs.B = ref.origin + ref.R * cs.B;
+                cs.C = ref.origin + ref.R * cs.C;
+            }
+        }
+
+        // 计算旋转矩阵：Z = normalize(B-A), X = 投影(C-A)到垂直于Z的平面
+        glm::dvec3 zDir = glm::normalize(cs.B - cs.A);
+        glm::dvec3 xzVec = cs.C - cs.A;
+        glm::dvec3 yDir = glm::normalize(glm::cross(zDir, xzVec));
+        glm::dvec3 xDir = glm::cross(yDir, zDir);
+
+        // 旋转矩阵的列向量是局部坐标系的轴方向
+        cs.R = glm::dmat3(xDir, yDir, zDir);
+        cs.origin = cs.A;
+    };
+
+    for (auto& [id, cs] : coordSystems) {
+        resolveCoordSys(cs);
+    }
+
+    qDebug("parseNastranBdf: %d coordinate systems resolved", (int)coordSystems.size());
+
+    // ── 将 GRID 节点从局部坐标系变换到全局坐标系 ──（80-95%）
+    int gridIndex = 0;
+    const int gridTotal = static_cast<int>(rawGrids.size());
+    const int gridReportInterval = std::max(1, gridTotal / 15);
+
+    for (const auto& g : rawGrids) {
+        if (progress && (++gridIndex % gridReportInterval == 0)) {
+            progress(80 + gridIndex * 15 / gridTotal);
+        }
+
+        glm::dvec3 globalPos = g.xyz;
+
+        if (g.cp != 0) {
+            auto it = coordSystems.find(g.cp);
+            if (it != coordSystems.end()) {
+                const CoordSys& cs = it->second;
+                globalPos = cs.origin + cs.R * g.xyz;
+            }
+        }
+
+        model.addNode(g.id, glm::vec3(
+            static_cast<float>(globalPos.x),
+            static_cast<float>(globalPos.y),
+            static_cast<float>(globalPos.z)));
+    }
+    if (progress) progress(95);
+
+    qDebug("parseNastranBdf: nodes=%d, elements=%d, coordSystems=%d",
+           (int)model.nodes.size(),
+           (int)model.elements.size(),
+           (int)coordSystems.size());
 
     return true;
 }

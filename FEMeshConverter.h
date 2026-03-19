@@ -64,6 +64,9 @@
 #include "FEModel.h"
 #include "FERenderData.h"
 #include "Geometry.h"
+#include <functional>
+
+using ProgressCallback = std::function<void(int percent)>;
 
 class FEMeshConverter {
 public:
@@ -85,18 +88,19 @@ public:
      * 同时填充 triangleToElement、triangleToFace、vertexToNode 映射表，
      * 使得拾取时可以从渲染三角形/顶点反查 FEM 单元/节点。
      */
-    static FERenderData toRenderData(const FEModel& model);
+    static FERenderData toRenderData(const FEModel& model, const ProgressCallback& progress = nullptr);
 
     /**
      * @brief 将指定的单元集转换为可渲染数据包
      * @param model FEM 模型
      * @param elementIds 要转换的单元 ID 列表
+     * @param progress 进度回调（0-100）
      * @return FERenderData（三角网格 + 反向映射表）
      *
      * 用于：分部件显示、选中单元高亮等。
      * 映射表只包含指定单元的信息。
      */
-    static FERenderData toRenderData(const FEModel& model, const std::vector<int>& elementIds);
+    static FERenderData toRenderData(const FEModel& model, const std::vector<int>& elementIds, const ProgressCallback& progress = nullptr);
 
     /**
      * @brief 将 FEM 模型转换为带云图颜色的渲染数据包

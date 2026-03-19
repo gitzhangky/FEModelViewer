@@ -35,6 +35,7 @@
 #include <QWidget>
 #include <QGroupBox>
 #include <QLabel>
+#include <functional>
 
 #include "FEModel.h"
 #include "FERenderData.h"
@@ -72,11 +73,14 @@ private:
 
     // ── 模型加载 ──
 
-    /** @brief 打开文件对话框并加载 FEM 模型（支持 ABAQUS .inp） */
+    /** @brief 打开文件对话框并加载 FEM 模型 */
     void loadModelFromFile();
 
-    /** @brief 解析 ABAQUS .inp 文件 */
-    bool parseAbaqusInp(const QString& filePath);
+    /** @brief 解析 ABAQUS .inp 文件，支持进度回调（0-100） */
+    bool parseAbaqusInp(const QString& filePath, FEModel& model, const std::function<void(int)>& progress = nullptr);
+
+    /** @brief 解析 Nastran BDF/FEM 文件，支持进度回调（0-100） */
+    bool parseNastranBdf(const QString& filePath, FEModel& model, const std::function<void(int)>& progress = nullptr);
 
     // ── 测试模型生成 ──
 

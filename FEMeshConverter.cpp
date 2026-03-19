@@ -30,14 +30,14 @@
  *   4. 1D 单元暂时跳过
  *   5. 每步都同步更新映射表
  */
-FERenderData FEMeshConverter::toRenderData(const FEModel& model) {
+FERenderData FEMeshConverter::toRenderData(const FEModel& model, const ProgressCallback& progress) {
     // 收集所有单元 ID
     std::vector<int> allIds;
     allIds.reserve(model.elements.size());
     for (const auto& [id, elem] : model.elements) {
         allIds.push_back(id);
     }
-    return toRenderData(model, allIds);
+    return toRenderData(model, allIds, progress);
 }
 
 /**
@@ -51,22 +51,28 @@ FERenderData FEMeshConverter::toRenderData(const FEModel& model) {
  *     - 出现 2 次 → 内部面（两个单元共享，不需要渲染）
  *   - 只对外表面进行三角化
  */
-FERenderData FEMeshConverter::toRenderData(const FEModel& model, const std::vector<int>& elementIds) {
+FERenderData FEMeshConverter::toRenderData(const FEModel& model, const std::vector<int>& elementIds, const ProgressCallback& progress) {
     FERenderData result;
+    const int totalElems = static_cast<int>(elementIds.size());
+    int processed = 0;
+    // 进度报告间隔：至少每 1% 或每 200 个单元报告一次
+    const int reportInterval = std::max(1, totalElems / 100);
 
-    // ── 第一遍：收集 3D 单元的面，用于外表面提取 ──
+    // ── 第一遍：收集所有面（3D 外表面 + 2D 壳面），统一去重 ──（占 0-40%）
 
     // FaceKey: 面的节点 ID 排序后作为唯一标识
-    // FaceInfo: 记录面所属的单元 ID、面序号、原始节点顺序
+    // FaceInfo: 记录面所属的单元 ID、面序号、原始节点顺序、是否 2D
     struct FaceInfo {
         int elemId;                    // 面所属的单元 ID
         int faceIndex;                 // 面在单元中的序号
         std::vector<int> faceNodes;    // 面的节点 ID（保持原始顺序，用于确定法线方向）
+        bool is2D;                     // 是否来自 2D 壳单元
     };
 
     // key = 排序后的节点 ID 列表, value = 该面的所有出现记录
     std::map<std::vector<int>, std::vector<FaceInfo>> faceMap;
 
+    processed = 0;
     for (int elemId : elementIds) {
         auto it = model.elements.find(elemId);
         if (it == model.elements.end()) continue;
@@ -77,7 +83,6 @@ FERenderData FEMeshConverter::toRenderData(const FEModel& model, const std::vect
             // 提取该 3D 单元的所有面
             auto faces = extractFaces(elem);
             for (int fi = 0; fi < static_cast<int>(faces.size()); ++fi) {
-                // 生成排序后的 key（用于判断两个面是否相同）
                 std::vector<int> sortedKey = faces[fi];
                 std::sort(sortedKey.begin(), sortedKey.end());
 
@@ -85,36 +90,76 @@ FERenderData FEMeshConverter::toRenderData(const FEModel& model, const std::vect
                 info.elemId = elemId;
                 info.faceIndex = fi;
                 info.faceNodes = faces[fi];
+                info.is2D = false;
                 faceMap[sortedKey].push_back(info);
             }
+        } else if (dim == 2) {
+            // 2D 壳单元也加入 faceMap，用角节点做 key 进行去重
+            int cc = elementCornerNodeCount(elem.type);
+            std::vector<int> faceNodes(cc);
+            for (int i = 0; i < cc; ++i) faceNodes[i] = elem.nodeIds[i];
+
+            std::vector<int> sortedKey = faceNodes;
+            std::sort(sortedKey.begin(), sortedKey.end());
+
+            FaceInfo info;
+            info.elemId = elemId;
+            info.faceIndex = 0;
+            info.faceNodes = faceNodes;
+            info.is2D = true;
+            faceMap[sortedKey].push_back(info);
+        }
+
+        if (progress && (++processed % reportInterval == 0)) {
+            progress(processed * 40 / totalElems);  // 0-40%
         }
     }
+    if (progress) progress(40);
 
-    // ── 第二遍：三角化外表面（只出现 1 次的面） ──
+    // ── 第二遍：三角化去重后的面（只出现 1 次的面 = 外表面/唯一壳面） ──（占 40-70%）
+    int totalFaces = static_cast<int>(faceMap.size());
+    int faceProcessed = 0;
+    int faceReportInterval = std::max(1, totalFaces / 30);
     for (const auto& [key, infos] : faceMap) {
         if (infos.size() == 1) {
-            // 外表面：只被一个单元引用
+            // 唯一面：外表面（3D）或不重复的壳面（2D）
             const FaceInfo& info = infos[0];
-            tessellateFace(result, info.faceNodes, info.elemId, info.faceIndex, model);
+            if (info.is2D) {
+                // 通过 tessellate2D 处理 2D 单元（保持原有逻辑）
+                auto elemIt = model.elements.find(info.elemId);
+                if (elemIt != model.elements.end())
+                    tessellate2D(result, elemIt->second, model);
+            } else {
+                tessellateFace(result, info.faceNodes, info.elemId, info.faceIndex, model);
+            }
+        } else if (infos.size() >= 2) {
+            // 重复面：只保留第一个（避免 Z-fighting）
+            // 对于 3D 内部共享面（两个实体单元共享）完全跳过
+            // 对于 2D 重复壳面（重合壳单元）只保留一个
+            bool anyIs2D = false;
+            for (const auto& info : infos) {
+                if (info.is2D) { anyIs2D = true; break; }
+            }
+            if (anyIs2D) {
+                // 有 2D 壳面参与：保留第一个 2D 面
+                for (const auto& info : infos) {
+                    if (info.is2D) {
+                        auto elemIt = model.elements.find(info.elemId);
+                        if (elemIt != model.elements.end())
+                            tessellate2D(result, elemIt->second, model);
+                        break;
+                    }
+                }
+            }
+            // 纯 3D 内部面：跳过（已在外表面提取中处理）
         }
-        // infos.size() == 2 → 内部共享面，跳过
-        // infos.size() > 2 → 异常情况（不应发生），也跳过
-    }
-
-    // ── 第三遍：处理 2D 单元（直接三角化） ──
-    for (int elemId : elementIds) {
-        auto it = model.elements.find(elemId);
-        if (it == model.elements.end()) continue;
-        const FEElement& elem = it->second;
-        int dim = elementDimension(elem.type);
-
-        if (dim == 2) {
-            tessellate2D(result, elem, model);
+        if (progress && (++faceProcessed % faceReportInterval == 0)) {
+            progress(40 + faceProcessed * 30 / totalFaces);  // 40-70%
         }
-        // dim == 1: 1D 单元暂时跳过（后续可生成管状/线段几何）
     }
+    if (progress) progress(70);
 
-    // ── 第四遍：生成外表面边线数据（去重，用于普通线框渲染）──
+    // ── 第四遍：生成外表面边线数据（去重，用于普通线框渲染）──（占 70-85%）
     {
         std::set<std::pair<int, int>> edgeSet;
 
@@ -134,13 +179,18 @@ FERenderData FEMeshConverter::toRenderData(const FEModel& model, const std::vect
             auto it = model.elements.find(elemId);
             if (it == model.elements.end()) continue;
             const FEElement& elem = it->second;
-            if (elementDimension(elem.type) == 2) {
+            int dim = elementDimension(elem.type);
+            if (dim == 2) {
                 int cc = elementCornerNodeCount(elem.type);
                 for (int i = 0; i < cc; ++i) {
                     int a = elem.nodeIds[i];
                     int b = elem.nodeIds[(i + 1) % cc];
                     edgeSet.insert({std::min(a, b), std::max(a, b)});
                 }
+            } else if (dim == 1 && elem.nodeIds.size() >= 2) {
+                // 1D 梁/杆单元：首尾两个节点形成一条边
+                int a = elem.nodeIds[0], b = elem.nodeIds[1];
+                edgeSet.insert({std::min(a, b), std::max(a, b)});
             }
         }
 
@@ -160,8 +210,9 @@ FERenderData FEMeshConverter::toRenderData(const FEModel& model, const std::vect
             result.mesh.edgeIndices.push_back(idx + 1);
         }
     }
+    if (progress) progress(85);
 
-    // ── 第五遍：生成完整单元边线数据（不去重，带单元归属，用于选中高亮）──
+    // ── 第五遍：生成完整单元边线数据（不去重，带单元归属，用于选中高亮）──（占 85-100%）
     {
         // 辅助：添加一条单元边
         auto addElemEdge = [&](int a, int b, int elemId) {
@@ -178,6 +229,7 @@ FERenderData FEMeshConverter::toRenderData(const FEModel& model, const std::vect
             result.mesh.elemEdgeToElement.push_back(elemId);
         };
 
+        processed = 0;
         for (int elemId : elementIds) {
             auto it = model.elements.find(elemId);
             if (it == model.elements.end()) continue;
@@ -212,8 +264,13 @@ FERenderData FEMeshConverter::toRenderData(const FEModel& model, const std::vect
             for (const auto& [a, b] : elemEdgeSet) {
                 addElemEdge(a, b, elemId);
             }
+
+            if (progress && (++processed % reportInterval == 0)) {
+                progress(85 + processed * 15 / totalElems);  // 85-100%
+            }
         }
     }
+    if (progress) progress(100);
 
     return result;
 }

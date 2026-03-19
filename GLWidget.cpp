@@ -29,15 +29,14 @@ layout (location = 1) in vec3 aNormal;   // 顶点法线（模型空间）
 uniform mat4 uMVP;        // Model-View-Projection 矩阵
 uniform mat4 uModel;      // Model 矩阵（模型空间 → 世界空间）
 uniform mat3 uNormalMat;  // 法线矩阵（Model 矩阵的逆转置，用于正确变换法线）
-
-out vec3 vWorldPos;   // 传递给片段着色器的世界空间位置
-out vec3 vNormal;     // 传递给片段着色器的世界空间法线
+out vec3 vWorldPos;
+out vec3 vNormal;
 
 void main() {
     vec4 worldPos = uModel * vec4(aPos, 1.0);
     vWorldPos = worldPos.xyz;
     vNormal   = normalize(uNormalMat * aNormal);
-    gl_Position = uMVP * vec4(aPos, 1.0);   // 变换到裁剪空间
+    gl_Position = uMVP * vec4(aPos, 1.0);
 }
 )";
 
@@ -48,30 +47,34 @@ void main() {
  */
 static const char* fragSrc = R"(
 #version 410 core
-in vec3 vWorldPos;   // 世界空间位置
-in vec3 vNormal;     // 世界空间法线
+in vec3 vWorldPos;
+in vec3 vNormal;
 
-uniform vec3 uLightDir;   // 平行光方向
-uniform vec3 uColor;      // 物体颜色
-uniform bool uWireframe;  // 是否为线框模式
+uniform vec3 uLightDir;
+uniform vec3 uColor;
+uniform bool uWireframe;
 out vec4 outColor;
 
 void main() {
+
     // 线框模式：直接输出纯色，跳过光照计算
     if (uWireframe) {
         outColor = vec4(uColor, 1.0);
         return;
     }
 
+    // 使用 gl_FrontFacing 正确处理双面光照
     vec3 N = normalize(vNormal);
+    if (!gl_FrontFacing) N = -N;
     vec3 L = normalize(-uLightDir);
 
     // 柔和平光（参考 ABAQUS/ANSYS 风格）
     float ambient  = 0.45;
     float diffuse  = max(dot(N, L), 0.0) * 0.35;
-    // 双面光照：背面也有微弱漫反射，避免全黑
-    float backDiff = max(dot(-N, L), 0.0) * 0.15;
-    vec3 color = uColor * (ambient + diffuse + backDiff);
+
+    // 背面稍微降低亮度以区分内外，但仍清晰可见
+    float sideFactor = gl_FrontFacing ? 1.0 : 0.85;
+    vec3 color = uColor * (ambient + diffuse) * sideFactor;
     outColor = vec4(color, 1.0);
 }
 )";
@@ -326,15 +329,18 @@ void GLWidget::paintGL() {
     glClearColor(0.85f, 0.85f, 0.88f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-    // 无数据时只绘制坐标轴
-    if (mesh_.indices.empty()) {
+    // 无数据时只绘制坐标轴（三角面和边线都没有才算无数据）
+    if (mesh_.indices.empty() && mesh_.edgeIndices.empty()) {
         drawAxesIndicator();
         return;
     }
 
     // ── 计算变换矩阵 ──
     float aspect = (height() > 0) ? static_cast<float>(width()) / height() : 1.0f;
-    glm::mat4 projection = glm::perspective(glm::radians(45.0f), aspect, cam_.distance * 0.001f, cam_.distance * 20.0f);
+    // 使用较大的 near 值以获得更高的深度精度，避免薄壳面 Z-fighting
+    float nearPlane = cam_.distance * 0.01f;
+    float farPlane  = cam_.distance * 10.0f;
+    glm::mat4 projection = glm::perspective(glm::radians(45.0f), aspect, nearPlane, farPlane);
     glm::mat4 model = glm::mat4(1.0f);
     glm::mat4 view = cam_.viewMatrix();
     glm::mat4 mvp = projection * view * model;
@@ -359,25 +365,32 @@ void GLWidget::paintGL() {
     vao_.bind();
     int count = static_cast<int>(mesh_.indices.size());
 
-    shader_->setUniformValue("uColor", QVector3D(color_.x, color_.y, color_.z));
-    shader_->setUniformValue("uWireframe", false);
-    glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
-    glEnable(GL_POLYGON_OFFSET_FILL);
-    glPolygonOffset(1.0f, 1.0f);
-    glDrawElements(GL_TRIANGLES, count, GL_UNSIGNED_INT, nullptr);
-    glDisable(GL_POLYGON_OFFSET_FILL);
+    if (count > 0) {
+        shader_->setUniformValue("uColor", QVector3D(color_.x, color_.y, color_.z));
+        shader_->setUniformValue("uWireframe", false);
+        glEnable(GL_POLYGON_OFFSET_FILL);
+        glPolygonOffset(1.0f, 1.0f);
+        glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+        glDrawElements(GL_TRIANGLES, count, GL_UNSIGNED_INT, nullptr);
+        glDisable(GL_POLYGON_OFFSET_FILL);
+    }
 
     // ── 绘制网格线 ──
     shader_->setUniformValue("uWireframe", true);
 
     if (edgeIndexCount_ > 0) {
-        shader_->setUniformValue("uColor", QVector3D(0.2f, 0.2f, 0.22f));
-        glLineWidth(1.0f);
+        // 纯 1D 模型用粗线显示，混合模型用细线
+        float lineW = (count == 0) ? 3.0f : 1.0f;
+        shader_->setUniformValue("uColor", (count == 0)
+            ? QVector3D(color_.x, color_.y, color_.z)   // 1D 模型用主色
+            : QVector3D(0.2f, 0.2f, 0.22f));            // 混合模型用深色线框
+        glLineWidth(lineW);
         vao_.release();
         edgeVao_.bind();
         glDrawElements(GL_LINES, edgeIndexCount_, GL_UNSIGNED_INT, nullptr);
         edgeVao_.release();
-    } else {
+        glLineWidth(1.0f);
+    } else if (count > 0) {
         shader_->setUniformValue("uColor", QVector3D(0.2f, 0.2f, 0.22f));
         glLineWidth(1.0f);
         glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
@@ -385,6 +398,7 @@ void GLWidget::paintGL() {
         glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
         vao_.release();
     }
+    // 网格线绘制完毕
 
     // ── 高亮选中内容（最后绘制以覆盖普通线框） ──
     if (selectionDirty_) {
@@ -624,6 +638,7 @@ void GLWidget::renderPickBuffer(const glm::mat4& mvp) {
 
     pickShader_->bind();
     pickShader_->setUniformValue("uMVP", QMatrix4x4(glm::value_ptr(glm::transpose(mvp))));
+    // (pick shader uses standard depth)
 
     vao_.bind();
 
@@ -654,7 +669,7 @@ void GLWidget::pickAtPoint(const QPoint& pos, bool ctrlHeld) {
 
     // 渲染拾取缓冲
     float aspect = (height() > 0) ? static_cast<float>(width()) / height() : 1.0f;
-    glm::mat4 projection = glm::perspective(glm::radians(45.0f), aspect, cam_.distance * 0.001f, cam_.distance * 20.0f);
+    glm::mat4 projection = glm::perspective(glm::radians(45.0f), aspect, cam_.distance * 0.01f, cam_.distance * 10.0f);
     glm::mat4 view = cam_.viewMatrix();
     glm::mat4 mvp = projection * view;
     renderPickBuffer(mvp);
@@ -769,7 +784,7 @@ void GLWidget::pickInRect(const QRect& rect) {
     makeCurrent();
 
     float aspect = (height() > 0) ? static_cast<float>(width()) / height() : 1.0f;
-    glm::mat4 projection = glm::perspective(glm::radians(45.0f), aspect, cam_.distance * 0.001f, cam_.distance * 20.0f);
+    glm::mat4 projection = glm::perspective(glm::radians(45.0f), aspect, cam_.distance * 0.01f, cam_.distance * 10.0f);
     glm::mat4 mvp = projection * cam_.viewMatrix();
     renderPickBuffer(mvp);
 
