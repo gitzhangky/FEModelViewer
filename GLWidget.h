@@ -24,6 +24,7 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <unordered_set>
+#include <unordered_map>
 #include <set>
 #include <vector>
 
@@ -54,6 +55,19 @@ public:
 
     /** @brief 设置拾取模式 */
     void setPickMode(PickMode mode) { pickMode_ = mode; }
+
+    /** @brief 设置三角形 → 部件索引映射表 */
+    void setTriangleToPartMap(const std::vector<int>& map);
+
+    /** @brief 设置边线 → 部件索引映射表（用于边线可见性控制） */
+    void setEdgeToPartMap(const std::vector<int>& map);
+
+    /** @brief 获取各部件的渲染颜色（供 PartsPanel 显示色块使用） */
+    const std::vector<glm::vec3>& partColors() const { return partColors_; }
+
+public slots:
+    /** @brief 设置指定部件的可见性，触发重绘 */
+    void setPartVisibility(int partIndex, bool visible);
 
     /** @brief 获取当前选中状态 */
     const FESelection& selection() const { return selection_; }
@@ -89,6 +103,8 @@ protected:
 private:
     void uploadMesh();
     void drawAxesIndicator();
+    void uploadColors();      // 将部件颜色上传到 colorVbo_
+    void rebuildEdgeIbo();    // 根据部件可见性重建边线 IBO
 
     // ── 拾取相关 ──
     void renderPickBuffer(const glm::mat4& mvp);
@@ -123,6 +139,26 @@ private:
     PickMode pickMode_ = PickMode::Node;  // 当前拾取模式（与下拉框默认值同步）
     FESelection selection_;             // 当前选中状态
     std::unordered_set<int> selectedElements_;  // 选中的单元 ID 集合
+
+    // ── 部件可见性 ──
+    std::vector<int> triToPart_;                        // 三角形 → 部件索引
+    std::unordered_map<int, bool> partVisibility_;      // 部件索引 → 是否可见
+    std::vector<unsigned int> allTriIndices_;            // 完整三角形索引（不过滤）
+    int activeIndexCount_ = 0;                          // 当前实际绘制的索引数量
+    bool partVisibilityDirty_ = false;                  // 是否需要重建 IBO
+
+    // ── 部件颜色 ──
+    std::vector<glm::vec3> partColors_;      // 每个部件的渲染颜色
+
+    // ── 顶点颜色缓冲（per-vertex 部件色） ──
+    QOpenGLBuffer colorVbo_{QOpenGLBuffer::VertexBuffer};
+    bool needsColorUpload_ = false;          // 需要上传颜色数据到 GPU
+
+    // ── 边线可见性 ──
+    std::vector<int> edgeToPart_;            // 边线 → 部件索引
+    std::vector<unsigned int> allEdgeIndices_;  // 完整边线索引（不过滤）
+    int activeEdgeIndexCount_ = 0;           // 当前可见边线索引数量
+    bool edgeVisibilityDirty_ = false;       // 需要重建边线 IBO
 
     // 选中的面：pair<elemId, faceIndex>
     std::set<std::pair<int,int>> selectedFaces_;

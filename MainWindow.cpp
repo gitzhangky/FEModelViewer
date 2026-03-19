@@ -3,24 +3,26 @@
  * @brief 主窗口实现
  *
  * 布局结构：
- *   ┌──────────────┬──────────────────────┐
- *   │ ┌──────────┐ │                      │
- *   │ │FEModel   │ │                      │
- *   │ │Panel     │ │      GLWidget        │
- *   │ │          │ │   (OpenGL 视口)      │
- *   │ │          │ │                      │
- *   │ ├──────────┤ │                      │
- *   │ │ Monitor  │ │                      │
- *   │ │ (FPS/GPU)│ │                      │
- *   │ └──────────┘ │                      │
- *   └──────────────┴──────────────────────┘
- *    ←   220px   →  ←    自适应拉伸     →
+ *   ┌──────────────┬──────────────────────┬──────────────┐
+ *   │ ┌──────────┐ │                      │              │
+ *   │ │FEModel   │ │                      │  PartsPanel  │
+ *   │ │Panel     │ │      GLWidget        │  (部件列表)  │
+ *   │ │          │ │   (OpenGL 视口)      │              │
+ *   │ │          │ │                      │              │
+ *   │ ├──────────┤ │                      │              │
+ *   │ │ Monitor  │ │                      │              │
+ *   │ │ (FPS/GPU)│ │                      │              │
+ *   │ └──────────┘ │                      │              │
+ *   └──────────────┴──────────────────────┴──────────────┘
+ *    ←   220px   →  ←    自适应拉伸     →  ←   200px   →
  */
 
 #include "MainWindow.h"
 #include "GLWidget.h"
 #include "MonitorPanel.h"
 #include "FEModelPanel.h"
+#include "PartsPanel.h"
+#include "FEGroup.h"
 
 #include <glm/glm.hpp>
 #include <vector>
@@ -58,6 +60,10 @@ MainWindow::MainWindow() {
     glWidget_ = new GLWidget;
     mainLayout->addWidget(glWidget_, 1);
 
+    // ── 右侧部件面板 ──
+    partsPanel_ = new PartsPanel;
+    mainLayout->addWidget(partsPanel_);
+
     // ── 信号/槽连接 ──
 
     // FEM 模型生成 → 更新网格 + 自适应缩放
@@ -84,6 +90,19 @@ MainWindow::MainWindow() {
     // 拾取模式变化 → 同步到 GLWidget
     connect(feModelPanel_, &FEModelPanel::pickModeChanged,
             glWidget_, &GLWidget::setPickMode);
+
+    // 部件列表更新 → 填充 PartsPanel，并传递 triToPart/edgeToPart 给 GLWidget
+    connect(feModelPanel_, &FEModelPanel::partsChanged,
+            this, [this](const QString& modelName, const std::vector<FEPart>& parts,
+                         const std::vector<int>& triToPart, const std::vector<int>& edgeToPart) {
+        glWidget_->setTriangleToPartMap(triToPart);
+        glWidget_->setEdgeToPartMap(edgeToPart);
+        partsPanel_->setParts(modelName, parts, glWidget_->partColors());
+    });
+
+    // PartsPanel 部件可见性变化 → GLWidget 更新渲染
+    connect(partsPanel_, &PartsPanel::partVisibilityChanged,
+            glWidget_, &GLWidget::setPartVisibility);
 
     // 监控面板绑定
     monitorPanel_->bindToWidget(glWidget_);

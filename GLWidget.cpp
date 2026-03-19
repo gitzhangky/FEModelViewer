@@ -23,19 +23,22 @@
  */
 static const char* vertSrc = R"(
 #version 410 core
-layout (location = 0) in vec3 aPos;      // 顶点位置（模型空间）
-layout (location = 1) in vec3 aNormal;   // 顶点法线（模型空间）
+layout (location = 0) in vec3 aPos;
+layout (location = 1) in vec3 aNormal;
+layout (location = 2) in vec3 aColor;
 
-uniform mat4 uMVP;        // Model-View-Projection 矩阵
-uniform mat4 uModel;      // Model 矩阵（模型空间 → 世界空间）
-uniform mat3 uNormalMat;  // 法线矩阵（Model 矩阵的逆转置，用于正确变换法线）
+uniform mat4 uMVP;
+uniform mat4 uModel;
+uniform mat3 uNormalMat;
 out vec3 vWorldPos;
 out vec3 vNormal;
+out vec3 vColor;
 
 void main() {
     vec4 worldPos = uModel * vec4(aPos, 1.0);
     vWorldPos = worldPos.xyz;
     vNormal   = normalize(uNormalMat * aNormal);
+    vColor    = aColor;
     gl_Position = uMVP * vec4(aPos, 1.0);
 }
 )";
@@ -49,32 +52,30 @@ static const char* fragSrc = R"(
 #version 410 core
 in vec3 vWorldPos;
 in vec3 vNormal;
+in vec3 vColor;
 
 uniform vec3 uLightDir;
 uniform vec3 uColor;
 uniform bool uWireframe;
+uniform bool uUseVertexColor;
 out vec4 outColor;
 
 void main() {
+    vec3 surfaceColor = uUseVertexColor ? vColor : uColor;
 
-    // 线框模式：直接输出纯色，跳过光照计算
     if (uWireframe) {
-        outColor = vec4(uColor, 1.0);
+        outColor = vec4(surfaceColor, 1.0);
         return;
     }
 
-    // 使用 gl_FrontFacing 正确处理双面光照
     vec3 N = normalize(vNormal);
     if (!gl_FrontFacing) N = -N;
     vec3 L = normalize(-uLightDir);
 
-    // 柔和平光（参考 ABAQUS/ANSYS 风格）
     float ambient  = 0.45;
     float diffuse  = max(dot(N, L), 0.0) * 0.35;
-
-    // 背面稍微降低亮度以区分内外，但仍清晰可见
     float sideFactor = gl_FrontFacing ? 1.0 : 0.85;
-    vec3 color = uColor * (ambient + diffuse) * sideFactor;
+    vec3 color = surfaceColor * (ambient + diffuse) * sideFactor;
     outColor = vec4(color, 1.0);
 }
 )";
@@ -130,6 +131,19 @@ void main() {
 }
 )";
 
+// ── 部件颜色调色板（Catppuccin Mocha）──
+static const glm::vec3 kPartPalette[] = {
+    {0.61f, 0.86f, 0.63f},  // green   #a6e3a1
+    {0.54f, 0.71f, 0.98f},  // blue    #89b4fa
+    {0.98f, 0.70f, 0.53f},  // peach   #fab387
+    {0.82f, 0.62f, 0.98f},  // mauve   #cba6f7
+    {0.58f, 0.89f, 0.83f},  // teal    #94e2d5
+    {0.98f, 0.89f, 0.69f},  // yellow  #f9e2af
+    {0.94f, 0.56f, 0.66f},  // red     #eba0ac
+    {0.71f, 0.71f, 0.98f},  // lavender #b4befe
+};
+static const int kPartPaletteSize = static_cast<int>(sizeof(kPartPalette) / sizeof(kPartPalette[0]));
+
 // ============================================================
 // 构造函数 & 公有方法
 // ============================================================
@@ -141,8 +155,19 @@ GLWidget::GLWidget(QWidget* parent) : QOpenGLWidget(parent) {
 
 void GLWidget::setMesh(const Mesh& mesh) {
     mesh_ = mesh;
-    needsUpload_ = true;   // 标记需要重新上传到 GPU
-    update();               // 触发重绘
+    allTriIndices_ = mesh.indices;
+    allEdgeIndices_ = mesh.edgeIndices;
+    activeEdgeIndexCount_ = static_cast<int>(mesh.edgeIndices.size());
+    triToPart_.clear();
+    edgeToPart_.clear();
+    partVisibility_.clear();
+    partColors_.clear();
+    activeIndexCount_ = static_cast<int>(mesh.indices.size());
+    partVisibilityDirty_ = false;
+    edgeVisibilityDirty_ = false;
+    needsColorUpload_ = false;
+    needsUpload_ = true;
+    update();
 }
 
 void GLWidget::setObjectColor(const glm::vec3& c) { color_ = c; update(); }
@@ -190,6 +215,7 @@ void GLWidget::initializeGL() {
     vbo_.create();
     ibo_ = new QOpenGLBuffer(QOpenGLBuffer::IndexBuffer);
     ibo_->create();
+    colorVbo_.create();
 
     // ── 拾取着色器 ──
     pickShader_ = new QOpenGLShaderProgram(this);
@@ -325,6 +351,34 @@ void GLWidget::paintGL() {
     // 如果网格数据有更新，重新上传到 GPU
     if (needsUpload_) uploadMesh();
 
+    // 如果部件可见性有变化，重建并重新上传 IBO
+    if (partVisibilityDirty_ && !allTriIndices_.empty()) {
+        partVisibilityDirty_ = false;
+        std::vector<unsigned int> filtered;
+        filtered.reserve(allTriIndices_.size());
+        int triCount = static_cast<int>(allTriIndices_.size() / 3);
+        for (int t = 0; t < triCount; ++t) {
+            int part = (t < static_cast<int>(triToPart_.size())) ? triToPart_[t] : -1;
+            if (part >= 0) {
+                auto it = partVisibility_.find(part);
+                if (it != partVisibility_.end() && !it->second)
+                    continue;   // 该部件不可见，跳过
+            }
+            filtered.push_back(allTriIndices_[t * 3]);
+            filtered.push_back(allTriIndices_[t * 3 + 1]);
+            filtered.push_back(allTriIndices_[t * 3 + 2]);
+        }
+        activeIndexCount_ = static_cast<int>(filtered.size());
+        vao_.bind();
+        ibo_->bind();
+        ibo_->allocate(filtered.data(),
+                       static_cast<int>(filtered.size() * sizeof(unsigned int)));
+        vao_.release();
+    }
+
+    if (needsColorUpload_) uploadColors();
+    if (edgeVisibilityDirty_) rebuildEdgeIbo();
+
     // 浅灰背景（参考 ABAQUS/ANSYS 风格）
     glClearColor(0.85f, 0.85f, 0.88f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -363,11 +417,12 @@ void GLWidget::paintGL() {
 
     // ── 绘制实体面 ──
     vao_.bind();
-    int count = static_cast<int>(mesh_.indices.size());
+    int count = activeIndexCount_;
 
     if (count > 0) {
         shader_->setUniformValue("uColor", QVector3D(color_.x, color_.y, color_.z));
         shader_->setUniformValue("uWireframe", false);
+        shader_->setUniformValue("uUseVertexColor", !partColors_.empty());
         glEnable(GL_POLYGON_OFFSET_FILL);
         glPolygonOffset(1.0f, 1.0f);
         glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
@@ -377,8 +432,9 @@ void GLWidget::paintGL() {
 
     // ── 绘制网格线 ──
     shader_->setUniformValue("uWireframe", true);
+    shader_->setUniformValue("uUseVertexColor", false);
 
-    if (edgeIndexCount_ > 0) {
+    if (activeEdgeIndexCount_ > 0) {
         // 纯 1D 模型用粗线显示，混合模型用细线
         float lineW = (count == 0) ? 3.0f : 1.0f;
         shader_->setUniformValue("uColor", (count == 0)
@@ -387,11 +443,12 @@ void GLWidget::paintGL() {
         glLineWidth(lineW);
         vao_.release();
         edgeVao_.bind();
-        glDrawElements(GL_LINES, edgeIndexCount_, GL_UNSIGNED_INT, nullptr);
+        glDrawElements(GL_LINES, activeEdgeIndexCount_, GL_UNSIGNED_INT, nullptr);
         edgeVao_.release();
         glLineWidth(1.0f);
     } else if (count > 0) {
         shader_->setUniformValue("uColor", QVector3D(0.2f, 0.2f, 0.22f));
+        shader_->setUniformValue("uUseVertexColor", false);
         glLineWidth(1.0f);
         glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
         glDrawElements(GL_TRIANGLES, count, GL_UNSIGNED_INT, nullptr);
@@ -965,6 +1022,93 @@ void GLWidget::drawAxesIndicator() {
     painter.end();
 }
 
+void GLWidget::setTriangleToPartMap(const std::vector<int>& map) {
+    triToPart_ = map;
+    // Assign palette colors to parts
+    int numParts = 0;
+    for (int p : map) if (p >= 0) numParts = std::max(numParts, p + 1);
+    partColors_.resize(numParts);
+    for (int i = 0; i < numParts; ++i)
+        partColors_[i] = kPartPalette[i % kPartPaletteSize];
+    needsColorUpload_ = true;
+    update();
+}
+
+void GLWidget::setEdgeToPartMap(const std::vector<int>& map) {
+    edgeToPart_ = map;
+    edgeVisibilityDirty_ = true;
+    update();
+}
+
+void GLWidget::setPartVisibility(int partIndex, bool visible) {
+    partVisibility_[partIndex] = visible;
+    partVisibilityDirty_ = true;
+    edgeVisibilityDirty_ = true;
+    update();
+}
+
+void GLWidget::uploadColors() {
+    needsColorUpload_ = false;
+    int vertCount = static_cast<int>(mesh_.vertices.size() / 6);
+    if (vertCount == 0 || triToPart_.empty()) return;
+
+    // 通过 allTriIndices_ 建立 顶点 → 部件 反向映射
+    std::vector<int> vertexPart(vertCount, -1);
+    int triCount = static_cast<int>(allTriIndices_.size() / 3);
+    for (int t = 0; t < triCount && t < static_cast<int>(triToPart_.size()); ++t) {
+        int part = triToPart_[t];
+        for (int k = 0; k < 3; ++k) {
+            unsigned int v = allTriIndices_[t * 3 + k];
+            if (static_cast<int>(v) < vertCount)
+                vertexPart[v] = part;
+        }
+    }
+
+    std::vector<float> colors(vertCount * 3);
+    for (int v = 0; v < vertCount; ++v) {
+        int part = vertexPart[v];
+        glm::vec3 c = (part >= 0 && part < static_cast<int>(partColors_.size()))
+                      ? partColors_[part] : color_;
+        colors[v * 3 + 0] = c.x;
+        colors[v * 3 + 1] = c.y;
+        colors[v * 3 + 2] = c.z;
+    }
+
+    colorVbo_.bind();
+    colorVbo_.allocate(colors.data(), static_cast<int>(colors.size() * sizeof(float)));
+    colorVbo_.release();
+}
+
+void GLWidget::rebuildEdgeIbo() {
+    edgeVisibilityDirty_ = false;
+    if (allEdgeIndices_.empty()) return;
+
+    std::vector<unsigned int> filtered;
+    filtered.reserve(allEdgeIndices_.size());
+    int edgeCount = static_cast<int>(allEdgeIndices_.size() / 2);
+    for (int e = 0; e < edgeCount; ++e) {
+        int part = (e < static_cast<int>(edgeToPart_.size())) ? edgeToPart_[e] : -1;
+        if (part >= 0) {
+            auto it = partVisibility_.find(part);
+            if (it != partVisibility_.end() && !it->second)
+                continue;   // 该部件不可见，跳过此边
+        }
+        filtered.push_back(allEdgeIndices_[e * 2]);
+        filtered.push_back(allEdgeIndices_[e * 2 + 1]);
+    }
+    activeEdgeIndexCount_ = static_cast<int>(filtered.size());
+
+    edgeVao_.bind();
+    if (!edgeIbo_) {
+        edgeIbo_ = new QOpenGLBuffer(QOpenGLBuffer::IndexBuffer);
+        edgeIbo_->create();
+    }
+    edgeIbo_->bind();
+    edgeIbo_->allocate(filtered.data(),
+                       static_cast<int>(filtered.size() * sizeof(unsigned int)));
+    edgeVao_.release();
+}
+
 void GLWidget::uploadMesh() {
     needsUpload_ = false;
 
@@ -976,6 +1120,7 @@ void GLWidget::uploadMesh() {
                   static_cast<int>(mesh_.vertices.size() * sizeof(float)));
 
     // 上传索引数据到 IBO
+    activeIndexCount_ = static_cast<int>(mesh_.indices.size());
     ibo_->bind();
     ibo_->allocate(mesh_.indices.data(),
                    static_cast<int>(mesh_.indices.size() * sizeof(unsigned int)));
@@ -990,10 +1135,27 @@ void GLWidget::uploadMesh() {
                           reinterpret_cast<void*>(3 * sizeof(float)));
     glEnableVertexAttribArray(1);
 
+    // ── 颜色缓冲（per-vertex 部件颜色，默认为 color_） ──
+    {
+        int vertCount = static_cast<int>(mesh_.vertices.size() / 6);
+        std::vector<float> defaultColors(vertCount * 3);
+        for (int v = 0; v < vertCount; ++v) {
+            defaultColors[v * 3 + 0] = color_.x;
+            defaultColors[v * 3 + 1] = color_.y;
+            defaultColors[v * 3 + 2] = color_.z;
+        }
+        colorVbo_.bind();
+        colorVbo_.allocate(defaultColors.data(), static_cast<int>(defaultColors.size() * sizeof(float)));
+        // 属性 2：部件颜色 (location=2)，3 个 float，步长 3*float，偏移 0
+        glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), nullptr);
+        glEnableVertexAttribArray(2);
+    }
+
     vao_.release();  // 解绑 VAO
 
     // ── 上传边线数据（如果有） ──
     edgeIndexCount_ = static_cast<int>(mesh_.edgeIndices.size());
+    activeEdgeIndexCount_ = edgeIndexCount_;
     if (edgeIndexCount_ > 0) {
         if (!edgeIbo_) {
             edgeIbo_ = new QOpenGLBuffer(QOpenGLBuffer::IndexBuffer);

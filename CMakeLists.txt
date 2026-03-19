@@ -93,6 +93,7 @@ add_executable(${PROJECT_NAME}
     FEField.cpp
     FEMeshConverter.cpp
     FEModelPanel.cpp
+    PartsPanel.cpp
 )
 
 # macOS：打包为 .app bundle

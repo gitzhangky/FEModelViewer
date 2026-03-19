@@ -88,6 +88,22 @@ struct FERenderData {
      */
     std::vector<int> vertexToNode;
 
+    /**
+     * 三角形 → 部件索引映射
+     * 大小同 triangleToElement
+     * triangleToPart[i] = 第 i 个三角形所属的部件在 model.parts 中的索引
+     * -1 表示该三角形不属于任何已定义的部件
+     */
+    std::vector<int> triangleToPart;
+
+    /**
+     * 边线 → 部件索引映射
+     * 大小 = mesh.edgeIndices.size() / 2（边线数量）
+     * edgeToPart[i] = 第 i 条边所属的部件在 model.parts 中的索引
+     * -1 表示该边不属于任何已定义的部件
+     */
+    std::vector<int> edgeToPart;
+
     // ── 便捷方法 ──
 
     /** @brief 根据三角形索引查询所属单元 ID */
@@ -128,5 +144,7 @@ struct FERenderData {
         triangleToElement.clear();
         triangleToFace.clear();
         vertexToNode.clear();
+        triangleToPart.clear();
+        edgeToPart.clear();
     }
 };

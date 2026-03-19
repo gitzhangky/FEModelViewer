@@ -29,6 +29,7 @@
 #include <QEventLoop>
 #include <functional>
 #include <atomic>
+#include <map>
 
 // ════════════════════════════════════════════════════════════
 // 构造函数
@@ -133,6 +134,7 @@ QGroupBox* FEModelPanel::createLoadGroup() {
         updateInfoLabels();
         // 发送空 Mesh 清空显示
         emit meshGenerated(Mesh{}, glm::vec3(0), 0, {}, {});
+        emit partsChanged(QString(), {}, {}, {});
     });
 
     return group;
@@ -358,6 +360,8 @@ void FEModelPanel::loadModelFromFile() {
     emit meshGenerated(currentRenderData_.mesh, currentModel_.computeCenter(),
                        currentModel_.computeSize(), currentRenderData_.triangleToElement,
                        currentRenderData_.triangleToFace);
+    emit partsChanged(QString::fromStdString(currentModel_.name), currentModel_.parts,
+                      currentRenderData_.triangleToPart, currentRenderData_.edgeToPart);
 
     dlg.close();
     qDebug("loadModelFromFile: loaded '%s' - nodes=%d, elements=%d, triangles=%d",
@@ -503,10 +507,25 @@ bool FEModelPanel::parseAbaqusInp(const QString& filePath, FEModel& model, const
     int expectedNodeCount = 8;
     int pendingElemId = -1;
     std::vector<int> pendingNodeIds;
+    QString currentElset;                               // 当前 *Element 关键字上的 ELSET= 值
+    std::map<QString, int> elsetToPartIndex;            // ELSET 名 → model.parts 索引
 
     auto flushPendingElement = [&]() {
         if (pendingElemId >= 0 && !pendingNodeIds.empty()) {
             model.addElement(pendingElemId, currentElemType, pendingNodeIds);
+            // 如果该 *Element 段指定了 ELSET，将单元 ID 归入对应部件
+            if (!currentElset.isEmpty()) {
+                auto it = elsetToPartIndex.find(currentElset);
+                if (it == elsetToPartIndex.end()) {
+                    // 新 ELSET：创建对应部件
+                    FEPart part;
+                    part.name = currentElset.toStdString();
+                    model.parts.push_back(part);
+                    elsetToPartIndex[currentElset] = static_cast<int>(model.parts.size()) - 1;
+                    it = elsetToPartIndex.find(currentElset);
+                }
+                model.parts[it->second].elementIds.push_back(pendingElemId);
+            }
             pendingElemId = -1;
             pendingNodeIds.clear();
         }
@@ -542,6 +561,10 @@ bool FEModelPanel::parseAbaqusInp(const QString& filePath, FEModel& model, const
                     currentElemType = mapElemType(rx.cap(1));
                 }
                 expectedNodeCount = nodeCountForType(currentElemType);
+                // 提取可选的 ELSET= 参数（用于部件归属）
+                QRegExp rxElset("ELSET\\s*=\\s*([A-Za-z0-9_\\-\\.]+)");
+                rxElset.setCaseSensitivity(Qt::CaseInsensitive);
+                currentElset = (rxElset.indexIn(line) >= 0) ? rxElset.cap(1).trimmed() : QString();
             } else {
                 section = None;
             }
@@ -1041,6 +1064,8 @@ void FEModelPanel::generateBeamModel() {
     currentRenderData_ = FEMeshConverter::toRenderData(currentModel_);
     updateInfoLabels();
     emit meshGenerated(currentRenderData_.mesh, currentModel_.computeCenter(), currentModel_.computeSize(), currentRenderData_.triangleToElement, currentRenderData_.triangleToFace);
+    emit partsChanged(QString::fromStdString(currentModel_.name), currentModel_.parts,
+                      currentRenderData_.triangleToPart, currentRenderData_.edgeToPart);
 }
 
 /**
@@ -1093,6 +1118,8 @@ void FEModelPanel::generatePlateModel() {
     currentRenderData_ = FEMeshConverter::toRenderData(currentModel_);
     updateInfoLabels();
     emit meshGenerated(currentRenderData_.mesh, currentModel_.computeCenter(), currentModel_.computeSize(), currentRenderData_.triangleToElement, currentRenderData_.triangleToFace);
+    emit partsChanged(QString::fromStdString(currentModel_.name), currentModel_.parts,
+                      currentRenderData_.triangleToPart, currentRenderData_.edgeToPart);
 }
 
 /**
@@ -1153,6 +1180,8 @@ void FEModelPanel::generateMixedModel() {
     currentRenderData_ = FEMeshConverter::toRenderData(currentModel_);
     updateInfoLabels();
     emit meshGenerated(currentRenderData_.mesh, currentModel_.computeCenter(), currentModel_.computeSize(), currentRenderData_.triangleToElement, currentRenderData_.triangleToFace);
+    emit partsChanged(QString::fromStdString(currentModel_.name), currentModel_.parts,
+                      currentRenderData_.triangleToPart, currentRenderData_.edgeToPart);
 }
 
 // ════════════════════════════════════════════════════════════

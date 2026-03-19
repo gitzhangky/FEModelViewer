@@ -14,6 +14,7 @@
 class GLWidget;
 class MonitorPanel;
 class FEModelPanel;
+class PartsPanel;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -25,4 +26,5 @@ private:
     GLWidget*      glWidget_      = nullptr;
     MonitorPanel*  monitorPanel_  = nullptr;
     FEModelPanel*  feModelPanel_  = nullptr;
+    PartsPanel*    partsPanel_    = nullptr;
 };

@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <map>
 #include <set>
+#include <unordered_map>
 
 // ════════════════════════════════════════════════════════════
 // 公有接口：返回 FERenderData（Mesh + 反向映射表）
@@ -160,17 +161,20 @@ FERenderData FEMeshConverter::toRenderData(const FEModel& model, const std::vect
     if (progress) progress(70);
 
     // ── 第四遍：生成外表面边线数据（去重，用于普通线框渲染）──（占 70-85%）
+    std::vector<int> edgeElemIds;   // 每条边归属的单元 ID（与 edgeIndices 对应，每条边一项）
     {
-        std::set<std::pair<int, int>> edgeSet;
+        // 使用 map 代替 set，同时记录每条边来自哪个单元（用于 edgeToPart 填充）
+        std::map<std::pair<int, int>, int> edgeToElemMap;
 
         for (const auto& [key, infos] : faceMap) {
             if (infos.size() == 1) {
                 const auto& faceNodes = infos[0].faceNodes;
+                int elemId = infos[0].elemId;
                 int n = static_cast<int>(faceNodes.size());
                 for (int i = 0; i < n; ++i) {
                     int a = faceNodes[i];
                     int b = faceNodes[(i + 1) % n];
-                    edgeSet.insert({std::min(a, b), std::max(a, b)});
+                    edgeToElemMap.emplace(std::make_pair(std::min(a, b), std::max(a, b)), elemId);
                 }
             }
         }
@@ -185,16 +189,16 @@ FERenderData FEMeshConverter::toRenderData(const FEModel& model, const std::vect
                 for (int i = 0; i < cc; ++i) {
                     int a = elem.nodeIds[i];
                     int b = elem.nodeIds[(i + 1) % cc];
-                    edgeSet.insert({std::min(a, b), std::max(a, b)});
+                    edgeToElemMap.emplace(std::make_pair(std::min(a, b), std::max(a, b)), elemId);
                 }
             } else if (dim == 1 && elem.nodeIds.size() >= 2) {
-                // 1D 梁/杆单元：首尾两个节点形成一条边
                 int a = elem.nodeIds[0], b = elem.nodeIds[1];
-                edgeSet.insert({std::min(a, b), std::max(a, b)});
+                edgeToElemMap.emplace(std::make_pair(std::min(a, b), std::max(a, b)), elemId);
             }
         }
 
-        for (const auto& [a, b] : edgeSet) {
+        for (const auto& [edge, elemId] : edgeToElemMap) {
+            auto [a, b] = edge;
             const glm::vec3* pa = model.nodeCoords(a);
             const glm::vec3* pb = model.nodeCoords(b);
             if (!pa || !pb) continue;
@@ -208,6 +212,7 @@ FERenderData FEMeshConverter::toRenderData(const FEModel& model, const std::vect
             result.mesh.edgeVertices.push_back(pb->z);
             result.mesh.edgeIndices.push_back(idx);
             result.mesh.edgeIndices.push_back(idx + 1);
+            edgeElemIds.push_back(elemId);
         }
     }
     if (progress) progress(85);
@@ -271,6 +276,29 @@ FERenderData FEMeshConverter::toRenderData(const FEModel& model, const std::vect
         }
     }
     if (progress) progress(100);
+
+    // ── 填充 triangleToPart 和 edgeToPart（三角形/边 → 部件索引）──
+    if (!model.parts.empty()) {
+        std::unordered_map<int, int> elemToPart;
+        for (int i = 0; i < static_cast<int>(model.parts.size()); ++i) {
+            for (int eid : model.parts[i].elementIds)
+                elemToPart[eid] = i;
+        }
+        int triCount = static_cast<int>(result.triangleToElement.size());
+        result.triangleToPart.resize(triCount, -1);
+        for (int t = 0; t < triCount; ++t) {
+            auto it = elemToPart.find(result.triangleToElement[t]);
+            if (it != elemToPart.end())
+                result.triangleToPart[t] = it->second;
+        }
+        int edgeCount = static_cast<int>(edgeElemIds.size());
+        result.edgeToPart.resize(edgeCount, -1);
+        for (int e = 0; e < edgeCount; ++e) {
+            auto it = elemToPart.find(edgeElemIds[e]);
+            if (it != elemToPart.end())
+                result.edgeToPart[e] = it->second;
+        }
+    }
 
     return result;
 }

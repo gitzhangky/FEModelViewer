@@ -35,11 +35,13 @@
 #include <QWidget>
 #include <QGroupBox>
 #include <QLabel>
+#include <QString>
 #include <functional>
 
 #include "FEModel.h"
 #include "FERenderData.h"
 #include "FEPickResult.h"
+#include "FEGroup.h"
 
 class FEModelPanel : public QWidget {
     Q_OBJECT
@@ -64,6 +66,10 @@ signals:
 
     /** @brief 拾取模式改变 */
     void pickModeChanged(PickMode mode);
+
+    /** @brief 模型的部件列表发生变化（新模型加载 / 清空） */
+    void partsChanged(const QString& modelName, const std::vector<FEPart>& parts,
+                      const std::vector<int>& triToPart, const std::vector<int>& edgeToPart);
 
 private:
     // ── 创建各分组 ──
