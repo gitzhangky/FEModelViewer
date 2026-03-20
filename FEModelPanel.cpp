@@ -20,9 +20,6 @@
 #include <QFileInfo>
 #include <QSettings>
 #include <QDir>
-#include <QRegExp>
-#include <QProgressDialog>
-#include <QProgressBar>
 #include <QApplication>
 #include <QElapsedTimer>
 #include <QThread>
@@ -100,14 +97,11 @@ QGroupBox* FEModelPanel::createInfoGroup() {
 void FEModelPanel::loadModelFromFile() {
     QSettings settings("FEModelViewer", "FEModelViewer");
     QString lastDir = settings.value("lastOpenDir", QString()).toString();
-    // 如果上次目录无效，使用桌面作为起始位置（加载快）
     if (lastDir.isEmpty() || !QDir(lastDir).exists()) {
         lastDir = QDir::homePath() + "/Desktop";
         if (!QDir(lastDir).exists()) lastDir = QDir::homePath();
     }
 
-    // macOS 16 + Qt5 原生 NSOpenPanel 不弹窗，使用 Qt 自带对话框
-    // 不设自定义样式，保持系统默认外观
     QFileDialog dialog(this, "打开有限元模型", lastDir,
                        "所有支持格式 (*.inp *.bdf *.fem *.odb);;"
                        "ABAQUS Input (*.inp);;"
@@ -117,59 +111,39 @@ void FEModelPanel::loadModelFromFile() {
     dialog.setFileMode(QFileDialog::ExistingFile);
     dialog.setAcceptMode(QFileDialog::AcceptOpen);
     dialog.setOption(QFileDialog::DontUseNativeDialog, true);
-    dialog.setStyleSheet("");  // 清除继承的父级样式，使用系统默认
+    dialog.setStyleSheet("");
     dialog.resize(720, 480);
 
     if (dialog.exec() != QDialog::Accepted) return;
     QString path = dialog.selectedFiles().first();
-
     if (path.isEmpty()) return;
-    settings.setValue("lastOpenDir", QFileInfo(path).absolutePath());
 
-    // ODB 是 ABAQUS 私有二进制格式，无法直接解析
+    settings.setValue("lastOpenDir", QFileInfo(path).absolutePath());
+    loadModelFromPath(path);
+}
+
+void FEModelPanel::loadModelFromPath(const QString& path) {
+    if (path.isEmpty()) return;
+
     if (path.endsWith(".odb", Qt::CaseInsensitive)) {
-        QMessageBox::information(this, "ODB 格式不支持",
-            "ODB 是 ABAQUS 私有二进制格式（HKSRD），需要 ABAQUS 环境才能读取。\n\n"
-            "请在 ABAQUS/CAE 中将模型导出为 .inp 格式：\n"
-            "  File → Export → Model...\n\n"
-            "或使用 abaqus python 脚本：\n"
-            "  abaqus python odb2inp.py model.odb");
+        emit loadFinished(false, "ODB 是 ABAQUS 私有二进制格式，需要导出为 .inp 格式");
         return;
     }
 
     currentModel_.clear();
     currentRenderData_.clear();
 
-    // ── 进度对话框 ──
-    QProgressDialog dlg("正在加载模型...", QString(), 0, 1000, this);
-    dlg.setWindowModality(Qt::WindowModal);
-    dlg.setMinimumDuration(0);
-    dlg.setCancelButton(nullptr);
-    dlg.setStyleSheet(
-        "QProgressDialog { background: #1e1e2e; }"
-        "QLabel { color: #cdd6f4; font-size: 13px; }"
-        "QProgressBar {"
-        "  border: 1px solid #45475a; border-radius: 5px;"
-        "  background: #313244; text-align: center;"
-        "  color: #cdd6f4; font-size: 11px; height: 18px; }"
-        "QProgressBar::chunk {"
-        "  background: qlineargradient(x1:0, y1:0, x2:1, y2:0,"
-        "    stop:0 #a6e3a1, stop:1 #94e2d5);"
-        "  border-radius: 4px; }"
-    );
-    dlg.setValue(0);
-    dlg.show();
+    emit loadProgress(0, "正在解析节点数据...");
 
     // ── 后台线程做所有重计算，原子变量传进度 ──
-    std::atomic<int>  targetVal{0};    // 目标进度 0-1000
-    std::atomic<int>  phase{0};        // 0=解析 1=渲染 2=完成
-    std::atomic<int>  elemCount{0};    // 单元数（供标签显示）
+    std::atomic<int>  targetVal{0};
+    std::atomic<int>  phase{0};
+    std::atomic<int>  elemCount{0};
     bool workerOk = false;
     FEModel           resultModel;
     FERenderData      resultRender;
 
     QThread* worker = QThread::create([&]() {
-        // 阶段 1：解析文件 (0-500)
         phase.store(0);
         bool ok = false;
         if (path.endsWith(".inp", Qt::CaseInsensitive)) {
@@ -192,7 +166,6 @@ void FEModelPanel::loadModelFromFile() {
         elemCount.store(resultModel.elementCount());
         targetVal.store(500);
 
-        // 阶段 2：生成渲染数据 (500-950)
         phase.store(1);
         resultRender = FEMeshConverter::toRenderData(resultModel, [&](int pct) {
             targetVal.store(500 + pct * 450 / 100);
@@ -201,44 +174,37 @@ void FEModelPanel::loadModelFromFile() {
         phase.store(2);
     });
 
-    // ── 主线程：轮询驱动进度条（兼容 macOS Cocoa） ──
     worker->start();
     int displayed = 0;
     while (!worker->isFinished()) {
         int target = targetVal.load();
-
-        // ease-out 插值
         if (displayed < target) {
             int diff = target - displayed;
             int step = qMax(1, diff / 4);
             displayed = qMin(displayed + step, target);
         }
-        dlg.setValue(displayed);
 
-        // 阶段文字
+        int pct = displayed / 10;  // 0-100
         int p = phase.load();
         if (p == 0) {
-            int pct = targetVal.load() / 5;
-            dlg.setLabelText(pct < 50 ? "正在解析节点数据..." : "正在解析单元数据...");
+            int filePct = targetVal.load() / 5;
+            emit loadProgress(pct, filePct < 50 ? "正在解析节点数据..." : "正在解析单元数据...");
         } else if (p == 1) {
-            dlg.setLabelText(QString("正在生成渲染数据（%1 个单元）...").arg(elemCount.load()));
+            emit loadProgress(pct, QString("正在生成渲染数据（%1 个单元）...").arg(elemCount.load()));
         } else {
-            dlg.setLabelText("正在更新显示...");
+            emit loadProgress(pct, "正在更新显示...");
         }
 
-        // 直接驱动事件循环，避免嵌套 QEventLoop 与 Cocoa 冲突
         QApplication::processEvents(QEventLoop::AllEvents);
-        worker->wait(16);  // 等待最多 16ms（~60fps），不阻塞主线程
+        worker->wait(16);
     }
     worker->wait();
     delete worker;
 
-    // ── 检查结果 ──
     if (!workerOk || resultModel.isEmpty()) {
-        dlg.close();
-        QMessageBox::warning(this, "加载失败",
-            QString("无法解析模型文件或文件中无有效数据。\n\n"
-                    "解析结果：节点 %1，单元 %2")
+        emit loadProgress(0, "");
+        emit loadFinished(false,
+            QString("加载失败：节点 %1，单元 %2")
             .arg(resultModel.nodeCount())
             .arg(resultModel.elementCount()));
         return;
@@ -247,15 +213,9 @@ void FEModelPanel::loadModelFromFile() {
     currentModel_ = resultModel;
     currentRenderData_ = resultRender;
 
-    // ── 收尾动画 ──
-    dlg.setLabelText("正在更新显示...");
-    while (displayed < 1000) {
-        int diff = 1000 - displayed;
-        displayed = qMin(displayed + qMax(1, diff / 3), 1000);
-        dlg.setValue(displayed);
-        QApplication::processEvents();
-        QThread::msleep(16);
-    }
+    // 收尾
+    emit loadProgress(100, "正在更新显示...");
+    QApplication::processEvents();
 
     updateInfoLabels();
     emit meshGenerated(currentRenderData_.mesh, currentModel_.computeCenter(),
@@ -264,10 +224,12 @@ void FEModelPanel::loadModelFromFile() {
     emit partsChanged(QString::fromStdString(currentModel_.name), currentModel_.parts,
                       currentRenderData_.triangleToPart, currentRenderData_.edgeToPart);
 
-    dlg.close();
-    qDebug("loadModelFromFile: loaded '%s' - nodes=%d, elements=%d, triangles=%d",
-           qPrintable(path), currentModel_.nodeCount(), currentModel_.elementCount(),
-           currentRenderData_.triangleCount());
+    emit loadProgress(0, "");
+    emit loadFinished(true,
+        QString("节点: %1  |  单元: %2  |  三角面: %3")
+        .arg(currentModel_.nodeCount())
+        .arg(currentModel_.elementCount())
+        .arg(currentRenderData_.triangleCount()));
 }
 
 bool FEModelPanel::parseAbaqusInp(const QString& filePath, FEModel& model, const std::function<void(int)>& progress) {

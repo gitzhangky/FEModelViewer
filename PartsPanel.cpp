@@ -78,6 +78,12 @@ void PartsPanel::setParts(const QString& modelName,
     tree_->clear();
     rootItem_ = nullptr;
 
+    // 无部件时不创建根节点
+    if (parts.empty()) {
+        updating_ = false;
+        return;
+    }
+
     // 根节点 = 模型名称
     QString rootName = modelName.isEmpty() ? "模型" : modelName;
     rootItem_ = new QTreeWidgetItem(tree_, {rootName});

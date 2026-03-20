@@ -263,76 +263,92 @@ void GLWidget::initializeGL() {
     axesShader_->addShaderFromSourceCode(QOpenGLShader::Fragment, axesFragSrc);
     axesShader_->link();
 
-    // ── 生成坐标轴几何数据（轴杆线段 + 箭头圆锥 + 中心球）──
+    // ── 生成坐标轴几何数据（实心轴杆圆柱 + 箭头圆锥 + 中心球）──
     // 每顶点 6 float: pos(3) + color(3)
-    std::vector<float> lineVerts;   // GL_LINES
+    std::vector<float> lineVerts;   // GL_LINES (unused, kept for count)
     std::vector<float> triVerts;    // GL_TRIANGLES
 
-    const int segs = 12;  // 圆锥/球体分段数
-    const float shaftLen = 0.75f;   // 轴杆长度
-    const float coneBase = 0.08f;   // 圆锥底面半径
-    const float coneLen = 0.25f;    // 圆锥长度
-    const float ballR = 0.06f;      // 中心球半径
+    const int segs = 24;            // 圆柱/圆锥分段数
+    const float shaftLen = 0.70f;   // 轴杆长度
+    const float shaftR = 0.028f;    // 轴杆圆柱半径
+    const float coneBase = 0.10f;   // 圆锥底面半径
+    const float coneLen = 0.30f;    // 圆锥长度
+    const float ballR = 0.065f;     // 中心球半径
 
     struct Axis { glm::vec3 dir; glm::vec3 up; glm::vec3 color; };
     Axis axes[] = {
-        {{1,0,0}, {0,1,0}, {1.0f, 0.25f, 0.25f}},  // X 红
-        {{0,1,0}, {0,0,1}, {0.3f, 0.85f, 0.3f}},    // Y 绿
-        {{0,0,1}, {1,0,0}, {0.3f, 0.5f, 1.0f}},     // Z 蓝
+        {{1,0,0}, {0,1,0}, {0.95f, 0.30f, 0.30f}},  // X 红
+        {{0,1,0}, {0,0,1}, {0.35f, 0.90f, 0.35f}},   // Y 绿
+        {{0,0,1}, {1,0,0}, {0.35f, 0.55f, 1.00f}},    // Z 蓝
     };
+
+    auto pushTri = [&](glm::vec3 p, glm::vec3 c) {
+        triVerts.push_back(p.x); triVerts.push_back(p.y); triVerts.push_back(p.z);
+        triVerts.push_back(c.x); triVerts.push_back(c.y); triVerts.push_back(c.z);
+    };
+
+    const float PI = 3.14159265f;
 
     for (auto& a : axes) {
         glm::vec3 right = glm::normalize(glm::cross(a.dir, a.up));
         glm::vec3 up2 = glm::normalize(glm::cross(right, a.dir));
 
-        // 轴杆线段
-        auto pushLine = [&](glm::vec3 p) {
-            lineVerts.push_back(p.x); lineVerts.push_back(p.y); lineVerts.push_back(p.z);
-            lineVerts.push_back(a.color.x); lineVerts.push_back(a.color.y); lineVerts.push_back(a.color.z);
-        };
-        pushLine(glm::vec3(0));
-        pushLine(a.dir * shaftLen);
-
-        // 箭头圆锥
-        glm::vec3 tip = a.dir * (shaftLen + coneLen);
-        auto pushTri = [&](glm::vec3 p, glm::vec3 c) {
-            triVerts.push_back(p.x); triVerts.push_back(p.y); triVerts.push_back(p.z);
-            triVerts.push_back(c.x); triVerts.push_back(c.y); triVerts.push_back(c.z);
-        };
+        // ── 实心轴杆（圆柱） ──
         for (int i = 0; i < segs; ++i) {
-            float a0 = 2.0f * 3.14159265f * i / segs;
-            float a1 = 2.0f * 3.14159265f * (i + 1) / segs;
-            glm::vec3 b0 = a.dir * shaftLen + (right * cosf(a0) + up2 * sinf(a0)) * coneBase;
-            glm::vec3 b1 = a.dir * shaftLen + (right * cosf(a1) + up2 * sinf(a1)) * coneBase;
-            // 侧面三角
+            float a0 = 2.0f * PI * i / segs;
+            float a1 = 2.0f * PI * (i + 1) / segs;
+            glm::vec3 offset0 = (right * cosf(a0) + up2 * sinf(a0)) * shaftR;
+            glm::vec3 offset1 = (right * cosf(a1) + up2 * sinf(a1)) * shaftR;
+            glm::vec3 b0 = offset0;                       // 底圆点
+            glm::vec3 b1 = offset1;
+            glm::vec3 t0 = a.dir * shaftLen + offset0;    // 顶圆点
+            glm::vec3 t1 = a.dir * shaftLen + offset1;
+            glm::vec3 cyl = a.color * 0.85f;
+            // 两个三角形组成一个矩形面
+            pushTri(b0, cyl); pushTri(t0, cyl); pushTri(t1, cyl);
+            pushTri(b0, cyl); pushTri(t1, cyl); pushTri(b1, cyl);
+        }
+
+        // ── 箭头圆锥 ──
+        glm::vec3 tip = a.dir * (shaftLen + coneLen);
+        for (int i = 0; i < segs; ++i) {
+            float a0 = 2.0f * PI * i / segs;
+            float a1 = 2.0f * PI * (i + 1) / segs;
+            glm::vec3 cb0 = a.dir * shaftLen + (right * cosf(a0) + up2 * sinf(a0)) * coneBase;
+            glm::vec3 cb1 = a.dir * shaftLen + (right * cosf(a1) + up2 * sinf(a1)) * coneBase;
+            // 侧面
             pushTri(tip, a.color);
-            pushTri(b0, a.color * 0.7f);
-            pushTri(b1, a.color * 0.7f);
-            // 底面三角
-            pushTri(a.dir * shaftLen, a.color * 0.5f);
-            pushTri(b1, a.color * 0.5f);
-            pushTri(b0, a.color * 0.5f);
+            pushTri(cb0, a.color * 0.75f);
+            pushTri(cb1, a.color * 0.75f);
+            // 底面
+            pushTri(a.dir * shaftLen, a.color * 0.55f);
+            pushTri(cb1, a.color * 0.55f);
+            pushTri(cb0, a.color * 0.55f);
         }
     }
 
-    // 中心球（八面体近似，16 面）
-    glm::vec3 ballColor(0.75f, 0.75f, 0.78f);
-    glm::vec3 bv[] = {
-        { ballR,0,0}, {-ballR,0,0},
-        {0, ballR,0}, {0,-ballR,0},
-        {0,0, ballR}, {0,0,-ballR},
-    };
-    // 8 面
-    int octFaces[][3] = {
-        {0,2,4}, {0,4,3}, {0,3,5}, {0,5,2},
-        {1,4,2}, {1,3,4}, {1,5,3}, {1,2,5},
-    };
-    auto pushBall = [&](glm::vec3 p) {
-        triVerts.push_back(p.x); triVerts.push_back(p.y); triVerts.push_back(p.z);
-        triVerts.push_back(ballColor.x); triVerts.push_back(ballColor.y); triVerts.push_back(ballColor.z);
-    };
-    for (auto& f : octFaces) {
-        pushBall(bv[f[0]]); pushBall(bv[f[1]]); pushBall(bv[f[2]]);
+    // ── 中心球（细分八面体 → 更圆润） ──
+    glm::vec3 ballColor(0.82f, 0.82f, 0.85f);
+    // 用 UV 球生成
+    const int ballRings = 8;
+    const int ballSectors = 12;
+    for (int r = 0; r < ballRings; ++r) {
+        float phi0 = PI * r / ballRings - PI / 2.0f;
+        float phi1 = PI * (r + 1) / ballRings - PI / 2.0f;
+        for (int s = 0; s < ballSectors; ++s) {
+            float theta0 = 2.0f * PI * s / ballSectors;
+            float theta1 = 2.0f * PI * (s + 1) / ballSectors;
+
+            glm::vec3 p00(cosf(phi0) * cosf(theta0), sinf(phi0), cosf(phi0) * sinf(theta0));
+            glm::vec3 p10(cosf(phi1) * cosf(theta0), sinf(phi1), cosf(phi1) * sinf(theta0));
+            glm::vec3 p01(cosf(phi0) * cosf(theta1), sinf(phi0), cosf(phi0) * sinf(theta1));
+            glm::vec3 p11(cosf(phi1) * cosf(theta1), sinf(phi1), cosf(phi1) * sinf(theta1));
+
+            p00 *= ballR; p10 *= ballR; p01 *= ballR; p11 *= ballR;
+
+            pushTri(p00, ballColor); pushTri(p10, ballColor); pushTri(p11, ballColor);
+            pushTri(p00, ballColor); pushTri(p11, ballColor); pushTri(p01, ballColor);
+        }
     }
 
     // 合并到一个 VBO: [lines | triangles]
@@ -1223,8 +1239,8 @@ void GLWidget::updateSilhouetteFromCache() {
 }
 
 void GLWidget::drawAxesIndicator() {
-    const int axesSize = 100;
-    const int margin = 10;
+    const int axesSize = 120;
+    const int margin = 8;
     const int dpr = devicePixelRatio();
 
     // 仅旋转的 view 矩阵（固定距离，跟随相机朝向）
@@ -1245,11 +1261,11 @@ void GLWidget::drawAxesIndicator() {
 
     axesVao_.bind();
 
-    // 绘制轴杆（线段）
-    glLineWidth(2.5f);
-    glDrawArrays(GL_LINES, 0, axesLineCount_);
-
-    // 绘制箭头圆锥 + 中心球（三角面）
+    // 绘制实心几何体（圆柱轴杆 + 圆锥箭头 + 球心）
+    if (axesLineCount_ > 0) {
+        glLineWidth(2.5f);
+        glDrawArrays(GL_LINES, 0, axesLineCount_);
+    }
     glDrawArrays(GL_TRIANGLES, axesLineCount_, axesTriCount_);
 
     axesVao_.release();
@@ -1271,20 +1287,20 @@ void GLWidget::drawAxesIndicator() {
 
     struct AxisLabel { glm::vec3 dir; QString name; QColor color; };
     AxisLabel labels[] = {
-        {{1,0,0}, "X", QColor(240, 70, 70)},
-        {{0,1,0}, "Y", QColor(70, 200, 70)},
-        {{0,0,1}, "Z", QColor(70, 120, 240)},
+        {{1,0,0}, "X", QColor(240, 80, 80)},
+        {{0,1,0}, "Y", QColor(90, 220, 90)},
+        {{0,0,1}, "Z", QColor(90, 140, 255)},
     };
 
     QFont font = painter.font();
     font.setBold(true);
-    font.setPixelSize(13);
+    font.setPixelSize(14);
     painter.setFont(font);
 
     for (const auto& l : labels) {
-        QPointF pos = project(l.dir * 1.2f);
+        QPointF pos = project(l.dir * 1.15f);
         painter.setPen(l.color);
-        painter.drawText(QRectF(pos.x() - 10, pos.y() - 10, 20, 20),
+        painter.drawText(QRectF(pos.x() - 12, pos.y() - 12, 24, 24),
                          Qt::AlignCenter, l.name);
     }
 

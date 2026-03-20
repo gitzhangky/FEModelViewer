@@ -4,7 +4,7 @@
  *
  * 布局结构：
  *   ┌──────────────────────────────────────────────────────┐
- *   │  工具栏: [打开] [清空] | [节点][单元][部件] 拾取模式 │
+ *   │  工具栏: [清空] | [节点][单元][部件] 拾取模式        │
  *   ├────────────┬─────────────────────────────────────────┤
  *   │ ┌────────┐ │                                         │
  *   │ │模型树  │ │                                         │
@@ -15,7 +15,9 @@
  *   │ │监控    │ │                                         │
  *   │ └────────┘ │                                         │
  *   ├────────────┴─────────────────────────────────────────┤
- *   │  状态栏: 节点数 | 单元数 | 三角面数                  │
+ *   │  文件导入: 模型文件 [...] [路径] | 结果文件 [...] [路径] [应用] │
+ *   ├──────────────────────────────────────────────────────┤
+ *   │  状态栏                                              │
  *   └──────────────────────────────────────────────────────┘
  */
 
@@ -37,67 +39,85 @@
 #include <QActionGroup>
 #include <QStatusBar>
 #include <QLabel>
-#include <algorithm>
+#include <QLineEdit>
+#include <QPushButton>
+#include <QFileDialog>
+#include <QMessageBox>
+#include <QFileInfo>
+#include <QSettings>
+#include <QDir>
 
 MainWindow::MainWindow() {
     setWindowTitle("FEModelViewer");
-    resize(1100, 750);
+    resize(1100, 800);
 
     // ── 工具栏 ──
     setupToolBar();
 
     // ── 左侧边栏 ──
     auto* sidebar = new QWidget;
-    sidebar->setMinimumWidth(180);
-    sidebar->setMaximumWidth(400);
+    sidebar->setMinimumWidth(200);
     sidebar->setStyleSheet("QWidget { background: #1e1e2e; }");
 
     auto* sidebarLayout = new QVBoxLayout(sidebar);
     sidebarLayout->setContentsMargins(0, 0, 0, 0);
     sidebarLayout->setSpacing(0);
 
-    // 模型树放在最上方
     partsPanel_ = new PartsPanel;
     partsPanel_->setMinimumHeight(120);
 
-    // 选中信息 + 模型统计
     feModelPanel_ = new FEModelPanel;
-
-    // 监控面板
     monitorPanel_ = new MonitorPanel;
 
-    sidebarLayout->addWidget(partsPanel_, 3);    // 模型树占较大比例
-    sidebarLayout->addWidget(feModelPanel_, 2);  // 信息面板
-    sidebarLayout->addWidget(monitorPanel_, 0);  // 监控面板固定高度
+    sidebarLayout->addWidget(partsPanel_, 3);
+    sidebarLayout->addWidget(feModelPanel_, 2);
+    sidebarLayout->addWidget(monitorPanel_, 0);
 
     // ── GL 视口 ──
     glWidget_ = new GLWidget;
 
-    // ── QSplitter 左右布局 ──
-    auto* splitter = new QSplitter(Qt::Horizontal);
-    splitter->setChildrenCollapsible(false);
-    splitter->addWidget(sidebar);
-    splitter->addWidget(glWidget_);
-    // 初始比例：左240 / 右自适应
-    splitter->setSizes({240, 860});
-    splitter->setStretchFactor(0, 0);
-    splitter->setStretchFactor(1, 1);
+    // ── 水平 Splitter: 侧边栏 + 视口 ──
+    auto* hSplitter = new QSplitter(Qt::Horizontal);
+    hSplitter->setChildrenCollapsible(false);
+    hSplitter->addWidget(sidebar);
+    hSplitter->addWidget(glWidget_);
+    hSplitter->setSizes({240, 860});
+    hSplitter->setStretchFactor(0, 1);
+    hSplitter->setStretchFactor(1, 4);
 
-    splitter->setStyleSheet(
+    hSplitter->setStyleSheet(
         "QSplitter::handle {"
         "  background: #313244; width: 3px; }"
         "QSplitter::handle:hover {"
         "  background: #89b4fa; }"
     );
 
-    setCentralWidget(splitter);
+    // ── 底部文件导入面板 ──
+    auto* filePanel = createFilePanel();
+
+    // ── 垂直 Splitter: 上方主区域 + 下方文件面板 ──
+    auto* vSplitter = new QSplitter(Qt::Vertical);
+    vSplitter->setChildrenCollapsible(false);
+    vSplitter->addWidget(hSplitter);
+    vSplitter->addWidget(filePanel);
+    // 文件面板固定高度，主区域自适应
+    vSplitter->setStretchFactor(0, 1);
+    vSplitter->setStretchFactor(1, 0);
+
+    vSplitter->setStyleSheet(
+        "QSplitter::handle {"
+        "  background: #313244; height: 3px; }"
+        "QSplitter::handle:hover {"
+        "  background: #89b4fa; }"
+    );
+
+    setCentralWidget(vSplitter);
 
     // ── 状态栏 ──
     setupStatusBar();
 
     // ── 信号/槽连接 ──
 
-    // FEM 模型生成 → 更新网格 + 自适应缩放
     connect(feModelPanel_, &FEModelPanel::meshGenerated,
             this, [this](const Mesh& mesh, const glm::vec3& center, float size,
                          const std::vector<int>& triToElem,
@@ -109,19 +129,11 @@ MainWindow::MainWindow() {
         if (size > 0) {
             glWidget_->fitToModel(center, size);
         }
-        // 更新状态栏
-        statusLabel_->setText(
-            QString("  节点: %1  |  单元: %2  |  三角面: %3")
-            .arg(mesh.vertices.size() / 6)
-            .arg(triToElem.empty() ? 0 : static_cast<int>(*std::max_element(triToElem.begin(), triToElem.end())))
-            .arg(mesh.indices.size() / 3));
     });
 
-    // 选中状态变化 → 通知面板更新
     connect(glWidget_, &GLWidget::selectionChanged,
             feModelPanel_, &FEModelPanel::updateSelectionInfo);
 
-    // 部件列表更新 → 填充 PartsPanel，并传递 triToPart/edgeToPart 给 GLWidget
     connect(feModelPanel_, &FEModelPanel::partsChanged,
             this, [this](const QString& modelName, const std::vector<FEPart>& parts,
                          const std::vector<int>& triToPart, const std::vector<int>& edgeToPart) {
@@ -130,12 +142,200 @@ MainWindow::MainWindow() {
         partsPanel_->setParts(modelName, parts, glWidget_->partColors());
     });
 
-    // PartsPanel 部件可见性变化 → GLWidget 更新渲染
+    // 加载进度 → 状态栏进度条
+    connect(feModelPanel_, &FEModelPanel::loadProgress,
+            this, [this](int percent, const QString& text) {
+        if (percent > 0 && !text.isEmpty()) {
+            statusProgress_->setVisible(true);
+            statusProgress_->setValue(percent);
+            progressText_->setVisible(true);
+            progressText_->setText(text);
+            statusLabel_->setVisible(false);
+        } else {
+            statusProgress_->setVisible(false);
+            progressText_->setVisible(false);
+            statusLabel_->setVisible(true);
+        }
+    });
+
+    // 加载完成 → 更新状态栏文字
+    connect(feModelPanel_, &FEModelPanel::loadFinished,
+            this, [this](bool success, const QString& message) {
+        statusProgress_->setVisible(false);
+        progressText_->setVisible(false);
+        statusLabel_->setVisible(true);
+        statusLabel_->setText("  " + message);
+        statusLabel_->setStyleSheet(success
+            ? "color: #a6e3a1; font-weight: bold;"
+            : "color: #f38ba8; font-weight: bold;");
+    });
+
     connect(partsPanel_, &PartsPanel::partVisibilityChanged,
             glWidget_, &GLWidget::setPartVisibility);
 
-    // 监控面板绑定
     monitorPanel_->bindToWidget(glWidget_);
+}
+
+// ════════════════════════════════════════════════════════════
+// 底部文件导入面板
+// ════════════════════════════════════════════════════════════
+
+QWidget* MainWindow::createFilePanel() {
+    auto* panel = new QWidget;
+    panel->setMinimumHeight(70);
+    panel->setMaximumHeight(120);
+
+    auto* mainLayout = new QVBoxLayout(panel);
+    mainLayout->setContentsMargins(12, 8, 12, 8);
+    mainLayout->setSpacing(6);
+
+    // ── 模型文件行 ──
+    auto* modelRow = new QHBoxLayout;
+    modelRow->setSpacing(6);
+
+    auto* modelLabel = new QLabel("模型文件");
+    modelLabel->setFixedWidth(60);
+    modelRow->addWidget(modelLabel);
+
+    modelPathEdit_ = new QLineEdit;
+    modelPathEdit_->setPlaceholderText("选择 INP / BDF / FEM 文件...");
+    modelPathEdit_->setReadOnly(true);
+    modelRow->addWidget(modelPathEdit_);
+
+    auto* modelBrowseBtn = new QPushButton("浏览...");
+    modelBrowseBtn->setFixedWidth(70);
+    modelRow->addWidget(modelBrowseBtn);
+
+    mainLayout->addLayout(modelRow);
+
+    // ── 结果文件行 ──
+    auto* resultRow = new QHBoxLayout;
+    resultRow->setSpacing(6);
+
+    auto* resultLabel = new QLabel("结果文件");
+    resultLabel->setFixedWidth(60);
+    resultRow->addWidget(resultLabel);
+
+    resultPathEdit_ = new QLineEdit;
+    resultPathEdit_->setPlaceholderText("选择 ODB / OP2 / H3D 结果文件...");
+    resultPathEdit_->setReadOnly(true);
+    resultRow->addWidget(resultPathEdit_);
+
+    auto* resultBrowseBtn = new QPushButton("浏览...");
+    resultBrowseBtn->setFixedWidth(70);
+    resultRow->addWidget(resultBrowseBtn);
+
+    // 应用按钮放在结果行右侧
+    auto* applyBtn = new QPushButton("应用");
+    applyBtn->setFixedWidth(70);
+    resultRow->addWidget(applyBtn);
+
+    mainLayout->addLayout(resultRow);
+
+    // ── 样式 ──
+    panel->setStyleSheet(
+        "QWidget { background: #11111b; color: #cdd6f4; }"
+
+        "QLabel {"
+        "  font-size: 12px; color: #89b4fa; font-weight: bold; }"
+
+        "QLineEdit {"
+        "  background: #1e1e2e; border: 1px solid #45475a; border-radius: 4px;"
+        "  padding: 4px 8px; font-size: 12px; color: #cdd6f4;"
+        "  selection-background-color: #45475a; }"
+        "QLineEdit:focus {"
+        "  border-color: #89b4fa; }"
+        "QLineEdit[readOnly=\"true\"] {"
+        "  color: #9399b2; }"
+
+        "QPushButton {"
+        "  background: #313244; color: #cdd6f4; border: 1px solid #45475a;"
+        "  border-radius: 4px; padding: 4px 8px; font-size: 12px; }"
+        "QPushButton:hover {"
+        "  background: #45475a; border-color: #89b4fa; }"
+        "QPushButton:pressed {"
+        "  background: #585b70; }"
+    );
+
+    // 给应用按钮加个醒目样式
+    applyBtn->setStyleSheet(
+        "QPushButton {"
+        "  background: #89b4fa; color: #1e1e2e; border: none;"
+        "  border-radius: 4px; padding: 4px 8px; font-size: 12px; font-weight: bold; }"
+        "QPushButton:hover {"
+        "  background: #b4d0fb; }"
+        "QPushButton:pressed {"
+        "  background: #74a8f7; }"
+    );
+
+    // ── 连接 ──
+    connect(modelBrowseBtn, &QPushButton::clicked, this, &MainWindow::browseModelFile);
+    connect(resultBrowseBtn, &QPushButton::clicked, this, &MainWindow::browseResultFile);
+    connect(applyBtn, &QPushButton::clicked, this, &MainWindow::applyFiles);
+
+    return panel;
+}
+
+void MainWindow::browseModelFile() {
+    QSettings settings("FEModelViewer", "FEModelViewer");
+    QString lastDir = settings.value("lastOpenDir", QString()).toString();
+    if (lastDir.isEmpty() || !QDir(lastDir).exists()) {
+        lastDir = QDir::homePath() + "/Desktop";
+        if (!QDir(lastDir).exists()) lastDir = QDir::homePath();
+    }
+
+    QString path = QFileDialog::getOpenFileName(this, "选择模型文件", lastDir,
+        "所有支持格式 (*.inp *.bdf *.fem);;"
+        "ABAQUS Input (*.inp);;"
+        "Nastran BDF (*.bdf *.fem);;"
+        "所有文件 (*)");
+
+    if (!path.isEmpty()) {
+        modelPathEdit_->setText(path);
+        settings.setValue("lastOpenDir", QFileInfo(path).absolutePath());
+    }
+}
+
+void MainWindow::browseResultFile() {
+    QSettings settings("FEModelViewer", "FEModelViewer");
+    QString lastDir = settings.value("lastOpenDir", QString()).toString();
+    if (lastDir.isEmpty() || !QDir(lastDir).exists()) {
+        lastDir = QDir::homePath() + "/Desktop";
+        if (!QDir(lastDir).exists()) lastDir = QDir::homePath();
+    }
+
+    QString path = QFileDialog::getOpenFileName(this, "选择结果文件", lastDir,
+        "结果文件 (*.odb *.op2 *.h3d *.rst *.xdb);;"
+        "ABAQUS ODB (*.odb);;"
+        "Nastran OP2 (*.op2);;"
+        "HyperWorks H3D (*.h3d);;"
+        "所有文件 (*)");
+
+    if (!path.isEmpty()) {
+        resultPathEdit_->setText(path);
+        settings.setValue("lastOpenDir", QFileInfo(path).absolutePath());
+    }
+}
+
+void MainWindow::applyFiles() {
+    QString modelPath = modelPathEdit_->text().trimmed();
+    QString resultPath = resultPathEdit_->text().trimmed();
+
+    if (modelPath.isEmpty() && resultPath.isEmpty()) {
+        QMessageBox::information(this, "提示", "请先选择模型文件或结果文件。");
+        return;
+    }
+
+    // 加载模型文件
+    if (!modelPath.isEmpty()) {
+        feModelPanel_->loadModelFromPath(modelPath);
+    }
+
+    // 结果文件（暂未实现）
+    if (!resultPath.isEmpty()) {
+        QMessageBox::information(this, "结果文件",
+            QString("结果文件功能开发中，暂不支持加载。\n\n文件: %1").arg(resultPath));
+    }
 }
 
 // ════════════════════════════════════════════════════════════
@@ -166,10 +366,6 @@ void MainWindow::setupToolBar() {
         "  width: 1px; background: #313244; margin: 4px 6px; }"
     );
 
-    // ── 文件操作 ──
-    auto* openAction = toolbar->addAction("打开模型");
-    openAction->setToolTip("打开 FEM 模型文件 (INP/BDF/FEM)");
-
     auto* clearAction = toolbar->addAction("清空");
     clearAction->setToolTip("清空当前模型");
 
@@ -199,13 +395,12 @@ void MainWindow::setupToolBar() {
     pickGroup_->addAction(partAction);
 
     // ── 连接 ──
-    connect(openAction, &QAction::triggered, this, [this]() {
-        feModelPanel_->loadModelFromFile();
-    });
-
     connect(clearAction, &QAction::triggered, this, [this]() {
         feModelPanel_->clearModel();
+        modelPathEdit_->clear();
+        resultPathEdit_->clear();
         statusLabel_->setText("  就绪");
+        statusLabel_->setStyleSheet("color: #a6e3a1; font-weight: bold;");
     });
 
     connect(pickGroup_, &QActionGroup::triggered, this, [this](QAction* action) {
@@ -220,13 +415,41 @@ void MainWindow::setupToolBar() {
 
 void MainWindow::setupStatusBar() {
     auto* sb = statusBar();
+    sb->setFixedHeight(26);
     sb->setStyleSheet(
         "QStatusBar {"
-        "  background: #181825; border-top: 1px solid #313244;"
-        "  color: #9399b2; font-size: 11px; font-family: monospace; }"
+        "  background: #11111b; border-top: 1px solid #313244;"
+        "  font-size: 11px; font-family: monospace; }"
         "QStatusBar::item { border: none; }"
     );
 
+    // 左侧：状态文字
     statusLabel_ = new QLabel("  就绪");
-    sb->addWidget(statusLabel_);
+    statusLabel_->setStyleSheet("color: #a6e3a1; font-weight: bold;");
+    sb->addWidget(statusLabel_, 1);
+
+    // 右侧：进度文字 + 进度条（默认隐藏）
+    progressText_ = new QLabel;
+    progressText_->setStyleSheet("color: #89b4fa; font-size: 11px; padding-right: 6px;");
+    progressText_->setVisible(false);
+    sb->addPermanentWidget(progressText_);
+
+    statusProgress_ = new QProgressBar;
+    statusProgress_->setFixedWidth(200);
+    statusProgress_->setFixedHeight(14);
+    statusProgress_->setRange(0, 100);
+    statusProgress_->setTextVisible(true);
+    statusProgress_->setFormat("%p%");
+    statusProgress_->setVisible(false);
+    statusProgress_->setStyleSheet(
+        "QProgressBar {"
+        "  border: 1px solid #45475a; border-radius: 6px;"
+        "  background: #1e1e2e; text-align: center;"
+        "  color: #cdd6f4; font-size: 10px; }"
+        "QProgressBar::chunk {"
+        "  background: qlineargradient(x1:0, y1:0, x2:1, y2:0,"
+        "    stop:0 #89b4fa, stop:1 #94e2d5);"
+        "  border-radius: 5px; }"
+    );
+    sb->addPermanentWidget(statusProgress_);
 }

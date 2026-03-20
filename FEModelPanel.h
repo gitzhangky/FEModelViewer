@@ -30,6 +30,9 @@ public:
     /** @brief 打开文件对话框并加载 FEM 模型（供工具栏调用） */
     void loadModelFromFile();
 
+    /** @brief 从指定路径加载 FEM 模型（供底部面板调用） */
+    void loadModelFromPath(const QString& path);
+
     /** @brief 清空当前模型 */
     void clearModel();
 
@@ -40,6 +43,12 @@ signals:
 
     void partsChanged(const QString& modelName, const std::vector<FEPart>& parts,
                       const std::vector<int>& triToPart, const std::vector<int>& edgeToPart);
+
+    /** @brief 加载进度更新 (0-100, 描述文字) */
+    void loadProgress(int percent, const QString& text);
+
+    /** @brief 加载完成 (成功/失败, 消息) */
+    void loadFinished(bool success, const QString& message);
 
 public slots:
     void updateSelectionInfo(PickMode mode, int count, const std::vector<int>& ids);
