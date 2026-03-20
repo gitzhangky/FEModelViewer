@@ -31,8 +31,12 @@ signals:
     /** @brief 某个部件的可见性被用户切换 */
     void partVisibilityChanged(int partIndex, bool visible);
 
+    /** @brief 模型树中选中的部件发生变化（多选） */
+    void partSelectionChanged(const std::vector<int>& selectedParts);
+
 private slots:
     void onItemChanged(QTreeWidgetItem* item, int column);
+    void onSelectionChanged();
 
 private:
     QPixmap makeColorSwatch(const glm::vec3& color, int size = 12) const;

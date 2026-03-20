@@ -380,6 +380,9 @@ void GLWidget::initializeGL() {
     // 上传初始网格数据到 GPU
     uploadMesh();
 
+    // 临时：默认显示色标，方便验证效果
+    colorBarVisible_ = true;
+
     // 通知外部 GL 已初始化（MonitorPanel 会在此时读取硬件信息）
     emit glInitialized();
 }
@@ -582,6 +585,14 @@ void GLWidget::paintGL() {
 
     // ── 绘制坐标轴指示器 ──
     drawAxesIndicator();
+
+    // ── 绘制色标 ──
+    if (colorBarVisible_) {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing);
+        drawColorBar(painter);
+        painter.end();
+    }
 
     // ── FPS 统计 ──
     frameCount_++;
@@ -1307,6 +1318,86 @@ void GLWidget::drawAxesIndicator() {
     painter.end();
 }
 
+void GLWidget::drawColorBar(QPainter& painter) {
+    const int margin = 15;
+    const int barW = 20;
+    const int barH = 180;
+    const int titleH = 22;
+    const int tickLabelW = 50;
+    const int padding = 10;
+    const int bgW = padding + barW + 6 + tickLabelW + padding;
+    const int bgH = padding + titleH + barH + padding;
+
+    // ── 半透明深色背景 ──
+    QRectF bgRect(margin, margin, bgW, bgH);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(QColor(30, 30, 46, 180));
+    painter.drawRoundedRect(bgRect, 6, 6);
+
+    // ── 标题 ──
+    QFont titleFont = painter.font();
+    titleFont.setBold(true);
+    titleFont.setPixelSize(11);
+    painter.setFont(titleFont);
+    painter.setPen(Qt::white);
+    painter.drawText(QRectF(margin + padding, margin + padding, bgW - 2 * padding, titleH),
+                     Qt::AlignLeft | Qt::AlignVCenter, colorBarTitle_);
+
+    // ── 色带（Jet colormap 渐变） ──
+    int barX = margin + padding;
+    int barY = margin + padding + titleH;
+
+    QLinearGradient grad(barX, barY + barH, barX, barY); // 底→顶
+    grad.setColorAt(0.00, QColor(0, 0, 180));     // 蓝
+    grad.setColorAt(0.25, QColor(0, 220, 255));    // 青
+    grad.setColorAt(0.50, QColor(0, 255, 0));      // 绿
+    grad.setColorAt(0.75, QColor(255, 255, 0));    // 黄
+    grad.setColorAt(1.00, QColor(255, 0, 0));      // 红
+
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(grad);
+    painter.drawRect(barX, barY, barW, barH);
+
+    // ── 色带边框 ──
+    painter.setBrush(Qt::NoBrush);
+    painter.setPen(QPen(QColor(88, 91, 112), 1));
+    painter.drawRect(barX, barY, barW, barH);
+
+    // ── 刻度标签 ──
+    QFont tickFont = painter.font();
+    tickFont.setBold(false);
+    tickFont.setPixelSize(10);
+    painter.setFont(tickFont);
+    painter.setPen(Qt::white);
+
+    const int tickCount = 5;
+    int labelX = barX + barW + 4;
+    for (int i = 0; i < tickCount; ++i) {
+        float t = i / float(tickCount - 1);           // 0..1
+        float val = colorBarMin_ + (colorBarMax_ - colorBarMin_) * t;
+        int y = barY + barH - static_cast<int>(t * barH);
+        painter.drawText(QRectF(labelX, y - 7, tickLabelW, 14),
+                         Qt::AlignLeft | Qt::AlignVCenter,
+                         QString::number(val, 'f', 2));
+    }
+}
+
+void GLWidget::setColorBarVisible(bool visible) {
+    colorBarVisible_ = visible;
+    update();
+}
+
+void GLWidget::setColorBarRange(float min, float max) {
+    colorBarMin_ = min;
+    colorBarMax_ = max;
+    update();
+}
+
+void GLWidget::setColorBarTitle(const QString& title) {
+    colorBarTitle_ = title;
+    update();
+}
+
 void GLWidget::setTriangleToPartMap(const std::vector<int>& map) {
     triToPart_ = map;
     // Assign palette colors to parts
@@ -1363,6 +1454,29 @@ void GLWidget::setPartVisibility(int partIndex, bool visible) {
         partEdgeCacheValid_ = false;
         selectionDirty_ = true;
     }
+    update();
+}
+
+void GLWidget::highlightParts(const std::vector<int>& partIndices) {
+    // 清除当前选中
+    selection_.selectedElements.clear();
+    selection_.selectedNodes.clear();
+
+    // 将指定部件的所有单元加入选中
+    for (int pi : partIndices)
+        selectPart(pi);
+
+    // 触发高亮重建
+    partEdgeCacheValid_ = false;
+    selectionDirty_ = true;
+
+    // 切换到部件拾取模式以使用轮廓边高亮
+    pickMode_ = PickMode::Part;
+
+    emit selectionChanged(pickMode_,
+                          static_cast<int>(selection_.selectedElements.size()),
+                          std::vector<int>(selection_.selectedElements.begin(),
+                                           selection_.selectedElements.end()));
     update();
 }
 

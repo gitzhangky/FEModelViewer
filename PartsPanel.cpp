@@ -24,9 +24,11 @@ PartsPanel::PartsPanel(QWidget* parent) : QWidget(parent) {
     tree_->setIndentation(16);
     tree_->setAnimated(true);
     tree_->setUniformRowHeights(true);
+    tree_->setSelectionMode(QAbstractItemView::ExtendedSelection);
     layout->addWidget(tree_);
 
     connect(tree_, &QTreeWidget::itemChanged, this, &PartsPanel::onItemChanged);
+    connect(tree_, &QTreeWidget::itemSelectionChanged, this, &PartsPanel::onSelectionChanged);
 
     setStyleSheet(
         "QWidget { background: #1e1e2e; color: #cdd6f4; }"
@@ -158,4 +160,14 @@ void PartsPanel::onItemChanged(QTreeWidgetItem* item, int /*column*/) {
     }
 
     updating_ = false;
+}
+
+void PartsPanel::onSelectionChanged() {
+    std::vector<int> selected;
+    for (auto* item : tree_->selectedItems()) {
+        QVariant v = item->data(0, Qt::UserRole);
+        if (v.isValid())
+            selected.push_back(v.toInt());
+    }
+    emit partSelectionChanged(selected);
 }

@@ -49,6 +49,11 @@ public:
     /** @brief 自适应缩放 */
     void fitToModel(const glm::vec3& center, float size);
 
+    /** @brief 色标控制 */
+    void setColorBarVisible(bool visible);
+    void setColorBarRange(float min, float max);
+    void setColorBarTitle(const QString& title);
+
     /** @brief 设置三角形→单元映射表（用于拾取） */
     void setTriangleToElementMap(const std::vector<int>& map);
 
@@ -73,6 +78,9 @@ public:
 public slots:
     /** @brief 设置指定部件的可见性，触发重绘 */
     void setPartVisibility(int partIndex, bool visible);
+
+    /** @brief 高亮显示指定部件（来自模型树多选） */
+    void highlightParts(const std::vector<int>& partIndices);
 
     /** @brief 获取当前选中状态 */
     const FESelection& selection() const { return selection_; }
@@ -108,6 +116,7 @@ protected:
 private:
     void uploadMesh();
     void drawAxesIndicator();
+    void drawColorBar(QPainter& painter);
     void uploadColors();      // 将部件颜色上传到 colorVbo_
     void rebuildEdgeIbo();    // 根据部件可见性重建边线 IBO
 
@@ -199,6 +208,12 @@ private:
     };
     std::unordered_map<int64_t, PreEdge> edgeAdjMap_;
     bool edgeAdjDirty_ = true;     // 网格或节点映射变化时置 true
+
+    // ── 色标（Colorbar） ──
+    bool colorBarVisible_ = false;
+    float colorBarMin_ = 0.0f;
+    float colorBarMax_ = 1.0f;
+    QString colorBarTitle_ = "Result";
 
     // ── 交互状态 ──
     QPoint lastPos_;

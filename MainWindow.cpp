@@ -173,6 +173,9 @@ MainWindow::MainWindow() {
     connect(partsPanel_, &PartsPanel::partVisibilityChanged,
             glWidget_, &GLWidget::setPartVisibility);
 
+    connect(partsPanel_, &PartsPanel::partSelectionChanged,
+            glWidget_, &GLWidget::highlightParts);
+
     monitorPanel_->bindToWidget(glWidget_);
 }
 
