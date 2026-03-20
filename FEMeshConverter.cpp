@@ -232,6 +232,7 @@ FERenderData FEMeshConverter::toRenderData(const FEModel& model, const std::vect
             result.mesh.elemEdgeVertices.push_back(pb->y);
             result.mesh.elemEdgeVertices.push_back(pb->z);
             result.mesh.elemEdgeToElement.push_back(elemId);
+            result.mesh.elemEdgeNodeIds.push_back({std::min(a, b), std::max(a, b)});
         };
 
         processed = 0;

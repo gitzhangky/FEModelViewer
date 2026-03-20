@@ -30,37 +30,27 @@
 #include <functional>
 #include <atomic>
 #include <map>
+#include <set>
+#include <unordered_set>
 
 // ════════════════════════════════════════════════════════════
 // 构造函数
 // ════════════════════════════════════════════════════════════
 
 FEModelPanel::FEModelPanel(QWidget* parent) : QWidget(parent) {
-    setFixedWidth(200);
+    setMinimumWidth(140);
 
     auto* layout = new QVBoxLayout(this);
-    layout->setContentsMargins(10, 10, 10, 10);
+    layout->setContentsMargins(6, 6, 6, 6);
+    layout->setSpacing(4);
 
-    layout->addWidget(createLoadGroup());
     layout->addWidget(createInfoGroup());
-    layout->addWidget(createOptionGroup());
+    layout->addWidget(createSelectionGroup());
     layout->addStretch();
 
-    // ── 统一样式表（Catppuccin Mocha 配色，绿色主题标题与其他面板区分）──
+    // ── 统一样式表（Catppuccin Mocha 配色）──
     setStyleSheet(
         "QWidget { background: #1e1e2e; color: #cdd6f4; }"
-
-        "QPushButton {"
-        "  background: qlineargradient(x1:0, y1:0, x2:0, y2:1,"
-        "    stop:0 #45475a, stop:1 #313244);"
-        "  border: 1px solid #585b70; border-radius: 5px;"
-        "  padding: 7px 12px; color: #cdd6f4; font-size: 13px; }"
-        "QPushButton:hover {"
-        "  background: qlineargradient(x1:0, y1:0, x2:0, y2:1,"
-        "    stop:0 #585b70, stop:1 #45475a);"
-        "  border-color: #a6e3a1; }"
-        "QPushButton:pressed {"
-        "  background: #a6e3a1; color: #1e1e2e; }"
 
         "QGroupBox {"
         "  background: #181825; border: 1px solid #313244;"
@@ -68,77 +58,15 @@ FEModelPanel::FEModelPanel(QWidget* parent) : QWidget(parent) {
         "  font-weight: bold; font-size: 12px; color: #a6adc8; }"
         "QGroupBox::title {"
         "  subcontrol-origin: margin; left: 10px; padding: 0 4px;"
-        "  color: #a6e3a1; }"  // 绿色标题（区别于 ControlPanel 的蓝色）
+        "  color: #a6e3a1; }"
 
         "QLabel { font-size: 12px; color: #bac2de; }"
-
-        "QCheckBox { font-size: 12px; color: #bac2de; spacing: 6px; }"
-        "QCheckBox::indicator {"
-        "  width: 14px; height: 14px; border-radius: 3px;"
-        "  border: 1px solid #585b70; background: #313244; }"
-        "QCheckBox::indicator:checked {"
-        "  background: #a6e3a1; border-color: #a6e3a1; }"
-
-        "QComboBox {"
-        "  background: #313244; border: 1px solid #45475a;"
-        "  border-radius: 5px; padding: 5px 8px; color: #cdd6f4; }"
-        "QComboBox:hover { border-color: #a6e3a1; }"
-        "QComboBox::drop-down { border: none; width: 20px; }"
-        "QComboBox QAbstractItemView {"
-        "  background: #313244; border: 1px solid #45475a;"
-        "  selection-background-color: #a6e3a1;"
-        "  selection-color: #1e1e2e; color: #cdd6f4; }"
     );
 }
 
 // ════════════════════════════════════════════════════════════
 // UI 分组创建
 // ════════════════════════════════════════════════════════════
-
-/**
- * @brief 创建模型加载分组
- *
- * 包含测试模型生成按钮和清空按钮。
- * 由于暂无文件解析器，使用程序化生成的测试模型演示功能。
- */
-QGroupBox* FEModelPanel::createLoadGroup() {
-    auto* group = new QGroupBox("模型加载");
-    auto* layout = new QVBoxLayout(group);
-
-    // 打开文件按钮
-    auto* openBtn = new QPushButton("打开文件...");
-    layout->addWidget(openBtn);
-    connect(openBtn, &QPushButton::clicked, this, &FEModelPanel::loadModelFromFile);
-
-    // 悬臂梁模型按钮（3D HEX8 单元网格）
-    auto* beamBtn = new QPushButton("悬臂梁 (HEX8)");
-    layout->addWidget(beamBtn);
-    connect(beamBtn, &QPushButton::clicked, this, &FEModelPanel::generateBeamModel);
-
-    // 平板模型按钮（2D QUAD4 单元网格）
-    auto* plateBtn = new QPushButton("平板 (QUAD4)");
-    layout->addWidget(plateBtn);
-    connect(plateBtn, &QPushButton::clicked, this, &FEModelPanel::generatePlateModel);
-
-    // 混合单元模型按钮（TRI3 + QUAD4）
-    auto* mixedBtn = new QPushButton("混合网格");
-    layout->addWidget(mixedBtn);
-    connect(mixedBtn, &QPushButton::clicked, this, &FEModelPanel::generateMixedModel);
-
-    // 清空模型
-    auto* clearBtn = new QPushButton("清空模型");
-    layout->addWidget(clearBtn);
-    connect(clearBtn, &QPushButton::clicked, this, [this]{
-        currentModel_.clear();
-        currentRenderData_.clear();
-        updateInfoLabels();
-        // 发送空 Mesh 清空显示
-        emit meshGenerated(Mesh{}, glm::vec3(0), 0, {}, {});
-        emit partsChanged(QString(), {}, {}, {});
-    });
-
-    return group;
-}
 
 /**
  * @brief 创建模型信息分组
@@ -161,33 +89,6 @@ QGroupBox* FEModelPanel::createInfoGroup() {
     elementCountLabel_  = makeLabel("单元数: 0");
     triangleCountLabel_ = makeLabel("三角面数: 0");
     modelSizeLabel_     = makeLabel("尺寸: -");
-
-    return group;
-}
-
-/**
- * @brief 创建显示选项分组
- *
- * 拾取模式选择等控制选项。
- */
-QGroupBox* FEModelPanel::createOptionGroup() {
-    auto* group = new QGroupBox("显示选项");
-    auto* layout = new QVBoxLayout(group);
-
-    // 拾取模式选择
-    auto* pickLabel = new QLabel("拾取模式:");
-    layout->addWidget(pickLabel);
-
-    auto* pickCombo = new QComboBox;
-    pickCombo->addItem("节点");   // 0 → PickMode::Node
-    pickCombo->addItem("单元");   // 1 → PickMode::Element
-    pickCombo->addItem("面");     // 2 → PickMode::Face
-    layout->addWidget(pickCombo);
-
-    connect(pickCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this, [this](int idx) {
-        emit pickModeChanged(static_cast<PickMode>(idx));
-    });
 
     return group;
 }
@@ -359,7 +260,7 @@ void FEModelPanel::loadModelFromFile() {
     updateInfoLabels();
     emit meshGenerated(currentRenderData_.mesh, currentModel_.computeCenter(),
                        currentModel_.computeSize(), currentRenderData_.triangleToElement,
-                       currentRenderData_.triangleToFace);
+                       currentRenderData_.vertexToNode);
     emit partsChanged(QString::fromStdString(currentModel_.name), currentModel_.parts,
                       currentRenderData_.triangleToPart, currentRenderData_.edgeToPart);
 
@@ -789,6 +690,12 @@ bool FEModelPanel::parseNastranBdf(const QString& filePath, FEModel& model, cons
     };
     std::vector<RawGrid> rawGrids;
 
+    // 单元 ID → Property ID 映射（用于按 PID 分组生成部件）
+    std::unordered_map<int, int> elemPid;
+
+    // Property 名称（从 PSHELL/PSOLID/PCOMP/PBAR/PBEAM 卡中提取，暂用 PID 编号）
+    std::set<int> propertyIds;
+
     // ── 第一遍：解析 CORD2R 和 GRID，收集单元（25-80%）──
     int lineIndex = 0;
     const int mergedTotal2 = mergedLines.size();
@@ -836,6 +743,7 @@ bool FEModelPanel::parseNastranBdf(const QString& filePath, FEModel& model, cons
         else if (card == "CTETRA") {
             if (fields.size() < 6) continue;
             int eid = fields[1].toInt();
+            int pid = fields[2].toInt();
             std::vector<int> nids;
             for (int i = 3; i < fields.size() && !fields[i].isEmpty(); ++i)
                 nids.push_back(fields[i].toInt());
@@ -843,10 +751,12 @@ bool FEModelPanel::parseNastranBdf(const QString& filePath, FEModel& model, cons
                 model.addElement(eid, ElementType::TET10, std::vector<int>(nids.begin(), nids.begin() + 10));
             else if (nids.size() >= 4)
                 model.addElement(eid, ElementType::TET4, std::vector<int>(nids.begin(), nids.begin() + 4));
+            elemPid[eid] = pid; propertyIds.insert(pid);
         }
         else if (card == "CHEXA") {
             if (fields.size() < 6) continue;
             int eid = fields[1].toInt();
+            int pid = fields[2].toInt();
             std::vector<int> nids;
             for (int i = 3; i < fields.size() && !fields[i].isEmpty(); ++i)
                 nids.push_back(fields[i].toInt());
@@ -854,58 +764,73 @@ bool FEModelPanel::parseNastranBdf(const QString& filePath, FEModel& model, cons
                 model.addElement(eid, ElementType::HEX20, std::vector<int>(nids.begin(), nids.begin() + 20));
             else if (nids.size() >= 8)
                 model.addElement(eid, ElementType::HEX8, std::vector<int>(nids.begin(), nids.begin() + 8));
+            elemPid[eid] = pid; propertyIds.insert(pid);
         }
         else if (card == "CPENTA") {
             if (fields.size() < 6) continue;
             int eid = fields[1].toInt();
+            int pid = fields[2].toInt();
             std::vector<int> nids;
             for (int i = 3; i < fields.size() && !fields[i].isEmpty(); ++i)
                 nids.push_back(fields[i].toInt());
             if (nids.size() >= 6)
                 model.addElement(eid, ElementType::WEDGE6, std::vector<int>(nids.begin(), nids.begin() + 6));
+            elemPid[eid] = pid; propertyIds.insert(pid);
         }
         else if (card == "CPYRAM") {
             if (fields.size() < 6) continue;
             int eid = fields[1].toInt();
+            int pid = fields[2].toInt();
             std::vector<int> nids;
             for (int i = 3; i < fields.size() && !fields[i].isEmpty(); ++i)
                 nids.push_back(fields[i].toInt());
             if (nids.size() >= 5)
                 model.addElement(eid, ElementType::PYRAMID5, std::vector<int>(nids.begin(), nids.begin() + 5));
+            elemPid[eid] = pid; propertyIds.insert(pid);
         }
         else if (card == "CTRIA3") {
             if (fields.size() < 6) continue;
             int eid = fields[1].toInt();
+            int pid = fields[2].toInt();
             model.addElement(eid, ElementType::TRI3,
                 {fields[3].toInt(), fields[4].toInt(), fields[5].toInt()});
+            elemPid[eid] = pid; propertyIds.insert(pid);
         }
         else if (card == "CTRIA6") {
             if (fields.size() < 9) continue;
             int eid = fields[1].toInt();
+            int pid = fields[2].toInt();
             std::vector<int> nids;
             for (int i = 3; i < 9 && i < fields.size(); ++i)
                 nids.push_back(fields[i].toInt());
             model.addElement(eid, ElementType::TRI6, nids);
+            elemPid[eid] = pid; propertyIds.insert(pid);
         }
         else if (card == "CQUAD4") {
             if (fields.size() < 7) continue;
             int eid = fields[1].toInt();
+            int pid = fields[2].toInt();
             model.addElement(eid, ElementType::QUAD4,
                 {fields[3].toInt(), fields[4].toInt(), fields[5].toInt(), fields[6].toInt()});
+            elemPid[eid] = pid; propertyIds.insert(pid);
         }
         else if (card == "CQUAD8") {
             if (fields.size() < 11) continue;
             int eid = fields[1].toInt();
+            int pid = fields[2].toInt();
             std::vector<int> nids;
             for (int i = 3; i < 11 && i < fields.size(); ++i)
                 nids.push_back(fields[i].toInt());
             model.addElement(eid, ElementType::QUAD8, nids);
+            elemPid[eid] = pid; propertyIds.insert(pid);
         }
         else if (card == "CBAR" || card == "CBEAM") {
             if (fields.size() < 5) continue;
             int eid = fields[1].toInt();
+            int pid = fields[2].toInt();
             model.addElement(eid, ElementType::BAR2,
                 {fields[3].toInt(), fields[4].toInt()});
+            elemPid[eid] = pid; propertyIds.insert(pid);
         }
     }
 
@@ -977,212 +902,56 @@ bool FEModelPanel::parseNastranBdf(const QString& filePath, FEModel& model, cons
            (int)model.elements.size(),
            (int)coordSystems.size());
 
+    // ── 按 Property ID 分组生成部件 ──
+    if (!propertyIds.empty()) {
+        // PID → parts 索引
+        std::map<int, int> pidToPartIndex;
+        for (int pid : propertyIds) {
+            int idx = static_cast<int>(model.parts.size());
+            FEPart part;
+            part.name = "Property " + std::to_string(pid);
+            part.visible = true;
+            model.parts.push_back(part);
+            pidToPartIndex[pid] = idx;
+        }
+        // 将每个单元分配到对应的部件
+        for (const auto& [eid, pid] : elemPid) {
+            auto it = pidToPartIndex.find(pid);
+            if (it != pidToPartIndex.end()) {
+                model.parts[it->second].elementIds.push_back(eid);
+            }
+        }
+        // 收集每个部件的节点（从单元的节点列表中提取）
+        for (auto& part : model.parts) {
+            std::unordered_set<int> nodeSet;
+            for (int eid : part.elementIds) {
+                auto eit = model.elements.find(eid);
+                if (eit != model.elements.end()) {
+                    for (int nid : eit->second.nodeIds)
+                        nodeSet.insert(nid);
+                }
+            }
+            part.nodeIds.assign(nodeSet.begin(), nodeSet.end());
+        }
+        qDebug("parseNastranBdf: %d parts generated from Property IDs",
+               (int)model.parts.size());
+    }
+
     return true;
 }
 
 // ════════════════════════════════════════════════════════════
-// 测试模型生成
+// 清空模型
 // ════════════════════════════════════════════════════════════
 
-/**
- * @brief 生成悬臂梁测试模型
- *
- * 创建一个 8×2×2 的六面体（HEX8）网格，模拟悬臂梁。
- * 梁的尺寸：长 4.0 × 宽 1.0 × 高 1.0
- *
- * 节点编号规则：
- *   nodeId = iz * (ny+1) * (nx+1) + iy * (nx+1) + ix + 1
- *   （+1 使 ID 从 1 开始，符合 FEM 软件惯例）
- *
- * 单元编号规则：
- *   elemId = ez * ny * nx + ey * nx + ex + 1
- *
- * 六面体节点连接（标准约定）：
- *        7 ─── 6
- *       /|    /|
- *      4 ─── 5 |
- *      | 3 ──| 2
- *      |/    |/
- *      0 ─── 1
- */
-void FEModelPanel::loadDefaultModel() {
-    generateBeamModel();
-}
-
-void FEModelPanel::generateBeamModel() {
+void FEModelPanel::clearModel() {
     currentModel_.clear();
-    currentModel_.name = "Cantilever Beam";
-
-    // 网格参数
-    const int nx = 8, ny = 2, nz = 2;        // 各方向单元数
-    const float lx = 4.0f, ly = 1.0f, lz = 1.0f;  // 各方向尺寸
-    const float dx = lx / nx, dy = ly / ny, dz = lz / nz;
-
-    // ── 生成节点 ──
-    // (nx+1) × (ny+1) × (nz+1) 个节点
-    for (int iz = 0; iz <= nz; ++iz) {
-        for (int iy = 0; iy <= ny; ++iy) {
-            for (int ix = 0; ix <= nx; ++ix) {
-                int nodeId = iz * (ny + 1) * (nx + 1) + iy * (nx + 1) + ix + 1;
-                glm::vec3 coords(
-                    ix * dx - lx * 0.5f,  // 居中：x ∈ [-2, 2]
-                    iy * dy - ly * 0.5f,  // 居中：y ∈ [-0.5, 0.5]
-                    iz * dz - lz * 0.5f   // 居中：z ∈ [-0.5, 0.5]
-                );
-                currentModel_.addNode(nodeId, coords);
-            }
-        }
-    }
-
-    // ── 生成 HEX8 单元 ──
-    // nx × ny × nz 个六面体单元
-    for (int ez = 0; ez < nz; ++ez) {
-        for (int ey = 0; ey < ny; ++ey) {
-            for (int ex = 0; ex < nx; ++ex) {
-                int elemId = ez * ny * nx + ey * nx + ex + 1;
-
-                // 计算单元 8 个角节点的 ID
-                // 底面 4 个节点（z = ez）
-                int n0 = ez * (ny + 1) * (nx + 1) + ey * (nx + 1) + ex + 1;
-                int n1 = n0 + 1;
-                int n2 = n0 + (nx + 1) + 1;
-                int n3 = n0 + (nx + 1);
-
-                // 顶面 4 个节点（z = ez+1）
-                int n4 = n0 + (ny + 1) * (nx + 1);
-                int n5 = n1 + (ny + 1) * (nx + 1);
-                int n6 = n2 + (ny + 1) * (nx + 1);
-                int n7 = n3 + (ny + 1) * (nx + 1);
-
-                currentModel_.addElement(elemId, ElementType::HEX8,
-                                          {n0, n1, n2, n3, n4, n5, n6, n7});
-            }
-        }
-    }
-
-    // ── 转换为渲染数据 ──
-    currentRenderData_ = FEMeshConverter::toRenderData(currentModel_);
+    currentRenderData_.clear();
     updateInfoLabels();
-    emit meshGenerated(currentRenderData_.mesh, currentModel_.computeCenter(), currentModel_.computeSize(), currentRenderData_.triangleToElement, currentRenderData_.triangleToFace);
-    emit partsChanged(QString::fromStdString(currentModel_.name), currentModel_.parts,
-                      currentRenderData_.triangleToPart, currentRenderData_.edgeToPart);
+    emit meshGenerated(Mesh{}, glm::vec3(0), 0, {}, {});
+    emit partsChanged(QString(), {}, {}, {});
 }
 
-/**
- * @brief 生成平板测试模型
- *
- * 创建一个 8×8 的四边形（QUAD4）网格，模拟平板。
- * 板的尺寸：2.0 × 2.0，位于 XY 平面（z = 0）。
- *
- * 节点编号：iy * (nx+1) + ix + 1
- * 单元编号：ey * nx + ex + 1
- */
-void FEModelPanel::generatePlateModel() {
-    currentModel_.clear();
-    currentModel_.name = "Flat Plate";
-
-    const int nx = 8, ny = 8;
-    const float lx = 2.0f, ly = 2.0f;
-    const float dx = lx / nx, dy = ly / ny;
-
-    // ── 生成节点 ──
-    for (int iy = 0; iy <= ny; ++iy) {
-        for (int ix = 0; ix <= nx; ++ix) {
-            int nodeId = iy * (nx + 1) + ix + 1;
-            glm::vec3 coords(
-                ix * dx - lx * 0.5f,  // x ∈ [-1, 1]
-                iy * dy - ly * 0.5f,  // y ∈ [-1, 1]
-                0.0f                   // z = 0（平板）
-            );
-            currentModel_.addNode(nodeId, coords);
-        }
-    }
-
-    // ── 生成 QUAD4 单元 ──
-    for (int ey = 0; ey < ny; ++ey) {
-        for (int ex = 0; ex < nx; ++ex) {
-            int elemId = ey * nx + ex + 1;
-
-            // 四边形 4 个节点（逆时针顺序）
-            int n0 = ey * (nx + 1) + ex + 1;
-            int n1 = n0 + 1;
-            int n2 = n0 + (nx + 1) + 1;
-            int n3 = n0 + (nx + 1);
-
-            currentModel_.addElement(elemId, ElementType::QUAD4,
-                                      {n0, n1, n2, n3});
-        }
-    }
-
-    // ── 转换为渲染数据 ──
-    currentRenderData_ = FEMeshConverter::toRenderData(currentModel_);
-    updateInfoLabels();
-    emit meshGenerated(currentRenderData_.mesh, currentModel_.computeCenter(), currentModel_.computeSize(), currentRenderData_.triangleToElement, currentRenderData_.triangleToFace);
-    emit partsChanged(QString::fromStdString(currentModel_.name), currentModel_.parts,
-                      currentRenderData_.triangleToPart, currentRenderData_.edgeToPart);
-}
-
-/**
- * @brief 生成混合单元测试模型
- *
- * 在平面上创建三角形和四边形混合网格：
- *   - 左半部分使用 QUAD4 单元
- *   - 右半部分将 QUAD4 分割为两个 TRI3 单元
- *
- * 用于验证不同单元类型的混合处理能力。
- */
-void FEModelPanel::generateMixedModel() {
-    currentModel_.clear();
-    currentModel_.name = "Mixed Mesh";
-
-    const int nx = 8, ny = 6;
-    const float lx = 2.0f, ly = 1.5f;
-    const float dx = lx / nx, dy = ly / ny;
-    const int halfX = nx / 2;  // 左半部分为 QUAD，右半部分为 TRI
-
-    // ── 生成节点 ──
-    for (int iy = 0; iy <= ny; ++iy) {
-        for (int ix = 0; ix <= nx; ++ix) {
-            int nodeId = iy * (nx + 1) + ix + 1;
-            glm::vec3 coords(
-                ix * dx - lx * 0.5f,
-                iy * dy - ly * 0.5f,
-                0.0f
-            );
-            currentModel_.addNode(nodeId, coords);
-        }
-    }
-
-    // ── 生成单元 ──
-    int elemId = 1;
-    for (int ey = 0; ey < ny; ++ey) {
-        for (int ex = 0; ex < nx; ++ex) {
-            int n0 = ey * (nx + 1) + ex + 1;
-            int n1 = n0 + 1;
-            int n2 = n0 + (nx + 1) + 1;
-            int n3 = n0 + (nx + 1);
-
-            if (ex < halfX) {
-                // 左半部分：QUAD4 单元
-                currentModel_.addElement(elemId++, ElementType::QUAD4,
-                                          {n0, n1, n2, n3});
-            } else {
-                // 右半部分：将四边形分割为两个 TRI3 单元
-                currentModel_.addElement(elemId++, ElementType::TRI3,
-                                          {n0, n1, n2});
-                currentModel_.addElement(elemId++, ElementType::TRI3,
-                                          {n0, n2, n3});
-            }
-        }
-    }
-
-    // ── 转换为渲染数据 ──
-    currentRenderData_ = FEMeshConverter::toRenderData(currentModel_);
-    updateInfoLabels();
-    emit meshGenerated(currentRenderData_.mesh, currentModel_.computeCenter(), currentModel_.computeSize(), currentRenderData_.triangleToElement, currentRenderData_.triangleToFace);
-    emit partsChanged(QString::fromStdString(currentModel_.name), currentModel_.parts,
-                      currentRenderData_.triangleToPart, currentRenderData_.edgeToPart);
-}
 
 // ════════════════════════════════════════════════════════════
 // 信息更新
@@ -1208,5 +977,49 @@ void FEModelPanel::updateInfoLabels() {
         float size = currentModel_.computeSize();
         modelSizeLabel_->setText(
             QString("尺寸: %1").arg(size, 0, 'f', 2));
+    }
+}
+
+// ════════════════════════════════════════════════════════════
+// 选中信息
+// ════════════════════════════════════════════════════════════
+
+QGroupBox* FEModelPanel::createSelectionGroup() {
+    auto* group = new QGroupBox("选中信息");
+    auto* layout = new QVBoxLayout(group);
+
+    selModeLabel_  = new QLabel("模式: -");
+    selCountLabel_ = new QLabel("数量: 0");
+    selIdsLabel_   = new QLabel("ID: -");
+    selIdsLabel_->setWordWrap(true);
+
+    layout->addWidget(selModeLabel_);
+    layout->addWidget(selCountLabel_);
+    layout->addWidget(selIdsLabel_);
+
+    return group;
+}
+
+void FEModelPanel::updateSelectionInfo(PickMode mode, int count, const std::vector<int>& ids) {
+    QString modeName;
+    switch (mode) {
+        case PickMode::Node:    modeName = "节点"; break;
+        case PickMode::Element: modeName = "单元"; break;
+        case PickMode::Part:    modeName = "部件"; break;
+    }
+    selModeLabel_->setText(QString("模式: %1").arg(modeName));
+    selCountLabel_->setText(QString("数量: %1").arg(count));
+
+    if (ids.empty()) {
+        selIdsLabel_->setText("ID: -");
+    } else {
+        QStringList idStrs;
+        int limit = qMin(static_cast<int>(ids.size()), 20);
+        for (int i = 0; i < limit; ++i)
+            idStrs.append(QString::number(ids[i]));
+        QString text = "ID: " + idStrs.join(", ");
+        if (static_cast<int>(ids.size()) > 20)
+            text += QString(" ... (+%1)").arg(ids.size() - 20);
+        selIdsLabel_->setText(text);
     }
 }

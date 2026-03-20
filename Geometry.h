@@ -28,6 +28,7 @@ struct Mesh {
     // ── 单元完整边线（用于选中高亮，包含内部边）──
     std::vector<float> elemEdgeVertices;   // 每条边 2 顶点 × 3 float
     std::vector<int> elemEdgeToElement;    // 每条边对应的单元 ID
+    std::vector<std::pair<int,int>> elemEdgeNodeIds;  // 每条边的 FEM 节点 ID 对（已排序，min,max）
 
     /** @brief 添加一个顶点（位置 + 法线） */
     void addVertex(glm::vec3 p, glm::vec3 n);

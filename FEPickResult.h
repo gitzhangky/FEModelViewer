@@ -52,7 +52,7 @@
 enum class PickMode {
     Node,       // 节点拾取：选中最近的节点
     Element,    // 单元拾取：选中点击处的单元
-    Face        // 面拾取：选中 3D 单元的某个面
+    Part        // 部件拾取：选中整个部件（同一 Property ID 下的所有单元）
 };
 
 /**

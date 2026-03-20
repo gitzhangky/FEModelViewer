@@ -12,7 +12,7 @@
 #include <QIcon>
 
 PartsPanel::PartsPanel(QWidget* parent) : QWidget(parent) {
-    setFixedWidth(200);
+    setMinimumWidth(140);
 
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(4, 4, 4, 4);
@@ -116,7 +116,12 @@ void PartsPanel::onItemChanged(QTreeWidgetItem* item, int /*column*/) {
 
     if (item == rootItem_) {
         // 根节点切换 → 同步所有子节点
+        // 忽略 PartiallyChecked（由子节点变化自动触发，不应同步子节点）
         Qt::CheckState state = rootItem_->checkState(0);
+        if (state == Qt::PartiallyChecked) {
+            updating_ = false;
+            return;
+        }
         bool visible = (state == Qt::Checked);
         for (int i = 0; i < rootItem_->childCount(); ++i) {
             QTreeWidgetItem* child = rootItem_->child(i);

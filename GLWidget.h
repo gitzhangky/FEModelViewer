@@ -28,6 +28,8 @@
 #include <set>
 #include <vector>
 
+#include <array>
+
 #include "Camera.h"
 #include "Geometry.h"
 #include "FEPickResult.h"
@@ -50,8 +52,11 @@ public:
     /** @brief 设置三角形→单元映射表（用于拾取） */
     void setTriangleToElementMap(const std::vector<int>& map);
 
-    /** @brief 设置三角形→面映射表（用于面拾取） */
-    void setTriangleToFaceMap(const std::vector<int>& map) { triToFace_ = map; }
+    /** @brief 设置三角形→面映射表（保留接口兼容性） */
+    void setTriangleToFaceMap(const std::vector<int>& map) { (void)map; }
+
+    /** @brief 设置渲染顶点→FEM节点ID映射表 */
+    void setVertexToNodeMap(const std::vector<int>& map);
 
     /** @brief 设置拾取模式 */
     void setPickMode(PickMode mode) { pickMode_ = mode; }
@@ -88,7 +93,7 @@ public slots:
 
 signals:
     void glInitialized();
-    void selectionChanged(int selectedCount);
+    void selectionChanged(PickMode mode, int count, const std::vector<int>& ids);
 
 protected:
     void initializeGL() override;
@@ -113,6 +118,12 @@ private:
     glm::vec3 idToColor(int id);
     int colorToId(unsigned char r, unsigned char g, unsigned char b);
     void rebuildSelectionEdges();
+    void buildPartEdgeCache();       // 选中变化时构建边缓存（重操作）
+    void updateSilhouetteFromCache(); // 相机变化时从缓存刷新轮廓边（轻操作）
+    void buildEdgeAdjacency();       // 预建全局边邻接表（网格加载后一次性构建）
+    void selectPart(int partIndex);  // 将 partIndex 对应的所有单元加入 selection_.selectedElements
+    void deselectPart(int partIndex);  // 从 selection_ 中移除该部件所有单元
+    bool isPartFullySelected(int partIndex) const;  // 检查部件是否全部已选中
 
     // ── 场景对象 ──
     Camera cam_;
@@ -135,10 +146,9 @@ private:
     QOpenGLShaderProgram* pickShader_ = nullptr;
     QOpenGLFramebufferObject* pickFbo_ = nullptr;
     std::vector<int> triToElem_;        // 三角形索引 → 单元 ID
-    std::vector<int> triToFace_;        // 三角形索引 → 面序号
+    std::vector<int> vertexToNode_;     // 渲染顶点索引 → FEM 节点 ID
     PickMode pickMode_ = PickMode::Node;  // 当前拾取模式（与下拉框默认值同步）
     FESelection selection_;             // 当前选中状态
-    std::unordered_set<int> selectedElements_;  // 选中的单元 ID 集合
 
     // ── 部件可见性 ──
     std::vector<int> triToPart_;                        // 三角形 → 部件索引
@@ -160,15 +170,35 @@ private:
     int activeEdgeIndexCount_ = 0;           // 当前可见边线索引数量
     bool edgeVisibilityDirty_ = false;       // 需要重建边线 IBO
 
-    // 选中的面：pair<elemId, faceIndex>
-    std::set<std::pair<int,int>> selectedFaces_;
-
     // ── 选中高亮边线 ──
     QOpenGLVertexArrayObject selEdgeVao_;
     QOpenGLBuffer selEdgeVbo_{QOpenGLBuffer::VertexBuffer};
     int selEdgeVertCount_ = 0;
     bool selectionDirty_ = false;
+    bool silhouetteDirty_ = false;    // 仅视角变化，需刷新轮廓边
     int selHlMode_ = 0;   // 0=lines, 1=points
+
+    // ── 部件轮廓边缓存（选中变化时构建，相机变化时复用） ──
+    struct SilhouetteCandidate {
+        float ax, ay, az, bx, by, bz;  // 边两端顶点坐标
+        glm::vec3 n0, n1;               // 两侧三角形法线
+    };
+    std::vector<float> cachedStaticEdgeVerts_;              // 不随视角变化的边（边界/特征/开放）
+    std::vector<SilhouetteCandidate> cachedSilhouettes_;    // 需逐帧判定的轮廓边候选
+    bool partEdgeCacheValid_ = false;                       // 缓存是否有效
+
+    // ── 预计算的每部件数据（在 setTriangleToPartMap 中构建） ──
+    std::vector<std::vector<int>> partTriangles_;    // partIndex → 三角形索引列表
+    std::vector<std::vector<int>> partElementIds_;   // partIndex → 去重单元 ID 列表
+    std::unordered_map<int, int> elemToPart_;        // 单元 ID → 部件索引（快速反查）
+
+    // ── 预计算的全局边邻接表（网格+节点映射就绪后一次性构建） ──
+    struct PreEdge {
+        unsigned int va, vb;       // 代表性顶点索引
+        std::vector<int> adjTris;  // 相邻三角形索引
+    };
+    std::unordered_map<int64_t, PreEdge> edgeAdjMap_;
+    bool edgeAdjDirty_ = true;     // 网格或节点映射变化时置 true
 
     // ── 交互状态 ──
     QPoint lastPos_;
