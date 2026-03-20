@@ -198,7 +198,7 @@ QWidget* MainWindow::createFilePanel() {
     modelRow->addWidget(modelLabel);
 
     modelPathEdit_ = new QLineEdit;
-    modelPathEdit_->setPlaceholderText("选择 INP / BDF / FEM 文件...");
+    modelPathEdit_->setPlaceholderText("选择 INP / BDF / FEM / OP2 文件...");
     modelPathEdit_->setReadOnly(true);
     modelRow->addWidget(modelPathEdit_);
 
@@ -285,9 +285,10 @@ void MainWindow::browseModelFile() {
     }
 
     QString path = QFileDialog::getOpenFileName(this, "选择模型文件", lastDir,
-        "所有支持格式 (*.inp *.bdf *.fem);;"
+        "所有支持格式 (*.inp *.bdf *.fem *.op2);;"
         "ABAQUS Input (*.inp);;"
         "Nastran BDF (*.bdf *.fem);;"
+        "Nastran OP2 (*.op2);;"
         "所有文件 (*)");
 
     if (!path.isEmpty()) {
@@ -397,8 +398,9 @@ void MainWindow::setupToolBar() {
     // ── 连接 ──
     connect(clearAction, &QAction::triggered, this, [this]() {
         feModelPanel_->clearModel();
-        modelPathEdit_->clear();
-        resultPathEdit_->clear();
+        statusProgress_->setVisible(false);
+        progressText_->setVisible(false);
+        statusLabel_->setVisible(true);
         statusLabel_->setText("  就绪");
         statusLabel_->setStyleSheet("color: #a6e3a1; font-weight: bold;");
     });

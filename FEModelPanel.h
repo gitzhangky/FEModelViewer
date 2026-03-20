@@ -59,6 +59,7 @@ private:
 
     bool parseAbaqusInp(const QString& filePath, FEModel& model, const std::function<void(int)>& progress = nullptr);
     bool parseNastranBdf(const QString& filePath, FEModel& model, const std::function<void(int)>& progress = nullptr);
+    bool parseNastranOp2(const QString& filePath, FEModel& model, const std::function<void(int)>& progress = nullptr);
 
     void updateInfoLabels();
 

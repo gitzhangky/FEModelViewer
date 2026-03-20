@@ -103,9 +103,10 @@ void FEModelPanel::loadModelFromFile() {
     }
 
     QFileDialog dialog(this, "打开有限元模型", lastDir,
-                       "所有支持格式 (*.inp *.bdf *.fem *.odb);;"
+                       "所有支持格式 (*.inp *.bdf *.fem *.op2 *.odb);;"
                        "ABAQUS Input (*.inp);;"
                        "Nastran BDF (*.bdf *.fem);;"
+                       "Nastran OP2 (*.op2);;"
                        "ABAQUS ODB (*.odb);;"
                        "所有文件 (*)");
     dialog.setFileMode(QFileDialog::ExistingFile);
@@ -153,6 +154,10 @@ void FEModelPanel::loadModelFromPath(const QString& path) {
         } else if (path.endsWith(".bdf", Qt::CaseInsensitive) ||
                    path.endsWith(".fem", Qt::CaseInsensitive)) {
             ok = parseNastranBdf(path, resultModel, [&](int pct) {
+                targetVal.store(pct * 5);
+            });
+        } else if (path.endsWith(".op2", Qt::CaseInsensitive)) {
+            ok = parseNastranOp2(path, resultModel, [&](int pct) {
                 targetVal.store(pct * 5);
             });
         }
@@ -899,6 +904,416 @@ bool FEModelPanel::parseNastranBdf(const QString& filePath, FEModel& model, cons
                (int)model.parts.size());
     }
 
+    return true;
+}
+
+// ════════════════════════════════════════════════════════════
+// Nastran OP2 二进制文件解析
+// ════════════════════════════════════════════════════════════
+
+bool FEModelPanel::parseNastranOp2(const QString& filePath, FEModel& model,
+                                    const std::function<void(int)>& progress)
+{
+    QFile file(filePath);
+    if (!file.open(QIODevice::ReadOnly)) {
+        qWarning("parseNastranOp2: cannot open %s", qPrintable(filePath));
+        return false;
+    }
+
+    const qint64 fileSize = file.size();
+    if (fileSize < 48) {
+        qWarning("parseNastranOp2: file too small");
+        return false;
+    }
+
+    // ── 字节序检测 ──
+    bool needSwap = false;
+    {
+        quint32 first4;
+        file.read(reinterpret_cast<char*>(&first4), 4);
+        file.seek(0);
+        if (first4 == 4) {
+            needSwap = false;
+        } else {
+            quint32 swapped = ((first4 >> 24) & 0xFF) |
+                              ((first4 >> 8)  & 0xFF00) |
+                              ((first4 << 8)  & 0xFF0000) |
+                              ((first4 << 24) & 0xFF000000);
+            if (swapped == 4) {
+                needSwap = true;
+            } else {
+                qWarning("parseNastranOp2: not a valid OP2 file (first 4 bytes: 0x%08X)", first4);
+                return false;
+            }
+        }
+    }
+
+    // ── 辅助 lambda ──
+    auto swapBytes32 = [](quint32 v) -> quint32 {
+        return ((v >> 24) & 0xFF) | ((v >> 8) & 0xFF00) |
+               ((v << 8) & 0xFF0000) | ((v << 24) & 0xFF000000);
+    };
+
+    auto readInt32 = [&]() -> qint32 {
+        quint32 v;
+        file.read(reinterpret_cast<char*>(&v), 4);
+        if (needSwap) v = swapBytes32(v);
+        return static_cast<qint32>(v);
+    };
+
+    // 读取一个 Fortran 无格式记录: [4字节长度][数据][4字节长度]
+    auto readFortranRecord = [&]() -> QByteArray {
+        qint32 len = readInt32();
+        if (len < 0) len = -len;
+        QByteArray data = file.read(len);
+        readInt32(); // trailing length
+        return data;
+    };
+
+    // 读取 marker 记录（包含单个 int32 的 Fortran 记录）
+    auto readMarker = [&]() -> qint32 {
+        QByteArray rec = readFortranRecord();
+        if (rec.size() < 4) return 0;
+        qint32 val;
+        memcpy(&val, rec.constData(), 4);
+        return val;
+    };
+
+    // 读取一个子表的全部数据（多个 marker(N)+record 对，直到 marker(0)）
+    auto readSubtableData = [&]() -> QByteArray {
+        QByteArray allData;
+        while (true) {
+            qint32 m = readMarker();
+            if (m == 0) break;
+            QByteArray rec = readFortranRecord();
+            allData.append(rec);
+        }
+        return allData;
+    };
+
+    // 跳过一个完整的表（header + 所有子表）
+    auto skipTable = [&]() {
+        // header: marker(7) + record + marker(-2)
+        readMarker();
+        readFortranRecord();
+        readMarker();
+        // 子表循环：每个子表以 marker(0) 结束，表以双 marker(0) 结束
+        while (true) {
+            // 读取子表数据直到 marker(0)
+            while (true) {
+                qint32 m = readMarker();
+                if (m == 0) break;
+                readFortranRecord();
+            }
+            // 检查下一个 marker：0 = 表结束，否则是下一个子表的首条数据
+            qint32 m = readMarker();
+            if (m == 0) break;
+            readFortranRecord(); // 消费该数据记录
+        }
+    };
+
+    // ── 跳过文件头（8 个 Fortran 记录）──
+    // marker(3) + date + marker(7) + label + marker(2) + OS + marker(-1) + marker(0)
+    for (int i = 0; i < 8; ++i)
+        readFortranRecord();
+
+    // ── 收集数据 ──
+    std::set<int> propertyIds;
+    std::map<int, int> elemPid;
+
+    // ── 表级导航循环 ──
+    while (!file.atEnd()) {
+        if (progress) {
+            int pct = static_cast<int>(file.pos() * 80 / fileSize);
+            progress(pct);
+        }
+
+        // 读取表名 marker — 若为 0 则文件结束
+        qint32 nameMarker = readMarker();
+        if (file.atEnd() || nameMarker == 0) break;
+
+        // 读取表名
+        QByteArray nameRec = readFortranRecord();
+        QString tableName = QString::fromLatin1(nameRec.left(8)).trimmed();
+
+        // 读取 marker(-1)
+        readMarker();
+
+        qDebug("parseNastranOp2: table '%s' at pos %lld", qPrintable(tableName), file.pos());
+
+        // 判断是否为几何表
+        bool isGeom1 = tableName.startsWith("GEOM1");
+        bool isGeom2 = tableName.startsWith("GEOM2");
+
+        if (!isGeom1 && !isGeom2) {
+            skipTable();
+            continue;
+        }
+
+        // ── 读取 header ──
+        readMarker();        // marker(7)
+        readFortranRecord(); // header record (28 bytes)
+        readMarker();        // marker(-2)
+
+        // ── 读取所有子表数据 ──
+        // OP2 子表结构：每个子表由 marker(N)+record 对组成，以 marker(0) 结束。
+        // 表结束标志：连续两个 marker(0)（子表结束 + 表结束）。
+        std::vector<QByteArray> subtables;
+        bool tableEnded = false;
+        while (!tableEnded && !file.atEnd()) {
+            QByteArray stData;
+            // 读取一个子表的所有记录
+            while (true) {
+                qint32 m = readMarker();
+                if (m == 0) break;  // 子表结束
+                QByteArray rec = readFortranRecord();
+                stData.append(rec);
+            }
+            subtables.push_back(stData);
+            // 检查表是否结束：读取下一个 marker
+            qint32 nextM = readMarker();
+            if (nextM == 0) {
+                tableEnded = true;  // 双 marker(0) = 表结束
+            } else {
+                // nextM 是下一个子表的第一条数据记录的 word count
+                // 读取该记录，作为下一个子表的开头数据
+                QByteArray firstRec = readFortranRecord();
+                // 将其放回：创建新子表，先存入这条记录
+                QByteArray nextSt;
+                nextSt.append(firstRec);
+                // 继续读取该子表的剩余记录
+                while (true) {
+                    qint32 m2 = readMarker();
+                    if (m2 == 0) break;
+                    nextSt.append(readFortranRecord());
+                }
+                subtables.push_back(nextSt);
+                // 再检查表是否结束
+                qint32 endM = readMarker();
+                if (endM == 0) {
+                    tableEnded = true;
+                } else {
+                    // 还有更多子表，把这条记录存入并继续外层循环
+                    QByteArray cont;
+                    cont.append(readFortranRecord());
+                    while (true) {
+                        qint32 m3 = readMarker();
+                        if (m3 == 0) break;
+                        cont.append(readFortranRecord());
+                    }
+                    subtables.push_back(cont);
+                    // 继续外层循环检查更多子表
+                }
+            }
+        }
+
+        if (isGeom1) {
+            // ── GEOM1: 解析节点 ──
+            // 子表格式：key(2-3 words) + 8-word GRID 条目
+            // GRID key: (4501, 40) 标准 Nastran 或 (4501, 45) OptiStruct
+            for (const auto& stData : subtables) {
+                int nWords = stData.size() / 4;
+                if (nWords < 11) continue; // 至少 key + 1 个 GRID
+
+                const qint32* words = reinterpret_cast<const qint32*>(stData.constData());
+
+                // 检查 GRID key
+                if (words[0] != 4501) continue;
+
+                // 确定数据起始位置：标准 Nastran key=2 words，OptiStruct key=3 words
+                // 通过检查 word[2] 或 word[3] 是否为合理的 NID 来判断
+                int dataStart = 2;
+                if (nWords > 3 && words[2] > 0 && words[2] <= 100000000) {
+                    // word[2] 可能是 NID（标准格式）或 extra header word
+                    // 检查 word[3]：如果也是小正整数（CP=0 通常），则 word[2] 是 NID
+                    // 但如果 (nWords-3) % 8 == 0 或 1，则 dataStart=3
+                    int rem2 = (nWords - 2) % 8;
+                    int rem3 = (nWords - 3) % 8;
+                    if (rem3 <= 1 && rem2 > 1) {
+                        dataStart = 3; // OptiStruct: 3-word key
+                    }
+                }
+
+                int parsed = 0;
+                for (int i = dataStart; i + 8 <= nWords; i += 8) {
+                    qint32 nid = words[i];
+                    if (nid <= 0) break;
+
+                    quint32 rawX, rawY, rawZ;
+                    memcpy(&rawX, &words[i + 2], 4);
+                    memcpy(&rawY, &words[i + 3], 4);
+                    memcpy(&rawZ, &words[i + 4], 4);
+
+                    if (needSwap) {
+                        rawX = swapBytes32(rawX);
+                        rawY = swapBytes32(rawY);
+                        rawZ = swapBytes32(rawZ);
+                    }
+
+                    float x, y, z;
+                    memcpy(&x, &rawX, 4);
+                    memcpy(&y, &rawY, 4);
+                    memcpy(&z, &rawZ, 4);
+
+                    model.addNode(nid, glm::vec3(x, y, z));
+                    parsed++;
+                }
+                if (parsed > 0) {
+                    qDebug("parseNastranOp2: parsed %d GRID nodes (dataStart=%d)", parsed, dataStart);
+                }
+            }
+        }
+
+        if (isGeom2) {
+            // ── GEOM2: 解析单元 ──
+            // 子表格式：key(2 words) + [extra word] + element 条目
+            // key 标识单元类型，通过 key 查表确定节点数
+
+            struct ElemInfo {
+                ElementType type;
+                int nodeCount;
+            };
+            // key1 → ElemInfo（key2 仅用于验证）
+            std::map<int, ElemInfo> elemKeyMap = {
+                {2408,  {ElementType::BAR2,     2}},   // CBAR
+                {3001,  {ElementType::BAR2,     2}},   // CBAR (OptiStruct)
+                {5408,  {ElementType::BAR2,     2}},   // CBEAM
+                {5959,  {ElementType::TRI3,     3}},   // CTRIA3
+                {4801,  {ElementType::TRI6,     6}},   // CTRIA6
+                {2958,  {ElementType::QUAD4,    4}},   // CQUAD4
+                {4701,  {ElementType::QUAD8,    8}},   // CQUAD8
+                {5508,  {ElementType::TET4,     4}},   // CTETRA4
+                {16600, {ElementType::TET10,   10}},   // CTETRA10
+                {7308,  {ElementType::HEX8,     8}},   // CHEXA8
+                {16300, {ElementType::HEX20,   20}},   // CHEXA20
+                {4108,  {ElementType::WEDGE6,   6}},   // CPENTA6
+                {16500, {ElementType::WEDGE6,   6}},   // CPENTA15
+                {17200, {ElementType::PYRAMID5,  5}},   // CPYRAM
+            };
+
+            for (const auto& stData : subtables) {
+                int nWords = stData.size() / 4;
+                if (nWords < 6) continue;
+
+                const qint32* words = reinterpret_cast<const qint32*>(stData.constData());
+
+                // 查找 key
+                qint32 key1 = words[0];
+                auto it = elemKeyMap.find(key1);
+                if (it == elemKeyMap.end()) continue;
+
+                const ElemInfo& info = it->second;
+
+                // 确定数据起始位置和 stride
+                // 标准 Nastran: dataStart=2, OptiStruct: dataStart=3（有额外 header word）
+                // 尝试两种起始位置，选择能产生合理 stride 的那个
+                int dataStart = 0;
+                int stride = 0;
+
+                for (int tryStart = 3; tryStart >= 2 && stride == 0; --tryStart) {
+                    if (tryStart >= nWords) continue;
+                    qint32 tryEid = words[tryStart];
+                    if (tryEid <= 0 || tryEid > 100000000) continue;
+
+                    // 扫描找到第二个 EID
+                    for (int s = info.nodeCount + 2; s <= std::min(30, nWords - tryStart - 1); ++s) {
+                        int idx = tryStart + s;
+                        if (idx + 1 >= nWords) break;
+                        qint32 eid2 = words[idx];
+                        qint32 pid2 = words[idx + 1];
+                        if (eid2 > tryEid && eid2 <= tryEid + 100000 &&
+                            pid2 > 0 && pid2 <= 100000000) {
+                            // 验证第三个条目
+                            int idx3 = tryStart + s * 2;
+                            if (idx3 + 1 < nWords) {
+                                qint32 eid3 = words[idx3];
+                                if (eid3 <= eid2 || eid3 > eid2 + 100000) continue;
+                            }
+                            dataStart = tryStart;
+                            stride = s;
+                            break;
+                        }
+                    }
+                }
+                if (stride == 0) continue;
+
+                qint32 firstEid = words[dataStart];
+
+                // 解析所有条目
+                int dataWords = nWords - dataStart;
+                int maxEntries = dataWords / stride;
+                int count = 0;
+
+                for (int e = 0; e < maxEntries; ++e) {
+                    int base = dataStart + e * stride;
+                    if (base + 2 + info.nodeCount > nWords) break;
+
+                    qint32 eid = words[base];
+                    qint32 pid = words[base + 1];
+                    if (eid <= 0) break;
+
+                    std::vector<int> nodeIds(info.nodeCount);
+                    for (int ni = 0; ni < info.nodeCount; ++ni) {
+                        nodeIds[ni] = words[base + 2 + ni];
+                    }
+
+                    model.addElement(eid, info.type, nodeIds);
+                    elemPid[eid] = pid;
+                    propertyIds.insert(pid);
+                    count++;
+                }
+
+                qDebug("parseNastranOp2: parsed %d elements (key=%d, stride=%d, nodes=%d)",
+                       count, key1, stride, info.nodeCount);
+            }
+        }
+    }
+
+    file.close();
+    if (progress) progress(85);
+
+    qDebug("parseNastranOp2: nodes=%d, elements=%d",
+           (int)model.nodes.size(), (int)model.elements.size());
+
+    // ── 按 Property ID 分组生成部件 ──（85-95%）
+    if (!propertyIds.empty()) {
+        std::map<int, int> pidToPartIndex;
+        for (int pid : propertyIds) {
+            int idx = static_cast<int>(model.parts.size());
+            FEPart part;
+            part.name = "Property " + std::to_string(pid);
+            part.visible = true;
+            model.parts.push_back(part);
+            pidToPartIndex[pid] = idx;
+        }
+        for (const auto& [eid, pid] : elemPid) {
+            auto it = pidToPartIndex.find(pid);
+            if (it != pidToPartIndex.end()) {
+                model.parts[it->second].elementIds.push_back(eid);
+            }
+        }
+        for (auto& part : model.parts) {
+            std::unordered_set<int> nodeSet;
+            for (int eid : part.elementIds) {
+                auto eit = model.elements.find(eid);
+                if (eit != model.elements.end()) {
+                    for (int nid : eit->second.nodeIds)
+                        nodeSet.insert(nid);
+                }
+            }
+            part.nodeIds.assign(nodeSet.begin(), nodeSet.end());
+        }
+        qDebug("parseNastranOp2: %d parts generated from Property IDs",
+               (int)model.parts.size());
+    }
+    if (progress) progress(95);
+
+    if (model.nodes.empty()) {
+        qWarning("parseNastranOp2: no nodes found in file");
+        return false;
+    }
+
+    if (progress) progress(100);
     return true;
 }
 
