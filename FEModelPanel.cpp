@@ -1318,6 +1318,497 @@ bool FEModelPanel::parseNastranOp2(const QString& filePath, FEModel& model,
 }
 
 // ════════════════════════════════════════════════════════════
+// OP2 结果解析（位移 OUG + 应力 OES）
+// ════════════════════════════════════════════════════════════
+
+bool FEModelPanel::parseNastranOp2Results(const QString& filePath, FEResultData& results)
+{
+    QFile file(filePath);
+    if (!file.open(QIODevice::ReadOnly)) {
+        qWarning("parseNastranOp2Results: cannot open %s", qPrintable(filePath));
+        return false;
+    }
+
+    const qint64 fileSize = file.size();
+    if (fileSize < 48) return false;
+
+    // ── 字节序检测 ──
+    bool needSwap = false;
+    {
+        quint32 first4;
+        file.read(reinterpret_cast<char*>(&first4), 4);
+        file.seek(0);
+        if (first4 == 4) {
+            needSwap = false;
+        } else {
+            quint32 swapped = ((first4 >> 24) & 0xFF) |
+                              ((first4 >> 8)  & 0xFF00) |
+                              ((first4 << 8)  & 0xFF0000) |
+                              ((first4 << 24) & 0xFF000000);
+            if (swapped == 4) needSwap = true;
+            else return false;
+        }
+    }
+
+    // ── 辅助 lambda（与几何解析完全相同） ──
+    auto swapBytes32 = [](quint32 v) -> quint32 {
+        return ((v >> 24) & 0xFF) | ((v >> 8) & 0xFF00) |
+               ((v << 8) & 0xFF0000) | ((v << 24) & 0xFF000000);
+    };
+
+    auto readInt32 = [&]() -> qint32 {
+        quint32 v;
+        file.read(reinterpret_cast<char*>(&v), 4);
+        if (needSwap) v = swapBytes32(v);
+        return static_cast<qint32>(v);
+    };
+
+    auto readFortranRecord = [&]() -> QByteArray {
+        qint32 len = readInt32();
+        if (len < 0) len = -len;
+        QByteArray data = file.read(len);
+        readInt32();
+        return data;
+    };
+
+    auto readMarker = [&]() -> qint32 {
+        QByteArray rec = readFortranRecord();
+        if (rec.size() < 4) return 0;
+        qint32 val;
+        memcpy(&val, rec.constData(), 4);
+        return val;
+    };
+
+    auto skipTable = [&]() {
+        readMarker();
+        readFortranRecord();
+        readMarker();
+        while (true) {
+            while (true) {
+                qint32 m = readMarker();
+                if (m == 0) break;
+                readFortranRecord();
+            }
+            qint32 m = readMarker();
+            if (m == 0) break;
+            readFortranRecord();
+        }
+    };
+
+    auto readFloat = [&](const char* ptr) -> float {
+        quint32 raw;
+        memcpy(&raw, ptr, 4);
+        if (needSwap) raw = swapBytes32(raw);
+        float val;
+        memcpy(&val, &raw, 4);
+        return val;
+    };
+
+    auto readInt = [&](const char* ptr) -> qint32 {
+        quint32 raw;
+        memcpy(&raw, ptr, 4);
+        if (needSwap) raw = swapBytes32(raw);
+        return static_cast<qint32>(raw);
+    };
+
+    // ── 跳过文件头 ──
+    for (int i = 0; i < 8; ++i)
+        readFortranRecord();
+
+    results.clear();
+    // subcase ID → index in results.subcases
+    std::map<int, int> subcaseMap;
+
+    bool foundAny = false;
+
+    // ── 表级导航循环 ──
+    while (!file.atEnd()) {
+        qint32 nameMarker = readMarker();
+        if (file.atEnd() || nameMarker == 0) break;
+
+        QByteArray nameRec = readFortranRecord();
+        QString tableName = QString::fromLatin1(nameRec.left(8)).trimmed();
+
+        readMarker(); // marker(-1)
+
+        bool isOUG = tableName.startsWith("OUG") || tableName.startsWith("OUGV");
+        bool isOES = tableName.startsWith("OES");
+
+        if (!isOUG && !isOES) {
+            skipTable();
+            continue;
+        }
+
+        qDebug("parseNastranOp2Results: found result table '%s'", qPrintable(tableName));
+
+        // ── 读取 header (7 words = 28 bytes) ──
+        readMarker();        // marker(7)
+        QByteArray headerRec = readFortranRecord();
+        readMarker();        // marker(-2)
+
+        // 从 header 提取 approach code 和 subcase ID
+        int subcaseId = 1;
+        int tableCode = 0;
+        if (headerRec.size() >= 12) {
+            qint32 approachCode = readInt(headerRec.constData());
+            tableCode = readInt(headerRec.constData() + 4);
+            // subcase ID = approach code / 10
+            subcaseId = approachCode / 10;
+            if (subcaseId <= 0) subcaseId = 1;
+        }
+
+        // 确保 subcase 存在
+        if (subcaseMap.find(subcaseId) == subcaseMap.end()) {
+            int idx = static_cast<int>(results.subcases.size());
+            FESubcase sc;
+            sc.id = subcaseId;
+            sc.name = "Subcase " + std::to_string(subcaseId);
+            results.subcases.push_back(sc);
+            subcaseMap[subcaseId] = idx;
+        }
+        FESubcase& subcase = results.subcases[subcaseMap[subcaseId]];
+
+        // ── 读取所有子表数据 ──
+        std::vector<QByteArray> subtables;
+        bool tableEnded = false;
+        while (!tableEnded && !file.atEnd()) {
+            QByteArray stData;
+            while (true) {
+                qint32 m = readMarker();
+                if (m == 0) break;
+                QByteArray rec = readFortranRecord();
+                stData.append(rec);
+            }
+            subtables.push_back(stData);
+            qint32 nextM = readMarker();
+            if (nextM == 0) {
+                tableEnded = true;
+            } else {
+                QByteArray firstRec = readFortranRecord();
+                QByteArray nextSt;
+                nextSt.append(firstRec);
+                while (true) {
+                    qint32 m2 = readMarker();
+                    if (m2 == 0) break;
+                    nextSt.append(readFortranRecord());
+                }
+                subtables.push_back(nextSt);
+                qint32 endM = readMarker();
+                if (endM == 0) {
+                    tableEnded = true;
+                } else {
+                    QByteArray cont;
+                    cont.append(readFortranRecord());
+                    while (true) {
+                        qint32 m3 = readMarker();
+                        if (m3 == 0) break;
+                        cont.append(readFortranRecord());
+                    }
+                    subtables.push_back(cont);
+                }
+            }
+        }
+
+        if (isOUG) {
+            // ════════════════════════════════════════════
+            // OUG/OUGV1: 位移结果
+            // 每个节点: NID(int) + type(int) + tx,ty,tz,rx,ry,rz (6 float)
+            // = 8 words = 32 bytes per entry
+            // ════════════════════════════════════════════
+            FEResultType dispType;
+            dispType.name = "Displacement";
+            dispType.hasVector = true;
+
+            FEResultComponent compMag, compX, compY, compZ;
+            compMag.name = "Magnitude";
+            compMag.field.name = "Displacement Magnitude";
+            compMag.field.unit = "mm";
+            compMag.field.location = FieldLocation::Node;
+
+            compX.name = "X";
+            compX.field.name = "Displacement X";
+            compX.field.unit = "mm";
+            compX.field.location = FieldLocation::Node;
+
+            compY.name = "Y";
+            compY.field.name = "Displacement Y";
+            compY.field.unit = "mm";
+            compY.field.location = FieldLocation::Node;
+
+            compZ.name = "Z";
+            compZ.field.name = "Displacement Z";
+            compZ.field.unit = "mm";
+            compZ.field.location = FieldLocation::Node;
+
+            dispType.vectorField.name = "Displacement";
+            dispType.vectorField.unit = "mm";
+            dispType.vectorField.location = FieldLocation::Node;
+
+            int parsed = 0;
+            int skipped = 0;
+            // OUG 子表结构：subtable[0]=IDENT(36B), subtable[1]=metadata(~588B), subtable[2]=数据
+            // 只处理最大的子表（包含实际位移数据）
+            // 策略：找到最大的子表来解析
+            int largestIdx = -1;
+            int largestSize = 0;
+            for (int si = 0; si < static_cast<int>(subtables.size()); ++si) {
+                if (subtables[si].size() > largestSize) {
+                    largestSize = subtables[si].size();
+                    largestIdx = si;
+                }
+            }
+
+            if (largestIdx >= 0 && largestSize >= 32) {
+                const auto& stData = subtables[largestIdx];
+                int nBytes = stData.size();
+                const char* ptr = stData.constData();
+
+                // 每条目 32 bytes: NID(4) + type(4) + 6*float(24)
+                for (int offset = 0; offset + 32 <= nBytes; offset += 32) {
+                    qint32 nid = readInt(ptr + offset);
+                    if (nid <= 0 || nid > 100000000) {
+                        skipped++;
+                        continue;
+                    }
+
+                    float tx = readFloat(ptr + offset + 8);
+                    float ty = readFloat(ptr + offset + 12);
+                    float tz = readFloat(ptr + offset + 16);
+
+                    float mag = std::sqrt(tx*tx + ty*ty + tz*tz);
+
+                    compMag.field.values[nid] = mag;
+                    compX.field.values[nid] = tx;
+                    compY.field.values[nid] = ty;
+                    compZ.field.values[nid] = tz;
+                    dispType.vectorField.values[nid] = glm::vec3(tx, ty, tz);
+                    parsed++;
+                }
+            }
+
+            if (parsed > 0) {
+                dispType.components.push_back(std::move(compMag));
+                dispType.components.push_back(std::move(compX));
+                dispType.components.push_back(std::move(compY));
+                dispType.components.push_back(std::move(compZ));
+                subcase.resultTypes.push_back(std::move(dispType));
+                foundAny = true;
+                qDebug("parseNastranOp2Results: parsed %d displacement nodes, skipped %d (subcase %d)",
+                       parsed, skipped, subcaseId);
+            }
+
+        } else if (isOES) {
+            // ════════════════════════════════════════════
+            // OES1/OES1X: 应力结果
+            // 格式取决于单元类型，需要从 header 获取元素类型码
+            // ════════════════════════════════════════════
+            int elemTypeCode = 0;
+            if (headerRec.size() >= 12) {
+                // word 3 (0-indexed word 2) contains element type
+                elemTypeCode = readInt(headerRec.constData() + 8);
+            }
+
+            // 壳单元: CTRIA3(74), CQUAD4(33)
+            // 实体: CHEXA(67), CTETRA(39), CPENTA(68)
+            bool isShell = (elemTypeCode == 33 || elemTypeCode == 74 ||
+                           elemTypeCode == 75 || elemTypeCode == 144);
+            bool isSolid = (elemTypeCode == 39 || elemTypeCode == 67 ||
+                           elemTypeCode == 68);
+
+            if (!isShell && !isSolid) {
+                qDebug("parseNastranOp2Results: skipping OES with elem type %d", elemTypeCode);
+                continue;
+            }
+
+            FEResultType stressType;
+            stressType.name = "Stress";
+            stressType.hasVector = false;
+
+            if (isShell) {
+                // 壳单元应力: 每个单元有上下表面
+                // 简化: 读取中间面或上表面应力
+                // CQUAD4(33): EID + fiber_dist + sx + sy + txy + angle + smajor + sminor + svm
+                // = 1 int + 8 float = 36 bytes per surface, 2 surfaces = 17 words total
+                // 实际格式: EID(int) + [fiber_dist sx sy txy angle smaj smin svm] x2
+                // = 1 + 8 + 8 = 17 words = 68 bytes
+                FEResultComponent compSx, compSy, compTxy, compVm;
+                compSx.name = "Sigma-X";
+                compSx.field.name = "Normal Stress X";
+                compSx.field.unit = "MPa";
+                compSx.field.location = FieldLocation::Element;
+
+                compSy.name = "Sigma-Y";
+                compSy.field.name = "Normal Stress Y";
+                compSy.field.unit = "MPa";
+                compSy.field.location = FieldLocation::Element;
+
+                compTxy.name = "Tau-XY";
+                compTxy.field.name = "Shear Stress XY";
+                compTxy.field.unit = "MPa";
+                compTxy.field.location = FieldLocation::Element;
+
+                compVm.name = "Von Mises";
+                compVm.field.name = "Von Mises Stress";
+                compVm.field.unit = "MPa";
+                compVm.field.location = FieldLocation::Element;
+
+                int parsed = 0;
+                // OES 同样只处理最大的子表
+                int largestOesIdx = -1;
+                int largestOesSize = 0;
+                for (int si = 0; si < static_cast<int>(subtables.size()); ++si) {
+                    if (static_cast<int>(subtables[si].size()) > largestOesSize) {
+                        largestOesSize = subtables[si].size();
+                        largestOesIdx = si;
+                    }
+                }
+                if (largestOesIdx >= 0 && largestOesSize >= 68) {
+                    const auto& stData = subtables[largestOesIdx];
+                    int nBytes = stData.size();
+                    const char* ptr = stData.constData();
+
+                    // 壳单元每条目 17 words = 68 bytes
+                    int entrySize = 68;
+                    for (int offset = 0; offset + entrySize <= nBytes; offset += entrySize) {
+                        qint32 eid = readInt(ptr + offset);
+                        if (eid <= 0 || eid > 100000000) continue;
+
+                        // 取上表面 (第一组 8 floats，从 offset+4 开始)
+                        // fiber_dist(4) + sx(4) + sy(4) + txy(4) + angle(4) + smaj(4) + smin(4) + svm(4)
+                        float sx  = readFloat(ptr + offset + 8);
+                        float sy  = readFloat(ptr + offset + 12);
+                        float txy = readFloat(ptr + offset + 16);
+                        float vm  = readFloat(ptr + offset + 32);
+
+                        compSx.field.values[eid] = sx;
+                        compSy.field.values[eid] = sy;
+                        compTxy.field.values[eid] = txy;
+                        compVm.field.values[eid] = vm;
+                        parsed++;
+                    }
+                }
+
+                if (parsed > 0) {
+                    stressType.components.push_back(std::move(compSx));
+                    stressType.components.push_back(std::move(compSy));
+                    stressType.components.push_back(std::move(compTxy));
+                    stressType.components.push_back(std::move(compVm));
+                    subcase.resultTypes.push_back(std::move(stressType));
+                    foundAny = true;
+                    qDebug("parseNastranOp2Results: parsed %d shell stress elements (subcase %d, type %d)",
+                           parsed, subcaseId, elemTypeCode);
+                }
+
+            } else if (isSolid) {
+                // 实体单元应力
+                // CHEXA(67): EID + gridID + sx + sy + sz + txy + tyz + txz + se + eps + eci + ...
+                // 每条目包含中心点 + 角点值
+                // 简化: 只读中心点 (第一个 gridID=0 的条目)
+                // 格式: EID(1) + [cid(1) + sx sy sz txy tyz txz se eps eci(9)] × (1+nnodes)
+                FEResultComponent compSxx, compSyy, compSzz, compTxy, compTyz, compTxz, compVm;
+                compSxx.name = "Sigma-XX"; compSxx.field.name = "Normal Stress XX";
+                compSxx.field.unit = "MPa"; compSxx.field.location = FieldLocation::Element;
+
+                compSyy.name = "Sigma-YY"; compSyy.field.name = "Normal Stress YY";
+                compSyy.field.unit = "MPa"; compSyy.field.location = FieldLocation::Element;
+
+                compSzz.name = "Sigma-ZZ"; compSzz.field.name = "Normal Stress ZZ";
+                compSzz.field.unit = "MPa"; compSzz.field.location = FieldLocation::Element;
+
+                compTxy.name = "Tau-XY"; compTxy.field.name = "Shear Stress XY";
+                compTxy.field.unit = "MPa"; compTxy.field.location = FieldLocation::Element;
+
+                compTyz.name = "Tau-YZ"; compTyz.field.name = "Shear Stress YZ";
+                compTyz.field.unit = "MPa"; compTyz.field.location = FieldLocation::Element;
+
+                compTxz.name = "Tau-XZ"; compTxz.field.name = "Shear Stress XZ";
+                compTxz.field.unit = "MPa"; compTxz.field.location = FieldLocation::Element;
+
+                compVm.name = "Von Mises"; compVm.field.name = "Von Mises Stress";
+                compVm.field.unit = "MPa"; compVm.field.location = FieldLocation::Element;
+
+                int parsed = 0;
+                // OES 同样只处理最大的子表
+                int largestOesIdx = -1;
+                int largestOesSize = 0;
+                for (int si = 0; si < static_cast<int>(subtables.size()); ++si) {
+                    if (static_cast<int>(subtables[si].size()) > largestOesSize) {
+                        largestOesSize = subtables[si].size();
+                        largestOesIdx = si;
+                    }
+                }
+                if (largestOesIdx >= 0 && largestOesSize >= 68) {
+                    const auto& stData = subtables[largestOesIdx];
+                    int nBytes = stData.size();
+                    const char* ptr = stData.constData();
+
+                    int offset = 0;
+                    while (offset + 4 <= nBytes) {
+                        qint32 eid = readInt(ptr + offset);
+                        if (eid <= 0 || eid > 100000000) break;
+
+                        // 中心点: EID(4) + cid(4) + sx,sy,sz,txy,tyz,txz,se,eps,eci (9*4=36)
+                        // = 44 bytes for center
+                        if (offset + 44 > nBytes) break;
+
+                        float sx  = readFloat(ptr + offset + 8);
+                        float sy  = readFloat(ptr + offset + 12);
+                        float sz  = readFloat(ptr + offset + 16);
+                        float txy = readFloat(ptr + offset + 20);
+                        float tyz = readFloat(ptr + offset + 24);
+                        float txz = readFloat(ptr + offset + 28);
+
+                        // Von Mises 从 se 字段读取
+                        float vm = readFloat(ptr + offset + 32);
+
+                        compSxx.field.values[eid] = sx;
+                        compSyy.field.values[eid] = sy;
+                        compSzz.field.values[eid] = sz;
+                        compTxy.field.values[eid] = txy;
+                        compTyz.field.values[eid] = tyz;
+                        compTxz.field.values[eid] = txz;
+                        compVm.field.values[eid] = vm;
+                        parsed++;
+
+                        // 跳过角点数据
+                        // 角点数: CHEXA=8, CTETRA=4, CPENTA=6
+                        int nnodes = 0;
+                        if (elemTypeCode == 67) nnodes = 8;       // CHEXA
+                        else if (elemTypeCode == 39) nnodes = 4;  // CTETRA
+                        else if (elemTypeCode == 68) nnodes = 6;  // CPENTA
+
+                        // 中心 (44 bytes) + nnodes * (cid + 9 floats = 40 bytes)
+                        offset += 44 + nnodes * 40;
+                    }
+                }
+
+                if (parsed > 0) {
+                    stressType.components.push_back(std::move(compSxx));
+                    stressType.components.push_back(std::move(compSyy));
+                    stressType.components.push_back(std::move(compSzz));
+                    stressType.components.push_back(std::move(compTxy));
+                    stressType.components.push_back(std::move(compTyz));
+                    stressType.components.push_back(std::move(compTxz));
+                    stressType.components.push_back(std::move(compVm));
+                    subcase.resultTypes.push_back(std::move(stressType));
+                    foundAny = true;
+                    qDebug("parseNastranOp2Results: parsed %d solid stress elements (subcase %d, type %d)",
+                           parsed, subcaseId, elemTypeCode);
+                }
+            }
+        }
+    }
+
+    file.close();
+
+    if (foundAny) {
+        qDebug("parseNastranOp2Results: %d subcases loaded", (int)results.subcases.size());
+    }
+
+    return foundAny;
+}
+
+// ════════════════════════════════════════════════════════════
 // 清空模型
 // ════════════════════════════════════════════════════════════
 

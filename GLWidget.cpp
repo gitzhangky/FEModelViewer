@@ -26,6 +26,7 @@ static const char* vertSrc = R"(
 layout (location = 0) in vec3 aPos;
 layout (location = 1) in vec3 aNormal;
 layout (location = 2) in vec3 aColor;
+layout (location = 3) in float aScalar;
 
 uniform mat4 uMVP;
 uniform mat4 uModel;
@@ -33,12 +34,14 @@ uniform mat3 uNormalMat;
 out vec3 vWorldPos;
 out vec3 vNormal;
 out vec3 vColor;
+out float vScalar;
 
 void main() {
     vec4 worldPos = uModel * vec4(aPos, 1.0);
     vWorldPos = worldPos.xyz;
     vNormal   = normalize(uNormalMat * aNormal);
     vColor    = aColor;
+    vScalar   = aScalar;
     gl_Position = uMVP * vec4(aPos, 1.0);
 }
 )";
@@ -47,19 +50,49 @@ void main() {
  * 片段着色器（改进光照模型）：
  *   - 线框模式：直接输出纯色
  *   - 光照模式：主光 + 补光 + 环境光 + 高光
+ *   - 部件颜色：用 gl_PrimitiveID 查 texture buffer 获取部件索引
  */
 static const char* fragSrc = R"(
 #version 410 core
 in vec3 vWorldPos;
 in vec3 vNormal;
 in vec3 vColor;
+in float vScalar;
 
 uniform vec3 uLightDir;
 uniform vec3 uViewPos;
 uniform vec3 uColor;
 uniform bool uWireframe;
 uniform bool uUseVertexColor;
+uniform bool uContourMode;
+uniform float uScalarMin;
+uniform float uScalarMax;
+uniform int uNumBands;
+uniform samplerBuffer uTriPartMap;
 out vec4 outColor;
+
+// 部件调色板（与 C++ 端 kPartPalette 一致）
+const vec3 kPalette[8] = vec3[8](
+    vec3(0.61, 0.86, 0.63),
+    vec3(0.54, 0.71, 0.98),
+    vec3(0.98, 0.70, 0.53),
+    vec3(0.82, 0.62, 0.98),
+    vec3(0.58, 0.89, 0.83),
+    vec3(0.98, 0.89, 0.69),
+    vec3(0.94, 0.56, 0.66),
+    vec3(0.71, 0.71, 0.98)
+);
+
+vec3 jetColor(float t) {
+    t = clamp(t, 0.0, 1.0);
+    float r, g, b;
+    if (t < 0.125)      { r = 0.0; g = 0.0; b = 0.5 + t/0.125*0.5; }
+    else if (t < 0.375) { r = 0.0; g = (t-0.125)/0.25; b = 1.0; }
+    else if (t < 0.625) { r = (t-0.375)/0.25; g = 1.0; b = 1.0-(t-0.375)/0.25; }
+    else if (t < 0.875) { r = 1.0; g = 1.0-(t-0.625)/0.25; b = 0.0; }
+    else                 { r = 1.0-(t-0.875)/0.125*0.5; g = 0.0; b = 0.0; }
+    return vec3(r, g, b);
+}
 
 void main() {
     vec3 surfaceColor = uUseVertexColor ? vColor : uColor;
@@ -67,6 +100,22 @@ void main() {
     if (uWireframe) {
         outColor = vec4(surfaceColor, 1.0);
         return;
+    }
+
+    if (uContourMode) {
+        // 云图模式：标量值量化 + Jet colormap
+        float range = uScalarMax - uScalarMin;
+        float t = (range > 1e-10) ? clamp((vScalar - uScalarMin) / range, 0.0, 1.0) : 0.5;
+        int band = int(t * float(uNumBands));
+        if (band >= uNumBands) band = uNumBands - 1;
+        float qt = (float(band) + 0.5) / float(uNumBands);
+        surfaceColor = jetColor(qt);
+    } else if (uUseVertexColor) {
+        // 部件颜色模式：用 gl_PrimitiveID 查 triToPart texture buffer
+        int partIdx = int(texelFetch(uTriPartMap, gl_PrimitiveID).r);
+        int idx = partIdx % 8;
+        if (idx < 0) idx += 8;
+        surfaceColor = kPalette[idx];
     }
 
     vec3 N = normalize(vNormal);
@@ -83,10 +132,24 @@ void main() {
     // Blinn-Phong 高光（主光源）
     vec3 V = normalize(uViewPos - vWorldPos);
     vec3 H = normalize(L1 + V);
-    float spec = pow(max(dot(N, H), 0.0), 32.0) * 0.25;
 
-    float ambient  = 0.65;
-    float diffuse  = diff1 * 0.35 + diff2 * 0.20;
+    float ambient, kDiff1, kDiff2, kSpec;
+    if (uContourMode) {
+        // 云图模式：高环境光保护色谱颜色，无高光
+        ambient = 0.55;
+        kDiff1  = 0.35;
+        kDiff2  = 0.10;
+        kSpec   = 0.0;
+    } else {
+        // 几何模式：与原始光照参数一致
+        ambient = 0.65;
+        kDiff1  = 0.35;
+        kDiff2  = 0.20;
+        kSpec   = 0.25;
+    }
+
+    float spec = pow(max(dot(N, H), 0.0), 32.0) * kSpec;
+    float diffuse = diff1 * kDiff1 + diff2 * kDiff2;
     float sideFactor = gl_FrontFacing ? 1.0 : 0.8;
 
     vec3 color = surfaceColor * (ambient + diffuse) * sideFactor + vec3(spec * sideFactor);
@@ -193,6 +256,44 @@ GLWidget::GLWidget(QWidget* parent) : QOpenGLWidget(parent) {
     setFocusPolicy(Qt::StrongFocus);
 }
 
+void GLWidget::setVertexColors(const std::vector<float>& colors) {
+    useVertexColor_ = true;
+    // 直接上传颜色到 colorVbo_，不修改主 VBO
+    vao_.bind();
+    colorVbo_.bind();
+    colorVbo_.allocate(colors.data(), static_cast<int>(colors.size() * sizeof(float)));
+    glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), nullptr);
+    glEnableVertexAttribArray(2);
+    vao_.release();
+    update();
+}
+
+void GLWidget::setVertexScalars(const std::vector<float>& scalars, float minVal, float maxVal, int numBands) {
+    useVertexColor_ = true;
+    scalarMin_ = minVal;
+    scalarMax_ = maxVal;
+    numBands_ = numBands;
+    vao_.bind();
+    scalarVbo_.bind();
+    scalarVbo_.allocate(scalars.data(), static_cast<int>(scalars.size() * sizeof(float)));
+    glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, sizeof(float), nullptr);
+    glEnableVertexAttribArray(3);
+    // 恢复 colorVbo_ 的 attribute 2 绑定（防止 scalarVbo_ 的 bind 污染）
+    colorVbo_.bind();
+    glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), nullptr);
+    glEnableVertexAttribArray(2);
+    vao_.release();
+    update();
+}
+
+void GLWidget::setUseVertexColor(bool use) {
+    useVertexColor_ = use;
+    if (!use) {
+        // 退出云图模式：重新把部件索引写入 scalarVbo_
+        needsColorUpload_ = true;
+    }
+}
+
 void GLWidget::setMesh(const Mesh& mesh) {
     mesh_ = mesh;
     allTriIndices_ = mesh.indices;
@@ -266,6 +367,11 @@ void GLWidget::initializeGL() {
     ibo_ = new QOpenGLBuffer(QOpenGLBuffer::IndexBuffer);
     ibo_->create();
     colorVbo_.create();
+    scalarVbo_.create();
+
+    // ── 创建 triToPart texture buffer ──
+    glGenBuffers(1, &triPartTbo_);
+    glGenTextures(1, &triPartTex_);
 
     // ── 拾取着色器 ──
     pickShader_ = new QOpenGLShaderProgram(this);
@@ -441,8 +547,8 @@ void GLWidget::initializeGL() {
     // 上传初始网格数据到 GPU
     uploadMesh();
 
-    // 临时：默认显示色标，方便验证效果
-    colorBarVisible_ = true;
+    // 初始状态不显示色标（加载结果并应用后才显示）
+    colorBarVisible_ = false;
 
     // 通知外部 GL 已初始化（MonitorPanel 会在此时读取硬件信息）
     emit glInitialized();
@@ -457,11 +563,12 @@ void GLWidget::paintGL() {
     // 如果网格数据有更新，重新上传到 GPU
     if (needsUpload_) uploadMesh();
 
-    // 如果部件可见性有变化，重建并重新上传 IBO
+    // 如果部件可见性有变化，重建并重新上传 IBO 及 triPart texture buffer
     if (partVisibilityDirty_ && !allTriIndices_.empty()) {
         partVisibilityDirty_ = false;
         std::vector<unsigned int> filtered;
         filtered.reserve(allTriIndices_.size());
+        std::vector<float> filteredTriPart;   // 与 filtered 同步的部件索引
         int triCount = static_cast<int>(allTriIndices_.size() / 3);
         for (int t = 0; t < triCount; ++t) {
             int part = (t < static_cast<int>(triToPart_.size())) ? triToPart_[t] : -1;
@@ -473,6 +580,7 @@ void GLWidget::paintGL() {
             filtered.push_back(allTriIndices_[t * 3]);
             filtered.push_back(allTriIndices_[t * 3 + 1]);
             filtered.push_back(allTriIndices_[t * 3 + 2]);
+            filteredTriPart.push_back(static_cast<float>(part));
         }
         activeIndexCount_ = static_cast<int>(filtered.size());
         vao_.bind();
@@ -480,6 +588,17 @@ void GLWidget::paintGL() {
         ibo_->allocate(filtered.data(),
                        static_cast<int>(filtered.size() * sizeof(unsigned int)));
         vao_.release();
+
+        // 同步更新 triToPart texture buffer，使 gl_PrimitiveID 与部件索引对齐
+        glBindBuffer(GL_TEXTURE_BUFFER, triPartTbo_);
+        glBufferData(GL_TEXTURE_BUFFER,
+                     static_cast<int>(filteredTriPart.size() * sizeof(float)),
+                     filteredTriPart.data(), GL_STATIC_DRAW);
+        glBindTexture(GL_TEXTURE_BUFFER, triPartTex_);
+        auto glTexBufferFn = reinterpret_cast<void(*)(GLenum, GLenum, GLuint)>(
+            context()->getProcAddress("glTexBuffer"));
+        if (glTexBufferFn) glTexBufferFn(GL_TEXTURE_BUFFER, GL_R32F, triPartTbo_);
+        glBindBuffer(GL_TEXTURE_BUFFER, 0);
     }
 
     if (needsColorUpload_) uploadColors();
@@ -528,6 +647,15 @@ void GLWidget::paintGL() {
     shader_->setUniformValue("uLightDir", QVector3D(-0.4f, -0.7f, -0.5f));
     glm::vec3 eyePos = cam_.eye();
     shader_->setUniformValue("uViewPos", QVector3D(eyePos.x, eyePos.y, eyePos.z));
+    shader_->setUniformValue("uContourMode", useVertexColor_ && colorBarVisible_);
+    shader_->setUniformValue("uScalarMin", scalarMin_);
+    shader_->setUniformValue("uScalarMax", scalarMax_);
+    shader_->setUniformValue("uNumBands", numBands_);
+
+    // 绑定 triToPart texture buffer 到纹理单元 0
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_BUFFER, triPartTex_);
+    shader_->setUniformValue("uTriPartMap", 0);
 
     // ── 绘制实体面 ──
     vao_.bind();
@@ -536,7 +664,7 @@ void GLWidget::paintGL() {
     if (count > 0) {
         shader_->setUniformValue("uColor", QVector3D(color_.x, color_.y, color_.z));
         shader_->setUniformValue("uWireframe", false);
-        shader_->setUniformValue("uUseVertexColor", !partColors_.empty());
+        shader_->setUniformValue("uUseVertexColor", useVertexColor_ || !partColors_.empty());
         glEnable(GL_POLYGON_OFFSET_FILL);
         glPolygonOffset(1.0f, 1.0f);
         glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
@@ -650,14 +778,19 @@ void GLWidget::paintGL() {
 
     shader_->release();
 
-    // ── 绘制坐标轴指示器 ──
+    // ── 绘制坐标轴指示器（GL 部分，不含 QPainter 标签） ──
     drawAxesIndicator();
 
-    // ── 绘制色标 ──
-    if (colorBarVisible_) {
+    // ── 统一 QPainter 阶段：轴标签 + 色标 ──
+    // 在同一个 QPainter 生命周期内绘制所有 2D 叠加内容，
+    // 避免多次创建/销毁 QPainter 导致 GL 状态污染（拾取后色标消失的根因）。
+    {
         QPainter painter(this);
         painter.setRenderHint(QPainter::Antialiasing);
-        drawColorBar(painter);
+        drawAxesLabels(painter);
+        if (colorBarVisible_) {
+            drawColorBar(painter);
+        }
         painter.end();
     }
 
@@ -1370,16 +1503,20 @@ void GLWidget::drawAxesIndicator() {
     // 恢复主视口
     glViewport(0, 0, width() * dpr, height() * dpr);
 
-    // ── QPainter 绘制轴标签 ──
+    // 保存投影参数，供 drawAxesLabels() 使用
+    axesMVP_ = axesMVP;
+}
+
+void GLWidget::drawAxesLabels(QPainter& painter) {
+    const int axesSize = 120;
+    const int margin = 8;
+
     auto project = [&](glm::vec3 pt) -> QPointF {
-        glm::vec4 clip = axesMVP * glm::vec4(pt, 1.0f);
+        glm::vec4 clip = axesMVP_ * glm::vec4(pt, 1.0f);
         float sx = margin + (clip.x / clip.w * 0.5f + 0.5f) * axesSize;
         float sy = height() - margin - (clip.y / clip.w * 0.5f + 0.5f) * axesSize;
         return QPointF(sx, sy);
     };
-
-    QPainter painter(this);
-    painter.setRenderHint(QPainter::Antialiasing);
 
     struct AxisLabel { glm::vec3 dir; QString name; QColor color; };
     AxisLabel labels[] = {
@@ -1399,8 +1536,6 @@ void GLWidget::drawAxesIndicator() {
         painter.drawText(QRectF(pos.x() - 12, pos.y() - 12, 24, 24),
                          Qt::AlignCenter, l.name);
     }
-
-    painter.end();
 }
 
 void GLWidget::drawColorBar(QPainter& painter) {
@@ -1417,7 +1552,7 @@ void GLWidget::drawColorBar(QPainter& painter) {
     //
     // ════════════════════════════════════════════════════════════
 
-    const int segCount = 10;
+    const int segCount = 9;
     const int barW = 20;              // 色块宽度
     const int segH = 28;             // 每段高度
     const int barH = segCount * segH;
@@ -1463,14 +1598,16 @@ void GLWidget::drawColorBar(QPainter& painter) {
     }
 
     // ── 段界横线 + 数值标签（白色） ──
+    // HyperView 风格：9 个色块，10 条刻度线，10 个标签（均匀从 max 到 min）
     int labelX = barX + barW + barLabelGap;
 
+    painter.setPen(Qt::white);
     for (int i = 0; i <= segCount; ++i) {
-        float t = i / static_cast<float>(segCount);
+        float t = 1.0f - i / static_cast<float>(segCount);
         float val = colorBarMin_ + (colorBarMax_ - colorBarMin_) * t;
-        int y = barY + barH - static_cast<int>(t * barH);
+        int y = barY + i * segH;
 
-        // 段界横线（黑色，嵌入色块内）
+        // 段界横线（黑色）
         painter.setPen(QPen(QColor(0, 0, 0), 1));
         painter.drawLine(barX, y, barX + barW, y);
 
@@ -1534,6 +1671,8 @@ void GLWidget::setTriangleToPartMap(const std::vector<int>& map) {
         }
     }
 
+    // 上传 triToPart 到 texture buffer（供片段着色器用 gl_PrimitiveID 查表）
+    triPartDirty_ = true;
     needsColorUpload_ = true;
     update();
 }
@@ -1581,34 +1720,27 @@ void GLWidget::highlightParts(const std::vector<int>& partIndices) {
 
 void GLWidget::uploadColors() {
     needsColorUpload_ = false;
-    int vertCount = static_cast<int>(mesh_.vertices.size() / 6);
-    if (vertCount == 0 || triToPart_.empty()) return;
 
-    // 通过 allTriIndices_ 建立 顶点 → 部件 反向映射
-    std::vector<int> vertexPart(vertCount, -1);
-    int triCount = static_cast<int>(allTriIndices_.size() / 3);
-    for (int t = 0; t < triCount && t < static_cast<int>(triToPart_.size()); ++t) {
-        int part = triToPart_[t];
-        for (int k = 0; k < 3; ++k) {
-            unsigned int v = allTriIndices_[t * 3 + k];
-            if (static_cast<int>(v) < vertCount)
-                vertexPart[v] = part;
-        }
+    // 云图模式下颜色由片段着色器从标量值生成，不需要更新
+    if (useVertexColor_) return;
+
+    if (triToPart_.empty()) return;
+
+    // 上传 triToPart 到 texture buffer（供片段着色器用 gl_PrimitiveID 查表）
+    if (triPartDirty_) {
+        triPartDirty_ = false;
+        std::vector<float> triPartData(triToPart_.size());
+        for (size_t i = 0; i < triToPart_.size(); ++i)
+            triPartData[i] = static_cast<float>(triToPart_[i]);
+        glBindBuffer(GL_TEXTURE_BUFFER, triPartTbo_);
+        glBufferData(GL_TEXTURE_BUFFER, static_cast<int>(triPartData.size() * sizeof(float)),
+                     triPartData.data(), GL_STATIC_DRAW);
+        glBindTexture(GL_TEXTURE_BUFFER, triPartTex_);
+        auto glTexBufferFn = reinterpret_cast<void(*)(GLenum, GLenum, GLuint)>(
+            context()->getProcAddress("glTexBuffer"));
+        if (glTexBufferFn) glTexBufferFn(GL_TEXTURE_BUFFER, GL_R32F, triPartTbo_);
+        glBindBuffer(GL_TEXTURE_BUFFER, 0);
     }
-
-    std::vector<float> colors(vertCount * 3);
-    for (int v = 0; v < vertCount; ++v) {
-        int part = vertexPart[v];
-        glm::vec3 c = (part >= 0 && part < static_cast<int>(partColors_.size()))
-                      ? partColors_[part] : color_;
-        colors[v * 3 + 0] = c.x;
-        colors[v * 3 + 1] = c.y;
-        colors[v * 3 + 2] = c.z;
-    }
-
-    colorVbo_.bind();
-    colorVbo_.allocate(colors.data(), static_cast<int>(colors.size() * sizeof(float)));
-    colorVbo_.release();
 }
 
 void GLWidget::rebuildEdgeIbo() {
@@ -1644,9 +1776,9 @@ void GLWidget::rebuildEdgeIbo() {
 void GLWidget::uploadMesh() {
     needsUpload_ = false;
 
-    vao_.bind();  // 绑定 VAO，后续的 VBO/IBO 绑定和属性配置都会记录在 VAO 中
+    vao_.bind();
 
-    // 上传顶点数据到 VBO
+    // 上传顶点数据到 VBO — 始终 6-float 步长 [pos(3) + normal(3)]
     vbo_.bind();
     vbo_.allocate(mesh_.vertices.data(),
                   static_cast<int>(mesh_.vertices.size() * sizeof(float)));
@@ -1657,17 +1789,14 @@ void GLWidget::uploadMesh() {
     ibo_->allocate(mesh_.indices.data(),
                    static_cast<int>(mesh_.indices.size() * sizeof(unsigned int)));
 
-    // 配置顶点属性指针
-    // 属性 0：位置 (location=0)，3 个 float，步长 6*float，偏移 0
+    // 始终 6-float 步长
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), nullptr);
     glEnableVertexAttribArray(0);
-
-    // 属性 1：法线 (location=1)，3 个 float，步长 6*float，偏移 3*float
     glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float),
                           reinterpret_cast<void*>(3 * sizeof(float)));
     glEnableVertexAttribArray(1);
 
-    // ── 颜色缓冲（per-vertex 部件颜色，默认为 color_） ──
+    // ── 颜色缓冲（per-vertex，默认为 color_） ──
     {
         int vertCount = static_cast<int>(mesh_.vertices.size() / 6);
         std::vector<float> defaultColors(vertCount * 3);
@@ -1678,12 +1807,21 @@ void GLWidget::uploadMesh() {
         }
         colorVbo_.bind();
         colorVbo_.allocate(defaultColors.data(), static_cast<int>(defaultColors.size() * sizeof(float)));
-        // 属性 2：部件颜色 (location=2)，3 个 float，步长 3*float，偏移 0
         glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), nullptr);
         glEnableVertexAttribArray(2);
     }
 
-    vao_.release();  // 解绑 VAO
+    // ── 标量值缓冲（per-vertex，默认全 0） ──
+    {
+        int vertCount = static_cast<int>(mesh_.vertices.size() / 6);
+        std::vector<float> defaultScalars(vertCount, 0.0f);
+        scalarVbo_.bind();
+        scalarVbo_.allocate(defaultScalars.data(), static_cast<int>(defaultScalars.size() * sizeof(float)));
+        glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, sizeof(float), nullptr);
+        glEnableVertexAttribArray(3);
+    }
+
+    vao_.release();
 
     // ── 上传边线数据（如果有） ──
     edgeIndexCount_ = static_cast<int>(mesh_.edgeIndices.size());

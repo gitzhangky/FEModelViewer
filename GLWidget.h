@@ -43,6 +43,9 @@ public:
     /** @brief 设置要渲染的网格数据 */
     void setMesh(const Mesh& mesh);
 
+    /** @brief 直接设置 per-vertex 颜色到 colorVbo_（用于云图） */
+    void setVertexColors(const std::vector<float>& colors);
+
     /** @brief 设置物体颜色 */
     void setObjectColor(const glm::vec3& c);
 
@@ -65,6 +68,12 @@ public:
 
     /** @brief 设置拾取模式 */
     void setPickMode(PickMode mode) { pickMode_ = mode; }
+
+    /** @brief 设置是否使用顶点颜色（云图模式） */
+    void setUseVertexColor(bool use);
+
+    /** @brief 上传 per-vertex 标量值到 GPU，由片段着色器做量化 + 颜色映射 */
+    void setVertexScalars(const std::vector<float>& scalars, float minVal, float maxVal, int numBands);
 
     /** @brief 设置三角形 → 部件索引映射表 */
     void setTriangleToPartMap(const std::vector<int>& map);
@@ -118,6 +127,7 @@ protected:
 private:
     void uploadMesh();
     void drawAxesIndicator();
+    void drawAxesLabels(QPainter& painter);  // 坐标轴标签（需外部提供 QPainter）
     void drawColorBar(QPainter& painter);
     void uploadColors();      // 将部件颜色上传到 colorVbo_
     void rebuildEdgeIbo();    // 根据部件可见性重建边线 IBO
@@ -180,6 +190,17 @@ private:
     QOpenGLBuffer colorVbo_{QOpenGLBuffer::VertexBuffer};
     bool needsColorUpload_ = false;          // 需要上传颜色数据到 GPU
 
+    // ── 标量值缓冲（per-vertex，片段着色器量化） ──
+    QOpenGLBuffer scalarVbo_{QOpenGLBuffer::VertexBuffer};
+    float scalarMin_ = 0.0f;
+    float scalarMax_ = 1.0f;
+    int numBands_ = 10;
+
+    // ── 部件索引 texture buffer（per-triangle，用 gl_PrimitiveID 查表） ──
+    GLuint triPartTbo_ = 0;       // texture buffer object
+    GLuint triPartTex_ = 0;       // texture 对象
+    bool triPartDirty_ = false;   // 需要重新上传
+
     // ── 边线可见性 ──
     std::vector<int> edgeToPart_;            // 边线 → 部件索引
     std::vector<unsigned int> allEdgeIndices_;  // 完整边线索引（不过滤）
@@ -221,6 +242,8 @@ private:
     float colorBarMin_ = 0.0f;
     float colorBarMax_ = 1.0f;
     QString colorBarTitle_ = "Result";
+    bool useVertexColor_ = false;       // 是否使用云图颜色（通过 colorVbo_）
+    glm::mat4 axesMVP_{1.0f};          // drawAxesIndicator() 计算后传给 drawAxesLabels()
 
     // ── 交互状态 ──
     QPoint lastPos_;

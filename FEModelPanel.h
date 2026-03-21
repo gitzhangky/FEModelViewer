@@ -20,6 +20,7 @@
 #include "FERenderData.h"
 #include "FEPickResult.h"
 #include "FEGroup.h"
+#include "FEResultData.h"
 
 class FEModelPanel : public QWidget {
     Q_OBJECT
@@ -36,6 +37,15 @@ public:
     /** @brief 清空当前模型 */
     void clearModel();
 
+    /** @brief 从 OP2 文件解析结果数据（位移/应力），独立于几何解析 */
+    bool parseNastranOp2Results(const QString& filePath, FEResultData& results);
+
+    /** @brief 获取当前模型 */
+    const FEModel& currentModel() const { return currentModel_; }
+
+    /** @brief 获取当前渲染数据 */
+    const FERenderData& currentRenderData() const { return currentRenderData_; }
+
 signals:
     void meshGenerated(const Mesh& mesh, const glm::vec3& center, float size,
                        const std::vector<int>& triToElem,
@@ -49,6 +59,9 @@ signals:
 
     /** @brief 加载完成 (成功/失败, 消息) */
     void loadFinished(bool success, const QString& message);
+
+    /** @brief 结果数据加载完成 */
+    void resultsLoaded(const FEResultData& results);
 
 public slots:
     void updateSelectionInfo(PickMode mode, int count, const std::vector<int>& ids);

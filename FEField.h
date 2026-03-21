@@ -110,6 +110,7 @@ enum class ColorMapType {
  */
 struct ColorMap {
     ColorMapType type = ColorMapType::Rainbow;
+    int discreteLevels = 10;  // 分段色阶数（0=平滑渐变，>0=分段色带）
 
     /**
      * @brief 将归一化值 [0,1] 映射为 RGB 颜色

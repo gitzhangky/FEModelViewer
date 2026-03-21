@@ -13,6 +13,7 @@
 
 #include "FEMeshConverter.h"
 #include <algorithm>
+#include <cmath>
 #include <map>
 #include <set>
 #include <unordered_map>
@@ -117,45 +118,123 @@ FERenderData FEMeshConverter::toRenderData(const FEModel& model, const std::vect
     }
     if (progress) progress(40);
 
-    // ── 第二遍：三角化去重后的面（只出现 1 次的面 = 外表面/唯一壳面） ──（占 40-70%）
-    int totalFaces = static_cast<int>(faceMap.size());
-    int faceProcessed = 0;
-    int faceReportInterval = std::max(1, totalFaces / 30);
+    // ── 第二遍：共享顶点 + 面积加权平滑法线 ──（占 40-70%）
+
+    // Step A: 收集需要渲染的面，建立共享顶点表
+    struct RenderFace {
+        std::vector<int> faceNodes;  // 面的节点 ID（原始顺序）
+        int elemId;
+        int faceIndex;
+    };
+    std::vector<RenderFace> renderFaces;
+    renderFaces.reserve(faceMap.size());
+
     for (const auto& [key, infos] : faceMap) {
         if (infos.size() == 1) {
-            // 唯一面：外表面（3D）或不重复的壳面（2D）
             const FaceInfo& info = infos[0];
-            if (info.is2D) {
-                // 通过 tessellate2D 处理 2D 单元（保持原有逻辑）
-                auto elemIt = model.elements.find(info.elemId);
-                if (elemIt != model.elements.end())
-                    tessellate2D(result, elemIt->second, model);
-            } else {
-                tessellateFace(result, info.faceNodes, info.elemId, info.faceIndex, model);
-            }
+            renderFaces.push_back({info.faceNodes, info.elemId, info.faceIndex});
         } else if (infos.size() >= 2) {
-            // 重复面：只保留第一个（避免 Z-fighting）
-            // 对于 3D 内部共享面（两个实体单元共享）完全跳过
-            // 对于 2D 重复壳面（重合壳单元）只保留一个
             bool anyIs2D = false;
             for (const auto& info : infos) {
                 if (info.is2D) { anyIs2D = true; break; }
             }
             if (anyIs2D) {
-                // 有 2D 壳面参与：保留第一个 2D 面
                 for (const auto& info : infos) {
                     if (info.is2D) {
-                        auto elemIt = model.elements.find(info.elemId);
-                        if (elemIt != model.elements.end())
-                            tessellate2D(result, elemIt->second, model);
+                        renderFaces.push_back({info.faceNodes, info.elemId, info.faceIndex});
                         break;
                     }
                 }
             }
-            // 纯 3D 内部面：跳过（已在外表面提取中处理）
         }
+    }
+
+    // 收集所有需要渲染的节点，建立 nodeToVertex 映射
+    std::unordered_map<int, unsigned int> nodeToVertex;
+    for (const auto& rf : renderFaces) {
+        for (int nid : rf.faceNodes) {
+            if (nodeToVertex.find(nid) == nodeToVertex.end()) {
+                unsigned int vi = static_cast<unsigned int>(nodeToVertex.size());
+                nodeToVertex[nid] = vi;
+            }
+        }
+    }
+
+    // 创建顶点数据：每个节点一个渲染顶点，pos(3) + normal(3)，法线初始化为零
+    int vertCount = static_cast<int>(nodeToVertex.size());
+    result.mesh.vertices.resize(vertCount * 6, 0.0f);
+    result.vertexToNode.resize(vertCount, -1);
+
+    // 填充位置和 vertexToNode
+    for (const auto& [nid, vi] : nodeToVertex) {
+        const glm::vec3* p = model.nodeCoords(nid);
+        if (p) {
+            result.mesh.vertices[vi * 6 + 0] = p->x;
+            result.mesh.vertices[vi * 6 + 1] = p->y;
+            result.mesh.vertices[vi * 6 + 2] = p->z;
+        }
+        result.vertexToNode[vi] = nid;
+    }
+
+    if (progress) progress(50);
+
+    // Step B: 三角化 + 累加面积加权法线
+    int totalRenderFaces = static_cast<int>(renderFaces.size());
+    int faceProcessed = 0;
+    int faceReportInterval = std::max(1, totalRenderFaces / 20);
+
+    for (const auto& rf : renderFaces) {
+        int n = static_cast<int>(rf.faceNodes.size());
+        if (n < 3) continue;
+
+        // Fan 三角化：以第 0 个节点为扇心
+        unsigned int vi0 = nodeToVertex[rf.faceNodes[0]];
+        for (int i = 1; i < n - 1; ++i) {
+            unsigned int vi1 = nodeToVertex[rf.faceNodes[i]];
+            unsigned int vi2 = nodeToVertex[rf.faceNodes[i + 1]];
+
+            // 三角形索引（共享顶点）
+            result.mesh.indices.push_back(vi0);
+            result.mesh.indices.push_back(vi1);
+            result.mesh.indices.push_back(vi2);
+
+            // 映射表
+            result.triangleToElement.push_back(rf.elemId);
+            result.triangleToFace.push_back(rf.faceIndex);
+
+            // 面积加权法线（不归一化的叉积 = 面积加权）
+            glm::vec3 p0(result.mesh.vertices[vi0 * 6], result.mesh.vertices[vi0 * 6 + 1], result.mesh.vertices[vi0 * 6 + 2]);
+            glm::vec3 p1(result.mesh.vertices[vi1 * 6], result.mesh.vertices[vi1 * 6 + 1], result.mesh.vertices[vi1 * 6 + 2]);
+            glm::vec3 p2(result.mesh.vertices[vi2 * 6], result.mesh.vertices[vi2 * 6 + 1], result.mesh.vertices[vi2 * 6 + 2]);
+            glm::vec3 faceNormal = glm::cross(p1 - p0, p2 - p0);  // 不归一化 = 面积加权
+
+            // 累加到三个顶点的法线上
+            for (unsigned int vi : {vi0, vi1, vi2}) {
+                result.mesh.vertices[vi * 6 + 3] += faceNormal.x;
+                result.mesh.vertices[vi * 6 + 4] += faceNormal.y;
+                result.mesh.vertices[vi * 6 + 5] += faceNormal.z;
+            }
+        }
+
         if (progress && (++faceProcessed % faceReportInterval == 0)) {
-            progress(40 + faceProcessed * 30 / totalFaces);  // 40-70%
+            progress(50 + faceProcessed * 15 / totalRenderFaces);  // 50-65%
+        }
+    }
+
+    // Step C: 归一化所有法线
+    for (int v = 0; v < vertCount; ++v) {
+        float nx = result.mesh.vertices[v * 6 + 3];
+        float ny = result.mesh.vertices[v * 6 + 4];
+        float nz = result.mesh.vertices[v * 6 + 5];
+        float len = std::sqrt(nx * nx + ny * ny + nz * nz);
+        if (len > 1e-8f) {
+            result.mesh.vertices[v * 6 + 3] = nx / len;
+            result.mesh.vertices[v * 6 + 4] = ny / len;
+            result.mesh.vertices[v * 6 + 5] = nz / len;
+        } else {
+            result.mesh.vertices[v * 6 + 3] = 0.0f;
+            result.mesh.vertices[v * 6 + 4] = 0.0f;
+            result.mesh.vertices[v * 6 + 5] = 1.0f;
         }
     }
     if (progress) progress(70);
@@ -323,30 +402,57 @@ FERenderData FEMeshConverter::toColoredRenderData(const FEModel& model,
 
     // 重建顶点数据：从 [pos(3) + normal(3)] 扩展为 [pos(3) + normal(3) + color(3)]
     int vertCount = result.vertexCount();
+    int triCount = result.triangleCount();
     std::vector<float> coloredVertices;
     coloredVertices.reserve(vertCount * 9);  // 9 floats per vertex
 
-    for (int i = 0; i < vertCount; ++i) {
-        // 复制原有的 pos(3) + normal(3)
-        int base = i * 6;
-        for (int j = 0; j < 6; ++j) {
-            coloredVertices.push_back(result.mesh.vertices[base + j]);
-        }
-
-        // 查找该渲染顶点对应的 FEM 节点，获取标量值并映射颜色
-        int nodeId = result.vertexToNode[i];
-        glm::vec3 color(0.5f);  // 默认灰色（如果节点没有数据）
-
-        if (nodeId >= 0) {
-            auto valIt = field.values.find(nodeId);
-            if (valIt != field.values.end()) {
-                color = colorMap.map(valIt->second, minVal, maxVal);
+    if (field.location == FieldLocation::Element) {
+        // ── 单元场：通过 triangleToElement 映射，三角形三顶点同色 ──
+        // 先为每个顶点找到其所属三角形的单元 ID
+        std::vector<int> vertexElemId(vertCount, -1);
+        for (int t = 0; t < triCount; ++t) {
+            int elemId = result.triangleToElement[t];
+            for (int k = 0; k < 3; ++k) {
+                unsigned int vi = result.mesh.indices[t * 3 + k];
+                if (static_cast<int>(vi) < vertCount)
+                    vertexElemId[vi] = elemId;
             }
         }
 
-        coloredVertices.push_back(color.r);
-        coloredVertices.push_back(color.g);
-        coloredVertices.push_back(color.b);
+        for (int i = 0; i < vertCount; ++i) {
+            int base = i * 6;
+            for (int j = 0; j < 6; ++j)
+                coloredVertices.push_back(result.mesh.vertices[base + j]);
+
+            int elemId = vertexElemId[i];
+            glm::vec3 color(0.5f);
+            if (elemId >= 0) {
+                auto valIt = field.values.find(elemId);
+                if (valIt != field.values.end())
+                    color = colorMap.map(valIt->second, minVal, maxVal);
+            }
+            coloredVertices.push_back(color.r);
+            coloredVertices.push_back(color.g);
+            coloredVertices.push_back(color.b);
+        }
+    } else {
+        // ── 节点场：通过 vertexToNode 映射查值 ──
+        for (int i = 0; i < vertCount; ++i) {
+            int base = i * 6;
+            for (int j = 0; j < 6; ++j)
+                coloredVertices.push_back(result.mesh.vertices[base + j]);
+
+            int nodeId = result.vertexToNode[i];
+            glm::vec3 color(0.5f);
+            if (nodeId >= 0) {
+                auto valIt = field.values.find(nodeId);
+                if (valIt != field.values.end())
+                    color = colorMap.map(valIt->second, minVal, maxVal);
+            }
+            coloredVertices.push_back(color.r);
+            coloredVertices.push_back(color.g);
+            coloredVertices.push_back(color.b);
+        }
     }
 
     result.mesh.vertices = std::move(coloredVertices);

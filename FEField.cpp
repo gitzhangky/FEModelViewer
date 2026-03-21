@@ -82,6 +82,13 @@ glm::vec3 ColorMap::map(float t) const {
     // 将 t 限制在 [0, 1] 范围内
     t = std::clamp(t, 0.0f, 1.0f);
 
+    // 分段色带：将 t 量化到离散色阶（每个色阶内颜色相同）
+    if (discreteLevels > 0) {
+        int band = static_cast<int>(t * discreteLevels);
+        if (band >= discreteLevels) band = discreteLevels - 1;
+        t = (band + 0.5f) / discreteLevels;  // 用色阶中点采样颜色
+    }
+
     switch (type) {
         case ColorMapType::Rainbow: {
             // 经典彩虹色谱：蓝(0) → 青(0.25) → 绿(0.5) → 黄(0.75) → 红(1)

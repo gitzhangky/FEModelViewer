@@ -23,6 +23,7 @@ class GLWidget;
 class MonitorPanel;
 class FEModelPanel;
 class PartsPanel;
+class ResultPanel;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -46,6 +47,7 @@ private:
     MonitorPanel*  monitorPanel_  = nullptr;
     FEModelPanel*  feModelPanel_  = nullptr;
     PartsPanel*    partsPanel_    = nullptr;
+    ResultPanel*   resultPanel_   = nullptr;
 
     // 工具栏拾取模式动作组
     QActionGroup*  pickGroup_     = nullptr;
