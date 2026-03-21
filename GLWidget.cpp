@@ -85,14 +85,38 @@ void main() {
     vec3 H = normalize(L1 + V);
     float spec = pow(max(dot(N, H), 0.0), 32.0) * 0.25;
 
-    float ambient  = 0.55;
-    float diffuse  = diff1 * 0.35 + diff2 * 0.15;
+    float ambient  = 0.65;
+    float diffuse  = diff1 * 0.35 + diff2 * 0.20;
     float sideFactor = gl_FrontFacing ? 1.0 : 0.8;
 
     vec3 color = surfaceColor * (ambient + diffuse) * sideFactor + vec3(spec * sideFactor);
     // 防止过曝
     color = min(color, vec3(1.0));
     outColor = vec4(color, 1.0);
+}
+)";
+
+// ============================================================
+// 渐变背景着色器
+// ============================================================
+
+static const char* bgVertSrc = R"(
+#version 410 core
+layout (location = 0) in vec2 aPos;
+layout (location = 1) in vec3 aColor;
+out vec3 vColor;
+void main() {
+    vColor = aColor;
+    gl_Position = vec4(aPos, 0.0, 1.0);
+}
+)";
+
+static const char* bgFragSrc = R"(
+#version 410 core
+in vec3 vColor;
+out vec4 outColor;
+void main() {
+    outColor = vec4(vColor, 1.0);
 }
 )";
 
@@ -257,6 +281,36 @@ void GLWidget::initializeGL() {
     selEdgeVao_.create();
     selEdgeVbo_.create();
 
+    // ── 渐变背景着色器 + VAO/VBO（一次性创建）──
+    bgShader_ = new QOpenGLShaderProgram(this);
+    bgShader_->addShaderFromSourceCode(QOpenGLShader::Vertex, bgVertSrc);
+    bgShader_->addShaderFromSourceCode(QOpenGLShader::Fragment, bgFragSrc);
+    bgShader_->link();
+
+    bgVao_.create();
+    bgVbo_.create();
+    {
+        // 全屏四边形：pos(2) + color(3)，上深下浅
+        float bgData[] = {
+            // x,   y,    r,     g,     b
+            -1, -1,  0.68f, 0.74f, 0.82f,  // 左下（浅）
+             1, -1,  0.68f, 0.74f, 0.82f,  // 右下（浅）
+             1,  1,  0.38f, 0.45f, 0.58f,  // 右上（深）
+            -1, -1,  0.68f, 0.74f, 0.82f,  // 左下（浅）
+             1,  1,  0.38f, 0.45f, 0.58f,  // 右上（深）
+            -1,  1,  0.38f, 0.45f, 0.58f,  // 左上（深）
+        };
+        bgVao_.bind();
+        bgVbo_.bind();
+        bgVbo_.allocate(bgData, sizeof(bgData));
+        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), nullptr);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(float),
+                              reinterpret_cast<void*>(2 * sizeof(float)));
+        glEnableVertexAttribArray(1);
+        bgVao_.release();
+    }
+
     // ── 坐标轴指示器着色器 ──
     axesShader_ = new QOpenGLShaderProgram(this);
     axesShader_->addShaderFromSourceCode(QOpenGLShader::Vertex, axesVertSrc);
@@ -374,6 +428,13 @@ void GLWidget::initializeGL() {
     // 启用深度测试，确保近处物体遮挡远处物体
     glEnable(GL_DEPTH_TEST);
 
+    // 启用多重采样抗锯齿
+    glEnable(GL_MULTISAMPLE);
+
+    // 启用线段抗锯齿（边线更平滑）
+    glEnable(GL_LINE_SMOOTH);
+    glHint(GL_LINE_SMOOTH_HINT, GL_NICEST);
+
     // 启动 FPS 计时器
     fpsTimer_.start();
 
@@ -424,9 +485,15 @@ void GLWidget::paintGL() {
     if (needsColorUpload_) uploadColors();
     if (edgeVisibilityDirty_) rebuildEdgeIbo();
 
-    // 浅灰背景（参考 ABAQUS/ANSYS 风格）
-    glClearColor(0.85f, 0.85f, 0.88f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    // ── 渐变背景（专用着色器 + 预创建 VAO，无状态污染）──
+    glClear(GL_DEPTH_BUFFER_BIT);
+    glDisable(GL_DEPTH_TEST);
+    bgShader_->bind();
+    bgVao_.bind();
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+    bgVao_.release();
+    bgShader_->release();
+    glEnable(GL_DEPTH_TEST);
 
     // 无数据时只绘制坐标轴（三角面和边线都没有才算无数据）
     if (mesh_.indices.empty() && mesh_.edgeIndices.empty()) {
@@ -885,6 +952,15 @@ void GLWidget::pickAtPoint(const QPoint& pos, bool ctrlHeld) {
         std::sort(ids.begin(), ids.end());
         emit selectionChanged(emitMode, static_cast<int>(ids.size()), ids);
     }
+    // 部件模式：发射选中的部件索引列表，同步模型树
+    if (pickMode_ == PickMode::Part) {
+        std::vector<int> pickedParts;
+        for (int pi = 0; pi < static_cast<int>(partElementIds_.size()); ++pi) {
+            if (isPartFullySelected(pi))
+                pickedParts.push_back(pi);
+        }
+        emit partsPicked(pickedParts);
+    }
     doneCurrent();
     update();
 }
@@ -993,6 +1069,15 @@ void GLWidget::pickInRect(const QRect& rect) {
         }
         std::sort(ids.begin(), ids.end());
         emit selectionChanged(emitMode, static_cast<int>(ids.size()), ids);
+    }
+    // 部件模式：发射选中的部件索引列表，同步模型树
+    if (pickMode_ == PickMode::Part) {
+        std::vector<int> pickedParts;
+        for (int pi = 0; pi < static_cast<int>(partElementIds_.size()); ++pi) {
+            if (isPartFullySelected(pi))
+                pickedParts.push_back(pi);
+        }
+        emit partsPicked(pickedParts);
     }
     doneCurrent();
     update();
@@ -1319,66 +1404,80 @@ void GLWidget::drawAxesIndicator() {
 }
 
 void GLWidget::drawColorBar(QPainter& painter) {
-    const int margin = 15;
-    const int barW = 20;
-    const int barH = 180;
-    const int titleH = 22;
-    const int tickLabelW = 50;
-    const int padding = 10;
-    const int bgW = padding + barW + 6 + tickLabelW + padding;
-    const int bgH = padding + titleH + barH + padding;
+    // ════════════════════════════════════════════════════════════
+    // 仿 HyperView 颜色条样式
+    //
+    // 布局：色块在左，数值标签在右
+    //
+    //   ══╤ 1.23E+02
+    //   ──┤ 1.13E+02
+    //   ──┤ 1.03E+02
+    //   ...
+    //   ══╧ 1.23E+01
+    //
+    // ════════════════════════════════════════════════════════════
 
-    // ── 半透明深色背景 ──
-    QRectF bgRect(margin, margin, bgW, bgH);
-    painter.setPen(Qt::NoPen);
-    painter.setBrush(QColor(30, 30, 46, 180));
-    painter.drawRoundedRect(bgRect, 6, 6);
+    const int segCount = 10;
+    const int barW = 20;              // 色块宽度
+    const int segH = 28;             // 每段高度
+    const int barH = segCount * segH;
+    const int margin = 14;
+    const int barLabelGap = 8;        // 色块与标签间距
 
-    // ── 标题 ──
-    QFont titleFont = painter.font();
-    titleFont.setBold(true);
-    titleFont.setPixelSize(11);
-    painter.setFont(titleFont);
-    painter.setPen(Qt::white);
-    painter.drawText(QRectF(margin + padding, margin + padding, bgW - 2 * padding, titleH),
-                     Qt::AlignLeft | Qt::AlignVCenter, colorBarTitle_);
+    // Jet colormap 采样
+    auto jetColor = [](float t) -> QColor {
+        if (t < 0.0f) t = 0.0f;
+        if (t > 1.0f) t = 1.0f;
+        float r = 0, g = 0, b = 0;
+        if (t < 0.125f)      { r = 0;   g = 0;   b = 0.5f + t / 0.125f * 0.5f; }
+        else if (t < 0.375f) { r = 0;   g = (t - 0.125f) / 0.25f; b = 1.0f; }
+        else if (t < 0.625f) { r = (t - 0.375f) / 0.25f; g = 1.0f; b = 1.0f - (t - 0.375f) / 0.25f; }
+        else if (t < 0.875f) { r = 1.0f; g = 1.0f - (t - 0.625f) / 0.25f; b = 0; }
+        else                 { r = 1.0f - (t - 0.875f) / 0.125f * 0.5f; g = 0; b = 0; }
+        return QColor(static_cast<int>(r * 255), static_cast<int>(g * 255), static_cast<int>(b * 255));
+    };
 
-    // ── 色带（Jet colormap 渐变） ──
-    int barX = margin + padding;
-    int barY = margin + padding + titleH;
+    // 格式化函数：HyperView 风格 (X.XXXE+XX)
+    auto formatValue = [](float val) -> QString {
+        return QString::number(static_cast<double>(val), 'E', 3);
+    };
 
-    QLinearGradient grad(barX, barY + barH, barX, barY); // 底→顶
-    grad.setColorAt(0.00, QColor(0, 0, 180));     // 蓝
-    grad.setColorAt(0.25, QColor(0, 220, 255));    // 青
-    grad.setColorAt(0.50, QColor(0, 255, 0));      // 绿
-    grad.setColorAt(0.75, QColor(255, 255, 0));    // 黄
-    grad.setColorAt(1.00, QColor(255, 0, 0));      // 红
+    // 字体
+    QFont labelFont("Consolas", 0);
+    labelFont.setPixelSize(14);
+    painter.setFont(labelFont);
+    QFontMetrics fm(labelFont);
+    int labelTextH = fm.height();
 
-    painter.setPen(Qt::NoPen);
-    painter.setBrush(grad);
-    painter.drawRect(barX, barY, barW, barH);
+    // 坐标定位：色块在左上角
+    int barX = margin;
+    int barY = margin;
 
-    // ── 色带边框 ──
-    painter.setBrush(Qt::NoBrush);
-    painter.setPen(QPen(QColor(88, 91, 112), 1));
-    painter.drawRect(barX, barY, barW, barH);
+    // ── 绘制分段色块 ──
+    for (int i = 0; i < segCount; ++i) {
+        float t = (i + 0.5f) / segCount;
+        int y = barY + barH - (i + 1) * segH;
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(jetColor(t));
+        painter.drawRect(barX, y, barW, segH);
+    }
 
-    // ── 刻度标签 ──
-    QFont tickFont = painter.font();
-    tickFont.setBold(false);
-    tickFont.setPixelSize(10);
-    painter.setFont(tickFont);
-    painter.setPen(Qt::white);
+    // ── 段界横线 + 数值标签（白色） ──
+    int labelX = barX + barW + barLabelGap;
 
-    const int tickCount = 5;
-    int labelX = barX + barW + 4;
-    for (int i = 0; i < tickCount; ++i) {
-        float t = i / float(tickCount - 1);           // 0..1
+    for (int i = 0; i <= segCount; ++i) {
+        float t = i / static_cast<float>(segCount);
         float val = colorBarMin_ + (colorBarMax_ - colorBarMin_) * t;
         int y = barY + barH - static_cast<int>(t * barH);
-        painter.drawText(QRectF(labelX, y - 7, tickLabelW, 14),
-                         Qt::AlignLeft | Qt::AlignVCenter,
-                         QString::number(val, 'f', 2));
+
+        // 段界横线（黑色，嵌入色块内）
+        painter.setPen(QPen(QColor(0, 0, 0), 1));
+        painter.drawLine(barX, y, barX + barW, y);
+
+        // 白色数值标签
+        painter.setPen(Qt::white);
+        QRectF labelRect(labelX, y - labelTextH / 2, 120, labelTextH);
+        painter.drawText(labelRect, Qt::AlignLeft | Qt::AlignVCenter, formatValue(val));
     }
 }
 

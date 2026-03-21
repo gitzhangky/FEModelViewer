@@ -19,7 +19,7 @@ int main(int argc, char* argv[]) {
     fmt.setVersion(4, 1);                      // OpenGL 4.1（macOS 支持的最高核心版本）
     fmt.setProfile(QSurfaceFormat::CoreProfile); // Core Profile（不包含已废弃的固定管线功能）
     fmt.setDepthBufferSize(32);                // 32 位深度缓冲（提高薄壳模型深度精度）
-    fmt.setSamples(4);                         // 4x MSAA 多重采样抗锯齿
+    fmt.setSamples(8);                         // 8x MSAA 多重采样抗锯齿
     QSurfaceFormat::setDefaultFormat(fmt);     // 设为全局默认格式
 
     // ── 启动应用 ──

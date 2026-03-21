@@ -27,6 +27,10 @@ public:
                   const std::vector<FEPart>& parts,
                   const std::vector<glm::vec3>& partColors);
 
+public slots:
+    /** @brief 程序化选中指定部件（由 GLWidget 部件拾取触发） */
+    void selectParts(const std::vector<int>& partIndices);
+
 signals:
     /** @brief 某个部件的可见性被用户切换 */
     void partVisibilityChanged(int partIndex, bool visible);

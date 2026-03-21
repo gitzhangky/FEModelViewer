@@ -30,6 +30,9 @@ class MainWindow : public QMainWindow {
 public:
     MainWindow();
 
+protected:
+    void closeEvent(QCloseEvent* event) override;
+
 private:
     void setupToolBar();
     void setupStatusBar();

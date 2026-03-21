@@ -102,6 +102,8 @@ public slots:
 signals:
     void glInitialized();
     void selectionChanged(PickMode mode, int count, const std::vector<int>& ids);
+    /** @brief 部件拾取后发射选中的部件索引列表（用于同步模型树选中状态） */
+    void partsPicked(const std::vector<int>& partIndices);
 
 protected:
     void initializeGL() override;
@@ -144,6 +146,11 @@ private:
     QOpenGLVertexArrayObject vao_;
     QOpenGLBuffer vbo_{QOpenGLBuffer::VertexBuffer};
     QOpenGLBuffer* ibo_ = nullptr;
+
+    // ── 渐变背景 ──
+    QOpenGLShaderProgram* bgShader_ = nullptr;
+    QOpenGLVertexArrayObject bgVao_;
+    QOpenGLBuffer bgVbo_{QOpenGLBuffer::VertexBuffer};
 
     // ── 边线 ──
     QOpenGLVertexArrayObject edgeVao_;

@@ -46,6 +46,7 @@
 #include <QFileInfo>
 #include <QSettings>
 #include <QDir>
+#include <QCloseEvent>
 
 MainWindow::MainWindow() {
     setWindowTitle("FEModelViewer");
@@ -176,6 +177,10 @@ MainWindow::MainWindow() {
     connect(partsPanel_, &PartsPanel::partSelectionChanged,
             glWidget_, &GLWidget::highlightParts);
 
+    // 部件拾取 → 同步模型树选中状态
+    connect(glWidget_, &GLWidget::partsPicked,
+            partsPanel_, &PartsPanel::selectParts);
+
     monitorPanel_->bindToWidget(glWidget_);
 }
 
@@ -275,6 +280,13 @@ QWidget* MainWindow::createFilePanel() {
     connect(modelBrowseBtn, &QPushButton::clicked, this, &MainWindow::browseModelFile);
     connect(resultBrowseBtn, &QPushButton::clicked, this, &MainWindow::browseResultFile);
     connect(applyBtn, &QPushButton::clicked, this, &MainWindow::applyFiles);
+
+    // 恢复上次的文件路径
+    {
+        QSettings settings("FEModelViewer", "FEModelViewer");
+        modelPathEdit_->setText(settings.value("lastModelPath", QString()).toString());
+        resultPathEdit_->setText(settings.value("lastResultPath", QString()).toString());
+    }
 
     return panel;
 }
@@ -457,4 +469,11 @@ void MainWindow::setupStatusBar() {
         "  border-radius: 5px; }"
     );
     sb->addPermanentWidget(statusProgress_);
+}
+
+void MainWindow::closeEvent(QCloseEvent* event) {
+    QSettings settings("FEModelViewer", "FEModelViewer");
+    settings.setValue("lastModelPath", modelPathEdit_->text());
+    settings.setValue("lastResultPath", resultPathEdit_->text());
+    QMainWindow::closeEvent(event);
 }

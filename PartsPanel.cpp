@@ -10,6 +10,7 @@
 #include <QPixmap>
 #include <QPainter>
 #include <QIcon>
+#include <set>
 
 PartsPanel::PartsPanel(QWidget* parent) : QWidget(parent) {
     setMinimumWidth(140);
@@ -163,6 +164,7 @@ void PartsPanel::onItemChanged(QTreeWidgetItem* item, int /*column*/) {
 }
 
 void PartsPanel::onSelectionChanged() {
+    if (updating_) return;
     std::vector<int> selected;
     for (auto* item : tree_->selectedItems()) {
         QVariant v = item->data(0, Qt::UserRole);
@@ -170,4 +172,32 @@ void PartsPanel::onSelectionChanged() {
             selected.push_back(v.toInt());
     }
     emit partSelectionChanged(selected);
+}
+
+void PartsPanel::selectParts(const std::vector<int>& partIndices) {
+    if (!rootItem_) return;
+    updating_ = true;
+
+    // 构建快速查找集合
+    std::set<int> indexSet(partIndices.begin(), partIndices.end());
+
+    tree_->clearSelection();
+    for (int i = 0; i < rootItem_->childCount(); ++i) {
+        QTreeWidgetItem* child = rootItem_->child(i);
+        int partIndex = child->data(0, Qt::UserRole).toInt();
+        child->setSelected(indexSet.count(partIndex) > 0);
+    }
+
+    // 确保选中项可见
+    if (!partIndices.empty()) {
+        for (int i = 0; i < rootItem_->childCount(); ++i) {
+            QTreeWidgetItem* child = rootItem_->child(i);
+            if (child->isSelected()) {
+                tree_->scrollToItem(child);
+                break;
+            }
+        }
+    }
+
+    updating_ = false;
 }
