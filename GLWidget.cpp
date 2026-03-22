@@ -8,9 +8,96 @@
 #include <QMouseEvent>
 #include <QWheelEvent>
 #include <QPainter>
+#include <QFontMetrics>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include <map>
+
+// ============================================================
+// ColorBarOverlay — 独立于 GL 的色标覆盖层
+//
+// 作为 GLWidget 的子控件，使用 Qt raster 绘图引擎绘制色标。
+// 完全不涉及 OpenGL 状态，从根本上避免拾取等 GL 操作
+// 导致 QPainter(QOpenGLWidget) 绘图失败的问题。
+// ============================================================
+
+class ColorBarOverlay : public QWidget {
+public:
+    explicit ColorBarOverlay(QWidget* parent) : QWidget(parent) {
+        setAttribute(Qt::WA_TransparentForMouseEvents);
+        setAttribute(Qt::WA_NoSystemBackground);
+        setAttribute(Qt::WA_TranslucentBackground);
+        setVisible(false);
+    }
+
+    void setRange(float mn, float mx) { min_ = mn; max_ = mx; update(); }
+    void setTitle(const QString& t) { title_ = t; update(); }
+
+protected:
+    void paintEvent(QPaintEvent*) override {
+        const int segCount = 9;
+        const int barW = 20;
+        const int segH = 28;
+        const int barH = segCount * segH;
+        const int margin = 14;
+        const int barLabelGap = 8;
+
+        auto jetColor = [](float t) -> QColor {
+            if (t < 0.0f) t = 0.0f;
+            if (t > 1.0f) t = 1.0f;
+            float r = 0, g = 0, b = 0;
+            if (t < 0.125f)      { r = 0;   g = 0;   b = 0.5f + t / 0.125f * 0.5f; }
+            else if (t < 0.375f) { r = 0;   g = (t - 0.125f) / 0.25f; b = 1.0f; }
+            else if (t < 0.625f) { r = (t - 0.375f) / 0.25f; g = 1.0f; b = 1.0f - (t - 0.375f) / 0.25f; }
+            else if (t < 0.875f) { r = 1.0f; g = 1.0f - (t - 0.625f) / 0.25f; b = 0; }
+            else                 { r = 1.0f - (t - 0.875f) / 0.125f * 0.5f; g = 0; b = 0; }
+            return QColor(static_cast<int>(r * 255), static_cast<int>(g * 255), static_cast<int>(b * 255));
+        };
+
+        auto formatValue = [](float val) -> QString {
+            return QString::number(static_cast<double>(val), 'E', 3);
+        };
+
+        QFont labelFont("Consolas", 0);
+        labelFont.setPixelSize(14);
+        QFontMetrics fm(labelFont);
+        int labelTextH = fm.height();
+
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.setFont(labelFont);
+
+        // 绘制分段色块
+        for (int i = 0; i < segCount; ++i) {
+            float t = (i + 0.5f) / segCount;
+            int y = margin + barH - (i + 1) * segH;
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(jetColor(t));
+            painter.drawRect(margin, y, barW, segH);
+        }
+
+        // 段界横线 + 数值标签
+        int labelX = margin + barW + barLabelGap;
+        for (int i = 0; i <= segCount; ++i) {
+            float t = 1.0f - i / static_cast<float>(segCount);
+            float val = min_ + (max_ - min_) * t;
+            int y = margin + i * segH;
+
+            painter.setPen(QPen(QColor(0, 0, 0), 1));
+            painter.drawLine(margin, y, margin + barW, y);
+
+            painter.setPen(Qt::white);
+            QRectF labelRect(labelX, y - labelTextH / 2, 120, labelTextH);
+            painter.drawText(labelRect, Qt::AlignLeft | Qt::AlignVCenter, formatValue(val));
+        }
+
+        painter.end();
+    }
+
+private:
+    float min_ = 0.0f, max_ = 1.0f;
+    QString title_ = "Result";
+};
 
 // ============================================================
 // GLSL 着色器源码
@@ -63,6 +150,7 @@ uniform vec3 uLightDir;
 uniform vec3 uViewPos;
 uniform vec3 uColor;
 uniform bool uWireframe;
+uniform float uWireAlpha;
 uniform bool uUseVertexColor;
 uniform bool uContourMode;
 uniform float uScalarMin;
@@ -98,7 +186,7 @@ void main() {
     vec3 surfaceColor = uUseVertexColor ? vColor : uColor;
 
     if (uWireframe) {
-        outColor = vec4(surfaceColor, 1.0);
+        outColor = vec4(surfaceColor, uWireAlpha);
         return;
     }
 
@@ -254,6 +342,9 @@ static const int kPartPaletteSize = static_cast<int>(sizeof(kPartPalette) / size
 GLWidget::GLWidget(QWidget* parent) : QOpenGLWidget(parent) {
     // 设置强焦点策略，使 widget 能接收键盘事件
     setFocusPolicy(Qt::StrongFocus);
+
+    // 创建色标覆盖层（raster 绘制，不受 GL 状态影响）
+    colorBarOverlay_ = new ColorBarOverlay(this);
 }
 
 void GLWidget::setVertexColors(const std::vector<float>& colors) {
@@ -378,6 +469,9 @@ void GLWidget::initializeGL() {
     pickShader_->addShaderFromSourceCode(QOpenGLShader::Vertex, pickVertSrc);
     pickShader_->addShaderFromSourceCode(QOpenGLShader::Fragment, pickFragSrc);
     pickShader_->link();
+
+    // ── 拾取专用 VAO（避免共用 vao_ 导致顶点属性状态泄漏到 QPainter） ──
+    pickVao_.create();
 
     // ── 边线 VAO/VBO（FE 模式专用）──
     edgeVao_.create();
@@ -555,6 +649,16 @@ void GLWidget::initializeGL() {
 }
 
 void GLWidget::paintGL() {
+    // ── 处理延迟拾取请求（全部使用原始 GL 调用，不污染 Qt 状态追踪） ──
+    if (pickPointPending_) {
+        pickPointPending_ = false;
+        pickAtPoint(pendingPickPos_, pendingPickCtrl_);
+    }
+    if (pickRectPending_) {
+        pickRectPending_ = false;
+        pickInRect(pendingPickRect_);
+    }
+
     // 恢复 GL 状态（QPainter 可能在上一帧末尾修改了这些）
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LESS);
@@ -672,30 +776,57 @@ void GLWidget::paintGL() {
         glDisable(GL_POLYGON_OFFSET_FILL);
     }
 
-    // ── 绘制网格线 ──
+    // ── 绘制网格线（密度自适应透明度） ──
     shader_->setUniformValue("uWireframe", true);
     shader_->setUniformValue("uUseVertexColor", false);
 
+    // 计算屏幕空间边密度，密集时自动降低透明度
+    float wireAlpha = 1.0f;
+    int numTri = activeIndexCount_ / 3;
+    if (numTri > 0 && count > 0) {
+        // 估算模型大小（fitToModel 中 maxDist = size * 10）
+        float modelSize = cam_.maxDist * 0.1f;
+        // 估算平均边长 ≈ 模型直径 / sqrt(三角面数)
+        float avgEdgeLen = modelSize * 2.0f / std::sqrt(static_cast<float>(numTri));
+        // 投影到屏幕像素
+        float fovFactor = height() / (2.0f * std::tan(glm::radians(22.5f)));
+        float screenEdgePx = avgEdgeLen / cam_.distance * fovFactor;
+        // 平滑过渡：< 3px 全透明，> 10px 全不透明
+        wireAlpha = glm::clamp((screenEdgePx - 3.0f) / 7.0f, 0.0f, 1.0f);
+    }
+
     if (activeEdgeIndexCount_ > 0) {
-        // 纯 1D 模型用粗线显示，混合模型用细线
         float lineW = (count == 0) ? 3.0f : 1.0f;
+        float alpha = (count == 0) ? 1.0f : wireAlpha;  // 纯 1D 模型不淡化
         shader_->setUniformValue("uColor", (count == 0)
-            ? QVector3D(color_.x, color_.y, color_.z)   // 1D 模型用主色
-            : QVector3D(0.2f, 0.2f, 0.22f));            // 混合模型用深色线框
+            ? QVector3D(color_.x, color_.y, color_.z)
+            : QVector3D(0.2f, 0.2f, 0.22f));
+        shader_->setUniformValue("uWireAlpha", alpha);
         glLineWidth(lineW);
+        if (alpha < 1.0f) {
+            glEnable(GL_BLEND);
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        }
         vao_.release();
         edgeVao_.bind();
         glDrawElements(GL_LINES, activeEdgeIndexCount_, GL_UNSIGNED_INT, nullptr);
         edgeVao_.release();
         glLineWidth(1.0f);
+        if (alpha < 1.0f) glDisable(GL_BLEND);
     } else if (count > 0) {
         shader_->setUniformValue("uColor", QVector3D(0.2f, 0.2f, 0.22f));
         shader_->setUniformValue("uUseVertexColor", false);
+        shader_->setUniformValue("uWireAlpha", wireAlpha);
         glLineWidth(1.0f);
+        if (wireAlpha < 1.0f) {
+            glEnable(GL_BLEND);
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        }
         glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
         glDrawElements(GL_TRIANGLES, count, GL_UNSIGNED_INT, nullptr);
         glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
         vao_.release();
+        if (wireAlpha < 1.0f) glDisable(GL_BLEND);
     }
     // 网格线绘制完毕
 
@@ -757,6 +888,7 @@ void GLWidget::paintGL() {
 
     if (selEdgeVertCount_ > 0 && selection_.hasSelection()) {
         shader_->setUniformValue("uWireframe", true);
+        shader_->setUniformValue("uWireAlpha", 1.0f);
         shader_->setUniformValue("uUseVertexColor", false);
 
         // 画边线或节点
@@ -781,16 +913,13 @@ void GLWidget::paintGL() {
     // ── 绘制坐标轴指示器（GL 部分，不含 QPainter 标签） ──
     drawAxesIndicator();
 
-    // ── 统一 QPainter 阶段：轴标签 + 色标 ──
-    // 在同一个 QPainter 生命周期内绘制所有 2D 叠加内容，
-    // 避免多次创建/销毁 QPainter 导致 GL 状态污染（拾取后色标消失的根因）。
+    // ── QPainter 阶段：仅轴标签（色标已由独立覆盖层控件绘制） ──
     {
         QPainter painter(this);
+        painter.beginNativePainting();
+        painter.endNativePainting();
         painter.setRenderHint(QPainter::Antialiasing);
         drawAxesLabels(painter);
-        if (colorBarVisible_) {
-            drawColorBar(painter);
-        }
         painter.end();
     }
 
@@ -803,18 +932,22 @@ void GLWidget::paintGL() {
         frameCount_ = 0;
         fpsTimer_.restart();
     }
+
 }
 
 void GLWidget::resizeGL(int w, int h) {
     glViewport(0, 0, w, h);
 
     // 重建拾取 FBO（尺寸需与视口一致）
+    // 注意：resizeGL 由 Qt 调用时 GL 上下文已 current，无需手动 makeCurrent/doneCurrent
     int dpr = devicePixelRatio();
     delete pickFbo_;
-    makeCurrent();
     pickFbo_ = new QOpenGLFramebufferObject(w * dpr, h * dpr,
         QOpenGLFramebufferObject::Depth);
-    doneCurrent();
+
+    // 色标覆盖层跟随窗口大小
+    if (colorBarOverlay_)
+        colorBarOverlay_->resize(size());
 }
 
 // ============================================================
@@ -875,13 +1008,18 @@ void GLWidget::mouseReleaseEvent(QMouseEvent* e) {
             rubberBand_->hide();
             QRect rect = QRect(boxOrigin_, e->pos()).normalized();
             if (rect.width() > 3 && rect.height() > 3) {
-                pickInRect(rect);
+                // 延迟到 paintGL() 中执行，避免 makeCurrent/doneCurrent 污染 GL 状态
+                pickRectPending_ = true;
+                pendingPickRect_ = rect;
+                update();
             }
             isBoxSelecting_ = false;
         } else if (!isDragging_) {
-            // 点选（未拖拽）
-            bool ctrlHeld = (e->modifiers() & Qt::ControlModifier);
-            pickAtPoint(e->pos(), ctrlHeld);
+            // 点选（未拖拽）— 延迟到 paintGL() 中执行
+            pickPointPending_ = true;
+            pendingPickPos_ = e->pos();
+            pendingPickCtrl_ = (e->modifiers() & Qt::ControlModifier);
+            update();
         }
     }
     isDragging_ = false;
@@ -935,24 +1073,68 @@ int GLWidget::colorToId(unsigned char r, unsigned char g, unsigned char b) {
 void GLWidget::renderPickBuffer(const glm::mat4& mvp) {
     if (!pickFbo_ || triToElem_.empty()) return;
 
-    pickFbo_->bind();
+    // ── 获取原始 GL 函数指针，完全绕过 Qt 的 GL 状态追踪 ──
+    auto glBindVAO_ = reinterpret_cast<void(APIENTRY*)(GLuint)>(
+        context()->getProcAddress("glBindVertexArray"));
+    auto glUseProg_ = reinterpret_cast<void(APIENTRY*)(GLuint)>(
+        context()->getProcAddress("glUseProgram"));
+    auto glGetUniformLoc_ = reinterpret_cast<GLint(APIENTRY*)(GLuint, const char*)>(
+        context()->getProcAddress("glGetUniformLocation"));
+    auto glUniformMat4_ = reinterpret_cast<void(APIENTRY*)(GLint, GLsizei, GLboolean, const GLfloat*)>(
+        context()->getProcAddress("glUniformMatrix4fv"));
+    auto glUniform3f_ = reinterpret_cast<void(APIENTRY*)(GLint, GLfloat, GLfloat, GLfloat)>(
+        context()->getProcAddress("glUniform3f"));
+    auto glGenBuf_ = reinterpret_cast<void(APIENTRY*)(GLsizei, GLuint*)>(
+        context()->getProcAddress("glGenBuffers"));
+    auto glDelBuf_ = reinterpret_cast<void(APIENTRY*)(GLsizei, const GLuint*)>(
+        context()->getProcAddress("glDeleteBuffers"));
+    auto glBufData_ = reinterpret_cast<void(APIENTRY*)(GLenum, GLsizeiptr, const void*, GLenum)>(
+        context()->getProcAddress("glBufferData"));
+
+    if (!glBindVAO_ || !glUseProg_ || !glGetUniformLoc_ || !glUniformMat4_ ||
+        !glUniform3f_ || !glGenBuf_ || !glDelBuf_ || !glBufData_) return;
+
+    // ── 保存所有关键 GL 状态 ──
+    GLint prevFbo, prevProgram, prevVao, prevABO, prevEBO;
+    GLfloat prevClearColor[4];
+    GLboolean prevDepthTest, prevBlend;
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFbo);
+    glGetFloatv(GL_COLOR_CLEAR_VALUE, prevClearColor);
+    glGetIntegerv(GL_CURRENT_PROGRAM, &prevProgram);
+    glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &prevVao);
+    glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &prevABO);
+    glGetIntegerv(GL_ELEMENT_ARRAY_BUFFER_BINDING, &prevEBO);
+    glGetBooleanv(GL_DEPTH_TEST, &prevDepthTest);
+    glGetBooleanv(GL_BLEND, &prevBlend);
+
+    // ── 全部使用原始 GL 调用，不触碰任何 Qt 包装器 ──
+    glBindFramebuffer(GL_FRAMEBUFFER, pickFbo_->handle());
 
     glClearColor(0, 0, 0, 1);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     glEnable(GL_DEPTH_TEST);
     glDisable(GL_BLEND);
 
-    pickShader_->bind();
-    pickShader_->setUniformValue("uMVP", QMatrix4x4(glm::value_ptr(glm::transpose(mvp))));
+    GLuint pickProg = pickShader_->programId();
+    glUseProg_(pickProg);
 
-    vao_.bind();
+    GLint mvpLoc = glGetUniformLoc_(pickProg, "uMVP");
+    glUniformMat4_(mvpLoc, 1, GL_FALSE, glm::value_ptr(mvp));
 
-    // 临时绑定完整（未过滤）索引缓冲，确保偏移量正确
-    QOpenGLBuffer fullIbo(QOpenGLBuffer::IndexBuffer);
-    fullIbo.create();
-    fullIbo.bind();
-    fullIbo.allocate(allTriIndices_.data(),
-                     static_cast<int>(allTriIndices_.size() * sizeof(unsigned int)));
+    GLint pickColorLoc = glGetUniformLoc_(pickProg, "uPickColor");
+
+    glBindVAO_(pickVao_.objectId());
+    glBindBuffer(GL_ARRAY_BUFFER, vbo_.bufferId());
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), nullptr);
+    glEnableVertexAttribArray(0);
+
+    // 创建原始 GL 索引缓冲
+    GLuint rawIbo = 0;
+    glGenBuf_(1, &rawIbo);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, rawIbo);
+    glBufData_(GL_ELEMENT_ARRAY_BUFFER,
+               static_cast<GLsizeiptr>(allTriIndices_.size() * sizeof(unsigned int)),
+               allTriIndices_.data(), GL_STATIC_DRAW);
 
     // 逐单元绘制，跳过隐藏部件
     int triCount = static_cast<int>(triToElem_.size());
@@ -960,53 +1142,66 @@ void GLWidget::renderPickBuffer(const glm::mat4& mvp) {
     while (i < triCount) {
         int elemId = triToElem_[i];
         int start = i;
-        // 找出同一单元的连续三角形
         while (i < triCount && triToElem_[i] == elemId) ++i;
 
-        // 检查该三角形所属部件是否可见
         if (start < static_cast<int>(triToPart_.size())) {
             int partIdx = triToPart_[start];
             if (partIdx >= 0) {
                 auto it = partVisibility_.find(partIdx);
                 if (it != partVisibility_.end() && !it->second)
-                    continue;  // 隐藏部件，跳过
+                    continue;
             }
         }
 
         glm::vec3 c = idToColor(elemId);
-        pickShader_->setUniformValue("uPickColor", QVector3D(c.x, c.y, c.z));
+        glUniform3f_(pickColorLoc, c.x, c.y, c.z);
         glDrawElements(GL_TRIANGLES, (i - start) * 3, GL_UNSIGNED_INT,
                        reinterpret_cast<void*>(start * 3 * sizeof(unsigned int)));
     }
 
-    // 恢复原始 IBO 绑定，防止临时 IBO 销毁后 VAO 引用失效
-    ibo_->bind();
-    vao_.release();
-    fullIbo.destroy();
-    pickShader_->release();
-    pickFbo_->release();
+    // ── 清理临时 IBO ──
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+    glDelBuf_(1, &rawIbo);
+
+    // ── 恢复所有 GL 状态（同样使用原始调用） ──
+    glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(prevFbo));
+    glClearColor(prevClearColor[0], prevClearColor[1], prevClearColor[2], prevClearColor[3]);
+    glBindVAO_(static_cast<GLuint>(prevVao));
+    glUseProg_(static_cast<GLuint>(prevProgram));
+    glBindBuffer(GL_ARRAY_BUFFER, static_cast<GLuint>(prevABO));
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, static_cast<GLuint>(prevEBO));
+    if (prevDepthTest) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
+    if (prevBlend) glEnable(GL_BLEND); else glDisable(GL_BLEND);
 }
 
 void GLWidget::pickAtPoint(const QPoint& pos, bool ctrlHeld) {
     if (!pickFbo_ || triToElem_.empty()) return;
 
-    makeCurrent();
+    // 注意：此函数现在仅在 paintGL() 内调用，GL 上下文已由 Qt 管理，
+    // 无需手动 makeCurrent/doneCurrent。
 
     // 渲染拾取缓冲
     float aspect = (height() > 0) ? static_cast<float>(width()) / height() : 1.0f;
     glm::mat4 projection = glm::perspective(glm::radians(45.0f), aspect, cam_.distance * 0.01f, cam_.distance * 10.0f);
     glm::mat4 view = cam_.viewMatrix();
     glm::mat4 mvp = projection * view;
+
     renderPickBuffer(mvp);
 
-    // 读取点击位置像素
-    pickFbo_->bind();
-    int dpr = devicePixelRatio();
-    int px = pos.x() * dpr;
-    int py = (height() - pos.y()) * dpr;  // OpenGL Y 轴翻转
+    // 读取点击位置像素（使用原始 GL 调用，避免 Qt FBO 状态追踪污染）
     unsigned char pixel[4] = {0};
-    glReadPixels(px, py, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
-    pickFbo_->release();
+    {
+        GLint prevFbo;
+        glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFbo);
+        glBindFramebuffer(GL_FRAMEBUFFER, pickFbo_->handle());
+
+        int dpr = devicePixelRatio();
+        int px = pos.x() * dpr;
+        int py = (height() - pos.y()) * dpr;  // OpenGL Y 轴翻转
+        glReadPixels(px, py, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
+
+        glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(prevFbo));
+    }
 
     int elemId = colorToId(pixel[0], pixel[1], pixel[2]);
 
@@ -1094,14 +1289,12 @@ void GLWidget::pickAtPoint(const QPoint& pos, bool ctrlHeld) {
         }
         emit partsPicked(pickedParts);
     }
-    doneCurrent();
-    update();
 }
 
 void GLWidget::pickInRect(const QRect& rect) {
     if (triToElem_.empty()) return;
 
-    makeCurrent();
+    // 注意：此函数现在仅在 paintGL() 内调用，GL 上下文已由 Qt 管理。
 
     float aspect = (height() > 0) ? static_cast<float>(width()) / height() : 1.0f;
     glm::mat4 projection = glm::perspective(glm::radians(45.0f), aspect, cam_.distance * 0.01f, cam_.distance * 10.0f);
@@ -1212,8 +1405,6 @@ void GLWidget::pickInRect(const QRect& rect) {
         }
         emit partsPicked(pickedParts);
     }
-    doneCurrent();
-    update();
 }
 
 // ============================================================
@@ -1542,14 +1733,9 @@ void GLWidget::drawColorBar(QPainter& painter) {
     // ════════════════════════════════════════════════════════════
     // 仿 HyperView 颜色条样式
     //
-    // 布局：色块在左，数值标签在右
-    //
-    //   ══╤ 1.23E+02
-    //   ──┤ 1.13E+02
-    //   ──┤ 1.03E+02
-    //   ...
-    //   ══╧ 1.23E+01
-    //
+    // 使用 QImage 离屏渲染后 drawImage 贴图，避免 QPainter 的 GL
+    // 图元绘制（drawRect）在拾取后因 GL 状态残留而失败。
+    // drawImage 走纹理路径（与 drawText 相同），不受影响。
     // ════════════════════════════════════════════════════════════
 
     const int segCount = 9;
@@ -1580,57 +1766,71 @@ void GLWidget::drawColorBar(QPainter& painter) {
     // 字体
     QFont labelFont("Consolas", 0);
     labelFont.setPixelSize(14);
-    painter.setFont(labelFont);
     QFontMetrics fm(labelFont);
     int labelTextH = fm.height();
 
-    // 坐标定位：色块在左上角
-    int barX = margin;
-    int barY = margin;
+    // 计算整体尺寸（色块 + 标签）
+    int totalW = barW + barLabelGap + 120;
+    int totalH = barH + labelTextH;
 
-    // ── 绘制分段色块 ──
-    for (int i = 0; i < segCount; ++i) {
-        float t = (i + 0.5f) / segCount;
-        int y = barY + barH - (i + 1) * segH;
-        painter.setPen(Qt::NoPen);
-        painter.setBrush(jetColor(t));
-        painter.drawRect(barX, y, barW, segH);
+    // ── 离屏渲染到 QImage ──
+    QImage img(totalW, totalH, QImage::Format_ARGB32_Premultiplied);
+    img.fill(Qt::transparent);
+    {
+        QPainter ip(&img);
+        ip.setRenderHint(QPainter::Antialiasing);
+        ip.setFont(labelFont);
+
+        // 绘制分段色块
+        for (int i = 0; i < segCount; ++i) {
+            float t = (i + 0.5f) / segCount;
+            int y = barH - (i + 1) * segH;
+            ip.setPen(Qt::NoPen);
+            ip.setBrush(jetColor(t));
+            ip.drawRect(0, y, barW, segH);
+        }
+
+        // 段界横线 + 数值标签
+        int labelX = barW + barLabelGap;
+        for (int i = 0; i <= segCount; ++i) {
+            float t = 1.0f - i / static_cast<float>(segCount);
+            float val = colorBarMin_ + (colorBarMax_ - colorBarMin_) * t;
+            int y = i * segH;
+
+            // 段界横线（黑色）
+            ip.setPen(QPen(QColor(0, 0, 0), 1));
+            ip.drawLine(0, y, barW, y);
+
+            // 白色数值标签
+            ip.setPen(Qt::white);
+            QRectF labelRect(labelX, y - labelTextH / 2, 120, labelTextH);
+            ip.drawText(labelRect, Qt::AlignLeft | Qt::AlignVCenter, formatValue(val));
+        }
     }
 
-    // ── 段界横线 + 数值标签（白色） ──
-    // HyperView 风格：9 个色块，10 条刻度线，10 个标签（均匀从 max 到 min）
-    int labelX = barX + barW + barLabelGap;
-
-    painter.setPen(Qt::white);
-    for (int i = 0; i <= segCount; ++i) {
-        float t = 1.0f - i / static_cast<float>(segCount);
-        float val = colorBarMin_ + (colorBarMax_ - colorBarMin_) * t;
-        int y = barY + i * segH;
-
-        // 段界横线（黑色）
-        painter.setPen(QPen(QColor(0, 0, 0), 1));
-        painter.drawLine(barX, y, barX + barW, y);
-
-        // 白色数值标签
-        painter.setPen(Qt::white);
-        QRectF labelRect(labelX, y - labelTextH / 2, 120, labelTextH);
-        painter.drawText(labelRect, Qt::AlignLeft | Qt::AlignVCenter, formatValue(val));
-    }
+    // ── 贴图到 GL 画面（走纹理路径，不受 GL 状态污染影响） ──
+    painter.drawImage(margin, margin, img);
 }
 
 void GLWidget::setColorBarVisible(bool visible) {
     colorBarVisible_ = visible;
+    if (colorBarOverlay_) {
+        colorBarOverlay_->setVisible(visible);
+        colorBarOverlay_->resize(size());
+    }
     update();
 }
 
 void GLWidget::setColorBarRange(float min, float max) {
     colorBarMin_ = min;
     colorBarMax_ = max;
+    if (colorBarOverlay_) colorBarOverlay_->setRange(min, max);
     update();
 }
 
 void GLWidget::setColorBarTitle(const QString& title) {
     colorBarTitle_ = title;
+    if (colorBarOverlay_) colorBarOverlay_->setTitle(title);
     update();
 }
 

@@ -34,6 +34,8 @@
 #include "Geometry.h"
 #include "FEPickResult.h"
 
+class ColorBarOverlay;   // 前向声明：色标覆盖层控件
+
 class GLWidget : public QOpenGLWidget, protected QOpenGLFunctions {
     Q_OBJECT
 
@@ -171,6 +173,7 @@ private:
     // ── 拾取 ──
     QOpenGLShaderProgram* pickShader_ = nullptr;
     QOpenGLFramebufferObject* pickFbo_ = nullptr;
+    QOpenGLVertexArrayObject pickVao_;   // 拾取专用 VAO，避免污染主 VAO 的顶点属性状态
     std::vector<int> triToElem_;        // 三角形索引 → 单元 ID
     std::vector<int> vertexToNode_;     // 渲染顶点索引 → FEM 节点 ID
     PickMode pickMode_ = PickMode::Node;  // 当前拾取模式（与下拉框默认值同步）
@@ -243,6 +246,7 @@ private:
     float colorBarMax_ = 1.0f;
     QString colorBarTitle_ = "Result";
     bool useVertexColor_ = false;       // 是否使用云图颜色（通过 colorVbo_）
+    ColorBarOverlay* colorBarOverlay_ = nullptr;  // 独立覆盖层控件（raster 绘制，不受 GL 状态影响）
     glm::mat4 axesMVP_{1.0f};          // drawAxesIndicator() 计算后传给 drawAxesLabels()
 
     // ── 交互状态 ──
@@ -252,6 +256,13 @@ private:
     bool isBoxSelecting_ = false;       // 是否正在框选
     QRubberBand* rubberBand_ = nullptr; // 框选矩形
     QPoint boxOrigin_;                  // 框选起始点
+
+    // ── 延迟拾取（避免在 paintGL 外调用 makeCurrent 导致 GL 状态污染） ──
+    bool pickPointPending_ = false;     // 点选待处理
+    QPoint pendingPickPos_;             // 点选位置
+    bool pendingPickCtrl_ = false;      // 是否按住 Ctrl
+    bool pickRectPending_ = false;      // 框选待处理
+    QRect pendingPickRect_;             // 框选矩形
     glm::vec3 color_{0.55f, 0.75f, 0.73f};
 
     // ── 坐标轴指示器 ──
