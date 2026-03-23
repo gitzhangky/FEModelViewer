@@ -1,0 +1,63 @@
+# FEModelViewer
+
+基于 Qt5 + OpenGL 4.1 的有限元模型查看器。分为两个模块：
+- **FERender**（共享库）：数据层 + 转换层 + 渲染层，可独立安装供其他项目使用
+- **FEModelViewer**（GUI 应用）：主窗口 + 各功能面板，链接 FERender
+
+## 构建
+
+```bash
+# MinGW 构建（主力）
+cmake -B build -G "MinGW Makefiles" -DCMAKE_INSTALL_PREFIX=install
+cmake --build build
+cmake --install build
+
+# MSVC 构建
+cmake -B build-vs -DCMAKE_INSTALL_PREFIX=install-vs
+cmake --build build-vs --config Release
+cmake --install build-vs --config Release
+```
+
+Qt 路径由 CMakeLists.txt 自动探测（C:/Qt 或 D:/Qt），也可手动指定：
+`-DCMAKE_PREFIX_PATH=C:/Qt/5.15.2/mingw81_64`
+
+GLM 通过 FetchContent 自动下载，无需手动安装。
+
+## 架构约定
+
+- 数据层（FEModel/FENode/FEElement/FEField）是纯数据，不依赖 OpenGL
+- 转换层（FEMeshConverter）是无状态静态工具类，负责 FEModel → Mesh 三角化
+- 渲染层（GLWidget/Camera）负责 GPU 上传和交互
+- GUI 面板（*Panel.h）只在应用层，不属于 FERender 库
+
+## 代码风格
+
+- C++17，类名 PascalCase，成员变量尾随下划线（`mesh_`、`cam_`）
+- 枚举用 `enum class`，头文件用 `#pragma once`
+- 公开 API 必须加 `FERENDER_EXPORT` 宏
+- 中文注释，保留已有注释风格和 ASCII 框图
+- MSVC 编译需 `/utf-8`（已在 CMakeLists.txt 中配置）
+
+## DLL 导出
+
+FERender 编译为共享库。所有公开的 class/struct 需标记 `FERENDER_EXPORT`：
+```cpp
+#include "ferender_export.h"
+class FERENDER_EXPORT MyClass { ... };
+```
+`ferender_export.h` 由 CMake 的 `GenerateExportHeader` 自动生成到 build 目录。
+
+## 关键数据流
+
+```
+用户加载文件 → 解析填充 FEModel
+  → FEMeshConverter::toRenderData() → FERenderData (Mesh + 映射表)
+    → GLWidget::setMesh() + 设置映射表 → GPU 渲染
+      → 鼠标拾取 → 映射表反查 FEM 实体
+```
+
+## 提交规范
+
+- 中文提交信息，格式：`类别: 简要描述`
+- 类别：feat / fix / refactor / docs / chore
+- 不要推送 build/install 产物
