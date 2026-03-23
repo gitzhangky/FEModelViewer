@@ -1,0 +1,10 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+
+# FERender 依赖的第三方库，使用方也需要能找到
+find_dependency(Qt5 COMPONENTS Core Gui Widgets OpenGL)
+find_dependency(OpenGL)
+find_dependency(glm)
+
+include("${CMAKE_CURRENT_LIST_DIR}/FERenderTargets.cmake")

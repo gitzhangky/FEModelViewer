@@ -80,21 +80,61 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(glm)
 
-# ── 构建目标 ──
+# ── RENDER 模块（可独立安装的共享库）──
 
-add_executable(${PROJECT_NAME}
-    main.cpp
+set(RENDER_HEADERS
+    Camera.h
+    Geometry.h
+    GLWidget.h
+    FEModel.h
+    FEField.h
+    FEMeshConverter.h
+    FENode.h
+    FEElement.h
+    FEGroup.h
+    FERenderData.h
+    FEResultData.h
+    FEPickResult.h
+)
+
+set(RENDER_SOURCES
     Camera.cpp
     Geometry.cpp
     GLWidget.cpp
-    MonitorPanel.cpp
-    MainWindow.cpp
     FEModel.cpp
     FEField.cpp
     FEMeshConverter.cpp
+)
+
+add_library(FERender ${RENDER_SOURCES} ${RENDER_HEADERS})
+
+target_include_directories(FERender
+    PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+        $<INSTALL_INTERFACE:include/FERender>
+)
+
+target_link_libraries(FERender PUBLIC
+    OpenGL::GL
+    Qt5::Core Qt5::Gui Qt5::Widgets Qt5::OpenGL
+)
+
+# GLM 是 header-only 库，直接添加 include 路径即可（避免 export set 问题）
+target_include_directories(FERender SYSTEM PUBLIC
+    $<BUILD_INTERFACE:${glm_SOURCE_DIR}>
+    $<INSTALL_INTERFACE:include>
+)
+
+# ── GUI 模块（应用程序）──
+
+add_executable(${PROJECT_NAME}
+    main.cpp
+    MainWindow.cpp
     FEModelPanel.cpp
     PartsPanel.cpp
     ResultPanel.cpp
+    ControlPanel.cpp
+    MonitorPanel.cpp
 )
 
 # macOS：打包为 .app bundle
@@ -107,9 +147,41 @@ if(APPLE)
     )
 endif()
 
-target_link_libraries(${PROJECT_NAME} PRIVATE
-    OpenGL::GL
-    glm::glm
-    Qt5::Core Qt5::Gui Qt5::Widgets
-    Qt5::OpenGL
+target_link_libraries(${PROJECT_NAME} PRIVATE FERender)
+
+# ── 安装规则 ──
+
+include(GNUInstallDirs)
+
+# 安装库文件
+install(TARGETS FERender
+    EXPORT FERenderTargets
+    LIBRARY  DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    ARCHIVE  DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    RUNTIME  DESTINATION ${CMAKE_INSTALL_BINDIR}
+)
+
+# 安装头文件
+install(FILES ${RENDER_HEADERS}
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/FERender
+)
+
+# 导出 CMake Target，其他项目可以 find_package(FERender) 使用
+install(EXPORT FERenderTargets
+    FILE FERenderTargets.cmake
+    NAMESPACE FERender::
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/FERender
+)
+
+# 生成 FERenderConfig.cmake
+include(CMakePackageConfigHelpers)
+
+configure_package_config_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/FERenderConfig.cmake.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/FERenderConfig.cmake"
+    INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/FERender
+)
+
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/FERenderConfig.cmake"
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/FERender
 )
