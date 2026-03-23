@@ -110,11 +110,7 @@ void FEModelPanel::loadModelFromFile() {
                        "ABAQUS ODB (*.odb);;"
                        "所有文件 (*)");
     dialog.setFileMode(QFileDialog::ExistingFile);
-    dialog.setAcceptMode(QFileDialog::AcceptOpen);
     dialog.setOption(QFileDialog::DontUseNativeDialog, true);
-    dialog.setStyleSheet("");
-    dialog.resize(720, 480);
-
     if (dialog.exec() != QDialog::Accepted) return;
     QString path = dialog.selectedFiles().first();
     if (path.isEmpty()) return;

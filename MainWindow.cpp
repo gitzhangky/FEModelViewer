@@ -84,15 +84,22 @@ MainWindow::MainWindow() {
 
     // ── 右侧结果面板 ──
     resultPanel_ = new ResultPanel;
-    resultPanel_->setMinimumWidth(180);
-    resultPanel_->setMaximumWidth(280);
+
+    auto* rightSidebar = new QWidget;
+    rightSidebar->setMinimumWidth(180);
+    rightSidebar->setMaximumWidth(280);
+    rightSidebar->setStyleSheet("QWidget { background: #1e1e2e; }");
+    auto* rightLayout = new QVBoxLayout(rightSidebar);
+    rightLayout->setContentsMargins(0, 0, 0, 0);
+    rightLayout->setSpacing(0);
+    rightLayout->addWidget(resultPanel_);
 
     // ── 水平 Splitter: 左侧边栏 | GL视口 | 右侧边栏 ──
     auto* hSplitter = new QSplitter(Qt::Horizontal);
     hSplitter->setChildrenCollapsible(false);
     hSplitter->addWidget(sidebar);
     hSplitter->addWidget(glWidget_);
-    hSplitter->addWidget(resultPanel_);
+    hSplitter->addWidget(rightSidebar);
     hSplitter->setSizes({240, 640, 220});
     hSplitter->setStretchFactor(0, 0);
     hSplitter->setStretchFactor(1, 1);
@@ -405,12 +412,16 @@ void MainWindow::browseModelFile() {
         if (!QDir(lastDir).exists()) lastDir = QDir::homePath();
     }
 
-    QString path = QFileDialog::getOpenFileName(this, "选择模型文件", lastDir,
+    QFileDialog dialog(this, "选择模型文件", lastDir,
         "所有支持格式 (*.inp *.bdf *.fem *.op2);;"
         "ABAQUS Input (*.inp);;"
         "Nastran BDF (*.bdf *.fem);;"
         "Nastran OP2 (*.op2);;"
         "所有文件 (*)");
+    dialog.setFileMode(QFileDialog::ExistingFile);
+    dialog.setOption(QFileDialog::DontUseNativeDialog, true);
+    if (dialog.exec() != QDialog::Accepted) return;
+    QString path = dialog.selectedFiles().first();
 
     if (!path.isEmpty()) {
         modelPathEdit_->setText(path);
@@ -426,12 +437,16 @@ void MainWindow::browseResultFile() {
         if (!QDir(lastDir).exists()) lastDir = QDir::homePath();
     }
 
-    QString path = QFileDialog::getOpenFileName(this, "选择结果文件", lastDir,
+    QFileDialog dialog(this, "选择结果文件", lastDir,
         "结果文件 (*.odb *.op2 *.h3d *.rst *.xdb);;"
         "ABAQUS ODB (*.odb);;"
         "Nastran OP2 (*.op2);;"
         "HyperWorks H3D (*.h3d);;"
         "所有文件 (*)");
+    dialog.setFileMode(QFileDialog::ExistingFile);
+    dialog.setOption(QFileDialog::DontUseNativeDialog, true);
+    if (dialog.exec() != QDialog::Accepted) return;
+    QString path = dialog.selectedFiles().first();
 
     if (!path.isEmpty()) {
         resultPathEdit_->setText(path);

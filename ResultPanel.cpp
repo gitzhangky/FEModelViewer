@@ -29,42 +29,30 @@ void ResultPanel::setupUI()
         "font-size: 13px; font-weight: bold; color: #89b4fa; padding: 4px 0;");
     layout->addWidget(titleLabel);
 
-    // ── 工况 ──
-    auto* subcaseLabel = new QLabel("工况");
-    subcaseLabel->setStyleSheet("font-size: 11px; color: #a6adc8;");
-    layout->addWidget(subcaseLabel);
-    subcaseCombo_ = new QComboBox;
-    subcaseCombo_->setEnabled(false);
-    layout->addWidget(subcaseCombo_);
+    // 左右结构行
+    auto addRow = [&](const QString& text, QComboBox*& combo, bool enabled = false) {
+        auto* row = new QHBoxLayout;
+        row->setSpacing(8);
+        auto* label = new QLabel(text);
+        label->setStyleSheet("font-size: 11px; color: #a6adc8;");
+        label->setFixedWidth(50);
+        label->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        row->addWidget(label);
+        combo = new QComboBox;
+        combo->setEnabled(enabled);
+        combo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        row->addWidget(combo);
+        layout->addLayout(row);
+    };
 
-    // ── 类型 ──
-    auto* typeLabel = new QLabel("结果类型");
-    typeLabel->setStyleSheet("font-size: 11px; color: #a6adc8;");
-    layout->addWidget(typeLabel);
-    typeCombo_ = new QComboBox;
-    typeCombo_->setEnabled(false);
-    layout->addWidget(typeCombo_);
-
-    // ── 分量 ──
-    auto* compLabel = new QLabel("分量");
-    compLabel->setStyleSheet("font-size: 11px; color: #a6adc8;");
-    layout->addWidget(compLabel);
-    componentCombo_ = new QComboBox;
-    componentCombo_->setEnabled(false);
-    layout->addWidget(componentCombo_);
-
-    // ── 色谱 ──
-    auto* cmLabel = new QLabel("色谱");
-    cmLabel->setStyleSheet("font-size: 11px; color: #a6adc8;");
-    layout->addWidget(cmLabel);
+    addRow("工况", subcaseCombo_);
+    addRow("类型", typeCombo_);
+    addRow("分量", componentCombo_);
+    // 色谱（暂时隐藏）
     colormapCombo_ = new QComboBox;
-    colormapCombo_->addItem("Rainbow");
     colormapCombo_->addItem("Jet");
-    colormapCombo_->addItem("Cool-Warm");
-    colormapCombo_->addItem("Grayscale");
-    colormapCombo_->addItem("Viridis");
-    colormapCombo_->setCurrentIndex(1);  // 默认 Jet
-    layout->addWidget(colormapCombo_);
+    colormapCombo_->setCurrentIndex(0);
+    colormapCombo_->hide();
 
     // ── 按钮行 ──
     auto* btnRow = new QHBoxLayout;

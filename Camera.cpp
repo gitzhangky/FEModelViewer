@@ -34,7 +34,7 @@ glm::mat4 Camera::viewMatrix() const {
 
 void Camera::rotate(float dx, float dy) {
     // 鼠标水平移动 → 改变 yaw（左右旋转）
-    yaw   += dx * rotateSensitivity;
+    yaw   -= dx * rotateSensitivity;
     // 鼠标垂直移动 → 改变 pitch（上下仰俯）
     pitch += dy * rotateSensitivity;
     // 限制 pitch 在 [-89°, 89°]，防止翻转（万向锁）
