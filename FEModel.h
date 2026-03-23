@@ -47,8 +47,9 @@
 #include "FEElement.h"
 #include "FEGroup.h"
 #include "FEField.h"
+#include "ferender_export.h"
 
-class FEModel {
+class FERENDER_EXPORT FEModel {
 public:
     // ── 模型元数据 ──
     std::string name;            // 模型名称（通常来自文件名）

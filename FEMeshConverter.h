@@ -66,9 +66,11 @@
 #include "Geometry.h"
 #include <functional>
 
+#include "ferender_export.h"
+
 using ProgressCallback = std::function<void(int percent)>;
 
-class FEMeshConverter {
+class FERENDER_EXPORT FEMeshConverter {
 public:
     // ════════════════════════════════════════════════════════════
     // 主要接口：返回 FERenderData（Mesh + 反向映射表）

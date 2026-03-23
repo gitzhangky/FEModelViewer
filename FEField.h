@@ -51,7 +51,9 @@ enum class FieldLocation {
  * 每个节点或单元对应一个标量值。
  * 例如：Von Mises 应力、温度、位移幅值。
  */
-struct FEScalarField {
+#include "ferender_export.h"
+
+struct FERENDER_EXPORT FEScalarField {
     std::string name;                          // 场名称（如 "Von Mises Stress"）
     std::string unit;                          // 单位（如 "MPa", "mm", "°C"）
     FieldLocation location = FieldLocation::Node;  // 数据位置（节点/单元）
@@ -74,7 +76,7 @@ struct FEScalarField {
  * 例如：位移场 (ux, uy, uz)、速度场。
  * 可用于：变形显示（位移叠加到坐标上）、矢量箭头显示。
  */
-struct FEVectorField {
+struct FERENDER_EXPORT FEVectorField {
     std::string name;                          // 场名称（如 "Displacement"）
     std::string unit;                          // 单位（如 "mm"）
     FieldLocation location = FieldLocation::Node;
@@ -108,7 +110,7 @@ enum class ColorMapType {
  * 将 [0, 1] 范围的归一化标量值映射为 RGB 颜色。
  * 使用前需要先用 (value - min) / (max - min) 归一化。
  */
-struct ColorMap {
+struct FERENDER_EXPORT ColorMap {
     ColorMapType type = ColorMapType::Rainbow;
     int discreteLevels = 10;  // 分段色阶数（0=平滑渐变，>0=分段色带）
 

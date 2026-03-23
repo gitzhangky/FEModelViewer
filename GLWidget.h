@@ -33,10 +33,11 @@
 #include "Camera.h"
 #include "Geometry.h"
 #include "FEPickResult.h"
+#include "ferender_export.h"
 
 class ColorBarOverlay;   // 前向声明：色标覆盖层控件
 
-class GLWidget : public QOpenGLWidget, protected QOpenGLFunctions {
+class FERENDER_EXPORT GLWidget : public QOpenGLWidget, protected QOpenGLFunctions {
     Q_OBJECT
 
 public:

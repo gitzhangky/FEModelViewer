@@ -19,7 +19,9 @@
  * 每 6 个 float 为一个顶点（位置 + 法线）。
  * 索引数据以三角形为单位：每 3 个索引构成一个三角面。
  */
-struct Mesh {
+#include "ferender_export.h"
+
+struct FERENDER_EXPORT Mesh {
     std::vector<float> vertices;         // 顶点数据（位置 + 法线，交错存储）
     std::vector<unsigned int> indices;   // 索引数据（每 3 个索引一个三角形）
     std::vector<float> edgeVertices;     // 边线顶点数据（仅位置，用于 GL_LINES）
@@ -59,11 +61,11 @@ struct Mesh {
  * 所有函数返回以原点为中心的标准大小网格。
  */
 namespace Geometry {
-    Mesh cube();                                          // 正方体
-    Mesh tetrahedron();                                   // 三棱锥（正四面体）
-    Mesh triangularPrism();                               // 三棱柱
-    Mesh cylinder(int segments = 36);                     // 圆柱（可指定侧面分段数）
-    Mesh cone(int segments = 36);                         // 圆锥（可指定侧面分段数）
-    Mesh sphere(int rings = 24, int sectors = 36);        // 球体（可指定纬线/经线数）
-    Mesh torus(int ringSegs = 36, int tubeSegs = 24);     // 圆环（可指定环/管分段数）
+    FERENDER_EXPORT Mesh cube();                                          // 正方体
+    FERENDER_EXPORT Mesh tetrahedron();                                   // 三棱锥（正四面体）
+    FERENDER_EXPORT Mesh triangularPrism();                               // 三棱柱
+    FERENDER_EXPORT Mesh cylinder(int segments = 36);                     // 圆柱（可指定侧面分段数）
+    FERENDER_EXPORT Mesh cone(int segments = 36);                         // 圆锥（可指定侧面分段数）
+    FERENDER_EXPORT Mesh sphere(int rings = 24, int sectors = 36);        // 球体（可指定纬线/经线数）
+    FERENDER_EXPORT Mesh torus(int ringSegs = 36, int tubeSegs = 24);     // 圆环（可指定环/管分段数）
 }

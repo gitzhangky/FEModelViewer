@@ -106,11 +106,18 @@ set(RENDER_SOURCES
     FEMeshConverter.cpp
 )
 
-add_library(FERender ${RENDER_SOURCES} ${RENDER_HEADERS})
+add_library(FERender SHARED ${RENDER_SOURCES} ${RENDER_HEADERS})
+
+include(GenerateExportHeader)
+generate_export_header(FERender
+    EXPORT_MACRO_NAME FERENDER_EXPORT
+    EXPORT_FILE_NAME  ${CMAKE_CURRENT_BINARY_DIR}/ferender_export.h
+)
 
 target_include_directories(FERender
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>
         $<INSTALL_INTERFACE:include/FERender>
 )
 
@@ -127,6 +134,16 @@ target_include_directories(FERender SYSTEM PUBLIC
 
 # ── GUI 模块（应用程序）──
 
+# 手动 MOC 应用程序自己的头文件，避免 AUTOMOC 重复 moc FERender 的 Q_OBJECT 类
+qt5_wrap_cpp(VIEWER_MOC_SRCS
+    MainWindow.h
+    FEModelPanel.h
+    PartsPanel.h
+    ResultPanel.h
+    ControlPanel.h
+    MonitorPanel.h
+)
+
 add_executable(${PROJECT_NAME}
     main.cpp
     MainWindow.cpp
@@ -135,7 +152,10 @@ add_executable(${PROJECT_NAME}
     ResultPanel.cpp
     ControlPanel.cpp
     MonitorPanel.cpp
+    ${VIEWER_MOC_SRCS}
 )
+
+set_target_properties(${PROJECT_NAME} PROPERTIES AUTOMOC OFF)
 
 # macOS：打包为 .app bundle
 if(APPLE)
@@ -161,9 +181,20 @@ install(TARGETS FERender
     RUNTIME  DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
 
+# 安装可执行文件
+install(TARGETS ${PROJECT_NAME}
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+)
+
 # 安装头文件
 install(FILES ${RENDER_HEADERS}
+    "${CMAKE_CURRENT_BINARY_DIR}/ferender_export.h"
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/FERender
+)
+
+# 安装 GLM 头文件（header-only，随库一起分发）
+install(DIRECTORY ${glm_SOURCE_DIR}/glm
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
 )
 
 # 导出 CMake Target，其他项目可以 find_package(FERender) 使用

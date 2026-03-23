@@ -3,3 +3,5 @@ build-vs/
 .DS_Store
 *.o
 *.dSYM/
+install/
+install-vs/

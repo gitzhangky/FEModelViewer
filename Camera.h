@@ -12,8 +12,9 @@
 #pragma once
 
 #include <glm/glm.hpp>
+#include "ferender_export.h"
 
-class Camera {
+class FERENDER_EXPORT Camera {
 public:
     // ── 轨道参数 ──
     float yaw      = 0.0f;                    // 水平旋转角度（绕 Y 轴，单位：度）
