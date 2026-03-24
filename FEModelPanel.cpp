@@ -1242,6 +1242,86 @@ bool FEModelPanel::parseNastranOp2(const QString& filePath, FEModel& model,
     }
 
     file.close();
+
+    // ── NX Nastran 嵌套表回退扫描 ──
+    // NX Nastran 可能将 GEOM1/GEOM2 嵌套在 PVT0 等容器表内，
+    // 标准表导航无法看到这些嵌套表。此处扫描整个文件查找 GRID key。
+    if (model.nodes.empty()) {
+        qDebug("parseNastranOp2: no nodes from standard tables, scanning for embedded GRID data...");
+        QFile file2(filePath);
+        if (file2.open(QIODevice::ReadOnly)) {
+            QByteArray allData = file2.readAll();
+            file2.close();
+            const char* raw = allData.constData();
+            int fileLen = allData.size();
+
+            auto swapBytes32 = [](quint32 v) -> quint32 {
+                return ((v >> 24) & 0xFF) | ((v >> 8) & 0xFF00) |
+                       ((v << 8) & 0xFF0000) | ((v << 24) & 0xFF000000);
+            };
+
+            // 扫描 Fortran 记录：[recLen][4501][40|45]...
+            for (int offset = 0; offset < fileLen - 16; offset += 4) {
+                qint32 recLen;
+                memcpy(&recLen, raw + offset, 4);
+                if (needSwap) recLen = static_cast<qint32>(swapBytes32(static_cast<quint32>(recLen)));
+                if (recLen < 32 || recLen > 10000000) continue;
+                if (offset + 4 + recLen + 4 > fileLen) continue;
+
+                // 验证 Fortran 记录尾部长度
+                qint32 tailLen;
+                memcpy(&tailLen, raw + offset + 4 + recLen, 4);
+                if (needSwap) tailLen = static_cast<qint32>(swapBytes32(static_cast<quint32>(tailLen)));
+                if (tailLen != recLen) continue;
+
+                // 检查记录是否以 GRID key (4501) 开头
+                const char* recData = raw + offset + 4;
+                qint32 key1, key2;
+                memcpy(&key1, recData, 4);
+                memcpy(&key2, recData + 4, 4);
+                if (needSwap) {
+                    key1 = static_cast<qint32>(swapBytes32(static_cast<quint32>(key1)));
+                    key2 = static_cast<qint32>(swapBytes32(static_cast<quint32>(key2)));
+                }
+                if (key1 != 4501 || (key2 != 40 && key2 != 45)) continue;
+
+                int nWords = recLen / 4;
+                // key2==45: 3-word key (NX/OptiStruct), key2==40: 2-word key (标准)
+                int dataStart = (key2 == 45) ? 3 : 2;
+                int parsed = 0;
+
+                for (int i = dataStart; i + 8 <= nWords; i += 8) {
+                    qint32 nid;
+                    memcpy(&nid, recData + i * 4, 4);
+                    if (needSwap) nid = static_cast<qint32>(swapBytes32(static_cast<quint32>(nid)));
+                    if (nid <= 0 || nid > 100000000) break;
+
+                    quint32 rawX, rawY, rawZ;
+                    memcpy(&rawX, recData + (i + 2) * 4, 4);
+                    memcpy(&rawY, recData + (i + 3) * 4, 4);
+                    memcpy(&rawZ, recData + (i + 4) * 4, 4);
+                    if (needSwap) {
+                        rawX = swapBytes32(rawX);
+                        rawY = swapBytes32(rawY);
+                        rawZ = swapBytes32(rawZ);
+                    }
+
+                    float x, y, z;
+                    memcpy(&x, &rawX, 4);
+                    memcpy(&y, &rawY, 4);
+                    memcpy(&z, &rawZ, 4);
+
+                    model.addNode(nid, glm::vec3(x, y, z));
+                    parsed++;
+                }
+                if (parsed > 0) {
+                    qDebug("parseNastranOp2: embedded scan found %d GRID nodes (key2=%d, offset=%d)",
+                           parsed, key2, offset);
+                }
+            }
+        }
+    }
+
     if (progress) progress(85);
 
     qDebug("parseNastranOp2: nodes=%d, elements=%d",
