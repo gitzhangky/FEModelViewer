@@ -56,6 +56,10 @@ class FERENDER_EXPORT MyClass { ... };
       → 鼠标拾取 → 映射表反查 FEM 实体
 ```
 
+## API 文档同步
+
+每次新增、修改或删除 FERender 公开 API（带 `FERENDER_EXPORT` 的类/结构体/函数，包括 GLWidget、FEField、FEMeshConverter、Camera 等渲染接口的公开方法），**必须同步更新** `docs/FERender_API.md`。
+
 ## 提交规范
 
 - 中文提交信息，格式：`类别: 简要描述`

@@ -37,6 +37,27 @@ void FEScalarField::computeRange(float& minVal, float& maxVal) const {
     }
 }
 
+/**
+ * @brief 计算标量场的值域范围，同时返回极值对应的 ID
+ */
+void FEScalarField::computeRangeWithIds(float& minVal, float& maxVal, int& minId, int& maxId) const {
+    if (values.empty()) {
+        minVal = 0.0f; maxVal = 0.0f;
+        minId = -1; maxId = -1;
+        return;
+    }
+
+    minVal =  std::numeric_limits<float>::max();
+    maxVal = -std::numeric_limits<float>::max();
+    minId = -1;
+    maxId = -1;
+
+    for (const auto& [id, val] : values) {
+        if (val < minVal) { minVal = val; minId = id; }
+        if (val > maxVal) { maxVal = val; maxId = id; }
+    }
+}
+
 // ════════════════════════════════════════════════════════════
 // FEVectorField 方法
 // ════════════════════════════════════════════════════════════

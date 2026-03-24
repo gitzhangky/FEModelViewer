@@ -206,9 +206,10 @@ MainWindow::MainWindow() {
         int vertCount = static_cast<int>(rd.mesh.vertices.size() / 6);
         if (vertCount == 0) return;
 
-        // 获取色谱范围
+        // 获取色谱范围及极值 ID
         float minVal = 0, maxVal = 1;
-        field.computeRange(minVal, maxVal);
+        int minId = -1, maxId = -1;
+        field.computeRangeWithIds(minVal, maxVal, minId, maxId);
 
         const int numBands = 9;
 
@@ -274,6 +275,7 @@ MainWindow::MainWindow() {
         glWidget_->setColorBarVisible(true);
         glWidget_->setColorBarRange(minVal, maxVal);
         glWidget_->setColorBarTitle(title);
+        glWidget_->setColorBarExtremes(minId, minVal, maxId, maxVal);
     });
 
     // 清除云图 → 恢复部件颜色
@@ -385,6 +387,11 @@ void MainWindow::browseModelFile() {
     if (!path.isEmpty()) {
         modelPathEdit_->setText(path);
         settings.setValue("lastOpenDir", QFileInfo(path).absolutePath());
+
+        // OP2 文件同时包含几何和结果，自动填充结果路径
+        if (QFileInfo(path).suffix().toLower() == "op2") {
+            resultPathEdit_->setText(path);
+        }
     }
 }
 

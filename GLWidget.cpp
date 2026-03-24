@@ -34,6 +34,12 @@ public:
     void setRange(float mn, float mx) { min_ = mn; max_ = mx; update(); }
     void setTitle(const QString& t) { title_ = t; update(); }
     void setTextColor(const QColor& c) { textColor_ = c; update(); }
+    void setExtremes(int minId, float minVal, int maxId, float maxVal) {
+        minId_ = minId; minVal_ = minVal;
+        maxId_ = maxId; maxVal_ = maxVal;
+        hasExtremes_ = true;
+        update();
+    }
 
 protected:
     void paintEvent(QPaintEvent*) override {
@@ -93,6 +99,21 @@ protected:
             painter.drawText(labelRect, Qt::AlignLeft | Qt::AlignVCenter, formatValue(val));
         }
 
+        // 色标下方显示最大/最小值及其 ID
+        if (hasExtremes_) {
+            int infoY = margin + barH + 10;
+            QFont infoFont("Consolas", 0);
+            infoFont.setPixelSize(12);
+            painter.setFont(infoFont);
+            painter.setPen(textColor_);
+
+            QString maxLine = QString("Max: %1 (ID: %2)").arg(formatValue(maxVal_)).arg(maxId_);
+            QString minLine = QString("Min: %1 (ID: %2)").arg(formatValue(minVal_)).arg(minId_);
+
+            painter.drawText(margin, infoY, 200, 16, Qt::AlignLeft | Qt::AlignVCenter, maxLine);
+            painter.drawText(margin, infoY + 18, 200, 16, Qt::AlignLeft | Qt::AlignVCenter, minLine);
+        }
+
         painter.end();
     }
 
@@ -100,6 +121,9 @@ private:
     float min_ = 0.0f, max_ = 1.0f;
     QString title_ = "Result";
     QColor textColor_{30, 30, 30};
+    bool hasExtremes_ = false;
+    int minId_ = -1, maxId_ = -1;
+    float minVal_ = 0.0f, maxVal_ = 0.0f;
 };
 
 // ============================================================
@@ -1833,6 +1857,11 @@ void GLWidget::setColorBarRange(float min, float max) {
 void GLWidget::setColorBarTitle(const QString& title) {
     colorBarTitle_ = title;
     if (colorBarOverlay_) colorBarOverlay_->setTitle(title);
+    update();
+}
+
+void GLWidget::setColorBarExtremes(int minId, float minVal, int maxId, float maxVal) {
+    if (colorBarOverlay_) colorBarOverlay_->setExtremes(minId, minVal, maxId, maxVal);
     update();
 }
 

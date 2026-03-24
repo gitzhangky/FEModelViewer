@@ -370,6 +370,9 @@ struct FEScalarField {
 
     // 计算值域范围
     void computeRange(float& minVal, float& maxVal) const;
+
+    // 计算值域范围，同时返回极值对应的 ID
+    void computeRangeWithIds(float& minVal, float& maxVal, int& minId, int& maxId) const;
 };
 ```
 
@@ -830,6 +833,7 @@ explicit GLWidget(QWidget* parent = nullptr);
 | `void setColorBarVisible(bool visible)` | 显示/隐藏色标 |
 | `void setColorBarRange(float min, float max)` | 设置色标值域范围 |
 | `void setColorBarTitle(const QString& title)` | 设置色标标题 |
+| `void setColorBarExtremes(int minId, float minVal, int maxId, float maxVal)` | 设置色标极值信息（最大/最小值及对应 ID，显示在色标下方） |
 
 #### 拾取映射表
 
@@ -1022,9 +1026,10 @@ for (auto& [id, node] : model.nodes) {
     stress.values[id] = /* 从求解器获取 */ ;
 }
 
-// 获取值域
+// 获取值域及极值 ID
 float sMin, sMax;
-stress.computeRange(sMin, sMax);
+int sMinId, sMaxId;
+stress.computeRangeWithIds(sMin, sMax, sMinId, sMaxId);
 
 // 方式 A：CPU 颜色映射（通过 FEMeshConverter）
 ColorMap cmap;
@@ -1052,6 +1057,7 @@ viewer.setVertexScalars(scalars, sMin, sMax, 12);
 viewer.setColorBarVisible(true);
 viewer.setColorBarRange(sMin, sMax);
 viewer.setColorBarTitle("Von Mises Stress [MPa]");
+viewer.setColorBarExtremes(sMinId, sMin, sMaxId, sMax);  // 色标下方显示极值 ID
 ```
 
 ### 6.3 部件可见性控制

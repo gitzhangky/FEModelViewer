@@ -66,6 +66,15 @@ struct FERENDER_EXPORT FEScalarField {
      * @param[out] maxVal 最大值
      */
     void computeRange(float& minVal, float& maxVal) const;
+
+    /**
+     * @brief 计算场的值域范围，同时返回极值对应的 ID
+     * @param[out] minVal 最小值
+     * @param[out] maxVal 最大值
+     * @param[out] minId  最小值对应的节点/单元 ID
+     * @param[out] maxId  最大值对应的节点/单元 ID
+     */
+    void computeRangeWithIds(float& minVal, float& maxVal, int& minId, int& maxId) const;
 };
 
 /**
