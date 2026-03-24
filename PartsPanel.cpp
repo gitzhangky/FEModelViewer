@@ -4,6 +4,7 @@
  */
 
 #include "PartsPanel.h"
+#include "Theme.h"
 
 #include <QVBoxLayout>
 #include <QHeaderView>
@@ -31,33 +32,33 @@ PartsPanel::PartsPanel(QWidget* parent) : QWidget(parent) {
     connect(tree_, &QTreeWidget::itemChanged, this, &PartsPanel::onItemChanged);
     connect(tree_, &QTreeWidget::itemSelectionChanged, this, &PartsPanel::onSelectionChanged);
 
-    setStyleSheet(
-        "QWidget { background: #1e1e2e; color: #cdd6f4; }"
+    // 默认主题在 MainWindow 中统一调用 applyTheme() 设置
+}
 
+void PartsPanel::applyTheme(const Theme& t) {
+    setStyleSheet(QString(
+        "QWidget { background: %1; color: %2; }"
         "QTreeWidget {"
-        "  background: #181825; border: 1px solid #313244;"
+        "  background: %3; border: 1px solid %4;"
         "  border-radius: 6px; outline: none; }"
         "QTreeWidget::item {"
         "  padding: 3px 2px; border-radius: 3px; }"
-        "QTreeWidget::item:hover { background: #313244; }"
-        "QTreeWidget::item:selected { background: #45475a; }"
-
+        "QTreeWidget::item:hover { background: %4; }"
+        "QTreeWidget::item:selected { background: %5; }"
         "QHeaderView::section {"
-        "  background: #181825; border: none; border-bottom: 1px solid #313244;"
-        "  padding: 5px 8px; font-weight: bold; font-size: 12px; color: #89b4fa; }"
-
+        "  background: %3; border: none; border-bottom: 1px solid %4;"
+        "  padding: 5px 8px; font-weight: bold; font-size: 12px; color: %6; }"
         "QTreeWidget::indicator {"
         "  width: 13px; height: 13px; border-radius: 3px;"
-        "  border: 1px solid #585b70; background: #313244; }"
-        "QTreeWidget::indicator:checked { background: #89b4fa; border-color: #89b4fa; }"
-        "QTreeWidget::indicator:indeterminate { background: #45475a; border-color: #89b4fa; }"
-
+        "  border: 1px solid %7; background: %4; }"
+        "QTreeWidget::indicator:checked { background: %6; border-color: %6; }"
+        "QTreeWidget::indicator:indeterminate { background: %5; border-color: %6; }"
         "QScrollBar:vertical {"
-        "  background: #181825; width: 8px; border-radius: 4px; margin: 0; }"
+        "  background: %3; width: 8px; border-radius: 4px; margin: 0; }"
         "QScrollBar::handle:vertical {"
-        "  background: #45475a; border-radius: 4px; min-height: 20px; }"
+        "  background: %5; border-radius: 4px; min-height: 20px; }"
         "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }"
-    );
+    ).arg(t.base, t.text, t.mantle, t.surface0, t.surface1, t.blue, t.surface2));
 }
 
 QPixmap PartsPanel::makeColorSwatch(const glm::vec3& color, int size) const {

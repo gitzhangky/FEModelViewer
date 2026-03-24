@@ -9,18 +9,10 @@
 #include <QVBoxLayout>
 #include <QLabel>
 #include <QTimer>
+#include "Theme.h"
 
 MonitorPanel::MonitorPanel(QWidget* parent) : QGroupBox("监控", parent) {
-    // 监控面板样式（Catppuccin Mocha 配色，标题用粉红色与控制面板区分）
-    setStyleSheet(
-        "QGroupBox {"
-        "  background: #181825; border: 1px solid #313244;"
-        "  border-radius: 6px; margin-top: 12px; padding: 16px 8px 8px 8px;"
-        "  font-weight: bold; font-size: 12px; color: #a6adc8; }"
-        "QGroupBox::title {"
-        "  subcontrol-origin: margin; left: 10px; padding: 0 4px;"
-        "  color: #f38ba8; }"   // 粉红色标题，与控制面板的蓝色标题形成视觉区分
-    );
+    // 默认主题在 MainWindow 中统一调用 applyTheme() 设置
 
     auto* layout = new QVBoxLayout(this);
     layout->setSpacing(4);
@@ -67,7 +59,20 @@ QLabel* MonitorPanel::makeRow(QVBoxLayout* layout, const QString& label) {
     // 创建等宽字体的信息标签
     auto* lbl = new QLabel(label + ": --");
     lbl->setWordWrap(true);  // 允许换行（GPU 型号可能较长）
-    lbl->setStyleSheet("color: #9399b2; font-size: 11px; font-family: monospace;");
+    lbl->setStyleSheet("font-size: 11px; font-family: monospace;");
     layout->addWidget(lbl);
     return lbl;
+}
+
+void MonitorPanel::applyTheme(const Theme& t) {
+    setStyleSheet(QString(
+        "QGroupBox {"
+        "  background: %1; border: 1px solid %2;"
+        "  border-radius: 6px; margin-top: 12px; padding: 16px 8px 8px 8px;"
+        "  font-weight: bold; font-size: 12px; color: %3; }"
+        "QGroupBox::title {"
+        "  subcontrol-origin: margin; left: 10px; padding: 0 4px;"
+        "  color: %4; }"
+        "QLabel { color: %5; font-size: 11px; font-family: monospace; }"
+    ).arg(t.mantle, t.surface0, t.subtext0, t.red, t.overlay2));
 }

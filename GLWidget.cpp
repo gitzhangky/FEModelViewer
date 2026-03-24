@@ -4,6 +4,7 @@
  */
 
 #include "GLWidget.h"
+#include "Theme.h"
 
 #include <QMouseEvent>
 #include <QWheelEvent>
@@ -32,6 +33,7 @@ public:
 
     void setRange(float mn, float mx) { min_ = mn; max_ = mx; update(); }
     void setTitle(const QString& t) { title_ = t; update(); }
+    void setTextColor(const QColor& c) { textColor_ = c; update(); }
 
 protected:
     void paintEvent(QPaintEvent*) override {
@@ -86,7 +88,7 @@ protected:
             painter.setPen(QPen(QColor(0, 0, 0), 1));
             painter.drawLine(margin, y, margin + barW, y);
 
-            painter.setPen(Qt::white);
+            painter.setPen(textColor_);
             QRectF labelRect(labelX, y - labelTextH / 2, 120, labelTextH);
             painter.drawText(labelRect, Qt::AlignLeft | Qt::AlignVCenter, formatValue(val));
         }
@@ -97,6 +99,7 @@ protected:
 private:
     float min_ = 0.0f, max_ = 1.0f;
     QString title_ = "Result";
+    QColor textColor_{30, 30, 30};
 };
 
 // ============================================================
@@ -490,15 +493,14 @@ void GLWidget::initializeGL() {
     bgVao_.create();
     bgVbo_.create();
     {
-        // 全屏四边形：pos(2) + color(3)，上深下浅
+        // 全屏四边形：pos(2) + color(3)，使用当前主题颜色
         float bgData[] = {
-            // x,   y,    r,     g,     b
-            -1, -1,  0.68f, 0.74f, 0.82f,  // 左下（浅）
-             1, -1,  0.68f, 0.74f, 0.82f,  // 右下（浅）
-             1,  1,  0.38f, 0.45f, 0.58f,  // 右上（深）
-            -1, -1,  0.68f, 0.74f, 0.82f,  // 左下（浅）
-             1,  1,  0.38f, 0.45f, 0.58f,  // 右上（深）
-            -1,  1,  0.38f, 0.45f, 0.58f,  // 左上（深）
+            -1, -1,  bgBotColor_[0], bgBotColor_[1], bgBotColor_[2],
+             1, -1,  bgBotColor_[0], bgBotColor_[1], bgBotColor_[2],
+             1,  1,  bgTopColor_[0], bgTopColor_[1], bgTopColor_[2],
+            -1, -1,  bgBotColor_[0], bgBotColor_[1], bgBotColor_[2],
+             1,  1,  bgTopColor_[0], bgTopColor_[1], bgTopColor_[2],
+            -1,  1,  bgTopColor_[0], bgTopColor_[1], bgTopColor_[2],
         };
         bgVao_.bind();
         bgVbo_.bind();
@@ -1801,8 +1803,8 @@ void GLWidget::drawColorBar(QPainter& painter) {
             ip.setPen(QPen(QColor(0, 0, 0), 1));
             ip.drawLine(0, y, barW, y);
 
-            // 白色数值标签
-            ip.setPen(Qt::white);
+            // 数值标签（颜色随主题变化）
+            ip.setPen(barTextColor_);
             QRectF labelRect(labelX, y - labelTextH / 2, 120, labelTextH);
             ip.drawText(labelRect, Qt::AlignLeft | Qt::AlignVCenter, formatValue(val));
         }
@@ -1831,6 +1833,34 @@ void GLWidget::setColorBarRange(float min, float max) {
 void GLWidget::setColorBarTitle(const QString& title) {
     colorBarTitle_ = title;
     if (colorBarOverlay_) colorBarOverlay_->setTitle(title);
+    update();
+}
+
+void GLWidget::applyTheme(const Theme& theme) {
+    // 更新色标文字颜色
+    barTextColor_ = QColor(theme.barTextR, theme.barTextG, theme.barTextB);
+    if (colorBarOverlay_) colorBarOverlay_->setTextColor(barTextColor_);
+
+    // 存储背景颜色（initializeGL 会使用）
+    bgTopColor_[0] = theme.bgTopR; bgTopColor_[1] = theme.bgTopG; bgTopColor_[2] = theme.bgTopB;
+    bgBotColor_[0] = theme.bgBotR; bgBotColor_[1] = theme.bgBotG; bgBotColor_[2] = theme.bgBotB;
+
+    // 更新渐变背景 VBO（仅在 GL 已初始化时）
+    if (bgVbo_.isCreated()) {
+        float bgData[] = {
+            -1, -1,  theme.bgBotR, theme.bgBotG, theme.bgBotB,
+             1, -1,  theme.bgBotR, theme.bgBotG, theme.bgBotB,
+             1,  1,  theme.bgTopR, theme.bgTopG, theme.bgTopB,
+            -1, -1,  theme.bgBotR, theme.bgBotG, theme.bgBotB,
+             1,  1,  theme.bgTopR, theme.bgTopG, theme.bgTopB,
+            -1,  1,  theme.bgTopR, theme.bgTopG, theme.bgTopB,
+        };
+        makeCurrent();
+        bgVbo_.bind();
+        bgVbo_.write(0, bgData, sizeof(bgData));
+        bgVbo_.release();
+        doneCurrent();
+    }
     update();
 }
 

@@ -61,11 +61,10 @@ MainWindow::MainWindow() {
     setupToolBar();
 
     // ── 左侧边栏 ──
-    auto* sidebar = new QWidget;
-    sidebar->setMinimumWidth(200);
-    sidebar->setStyleSheet("QWidget { background: #1e1e2e; }");
+    sidebar_ = new QWidget;
+    sidebar_->setMinimumWidth(200);
 
-    auto* sidebarLayout = new QVBoxLayout(sidebar);
+    auto* sidebarLayout = new QVBoxLayout(sidebar_);
     sidebarLayout->setContentsMargins(0, 0, 0, 0);
     sidebarLayout->setSpacing(0);
 
@@ -85,11 +84,10 @@ MainWindow::MainWindow() {
     // ── 右侧结果面板 ──
     resultPanel_ = new ResultPanel;
 
-    auto* rightSidebar = new QWidget;
-    rightSidebar->setMinimumWidth(180);
-    rightSidebar->setMaximumWidth(280);
-    rightSidebar->setStyleSheet("QWidget { background: #1e1e2e; }");
-    auto* rightLayout = new QVBoxLayout(rightSidebar);
+    rightSidebar_ = new QWidget;
+    rightSidebar_->setMinimumWidth(180);
+    rightSidebar_->setMaximumWidth(280);
+    auto* rightLayout = new QVBoxLayout(rightSidebar_);
     rightLayout->setContentsMargins(0, 0, 0, 0);
     rightLayout->setSpacing(0);
     rightLayout->addWidget(resultPanel_);
@@ -97,39 +95,29 @@ MainWindow::MainWindow() {
     // ── 水平 Splitter: 左侧边栏 | GL视口 | 右侧边栏 ──
     auto* hSplitter = new QSplitter(Qt::Horizontal);
     hSplitter->setChildrenCollapsible(false);
-    hSplitter->addWidget(sidebar);
+    hSplitter->addWidget(sidebar_);
     hSplitter->addWidget(glWidget_);
-    hSplitter->addWidget(rightSidebar);
+    hSplitter->addWidget(rightSidebar_);
     hSplitter->setSizes({240, 640, 220});
     hSplitter->setStretchFactor(0, 0);
     hSplitter->setStretchFactor(1, 1);
     hSplitter->setStretchFactor(2, 0);
 
-    hSplitter->setStyleSheet(
-        "QSplitter::handle {"
-        "  background: #313244; width: 3px; }"
-        "QSplitter::handle:hover {"
-        "  background: #89b4fa; }"
-    );
+    hSplitter->setObjectName("hSplitter");
 
     // ── 底部文件导入面板 ──
-    auto* filePanel = createFilePanel();
+    filePanel_ = createFilePanel();
 
     // ── 垂直 Splitter: 上方主区域 + 下方文件面板 ──
     auto* vSplitter = new QSplitter(Qt::Vertical);
     vSplitter->setChildrenCollapsible(false);
     vSplitter->addWidget(hSplitter);
-    vSplitter->addWidget(filePanel);
+    vSplitter->addWidget(filePanel_);
     // 文件面板固定高度，主区域自适应
     vSplitter->setStretchFactor(0, 1);
     vSplitter->setStretchFactor(1, 0);
 
-    vSplitter->setStyleSheet(
-        "QSplitter::handle {"
-        "  background: #313244; height: 3px; }"
-        "QSplitter::handle:hover {"
-        "  background: #89b4fa; }"
-    );
+    vSplitter->setObjectName("vSplitter");
 
     setCentralWidget(vSplitter);
 
@@ -186,8 +174,8 @@ MainWindow::MainWindow() {
         statusLabel_->setVisible(true);
         statusLabel_->setText("  " + message);
         statusLabel_->setStyleSheet(success
-            ? "color: #a6e3a1; font-weight: bold;"
-            : "color: #f38ba8; font-weight: bold;");
+            ? QString("color: %1; font-weight: bold;").arg(currentTheme_.green)
+            : QString("color: %1; font-weight: bold;").arg(currentTheme_.red));
     });
 
     connect(partsPanel_, &PartsPanel::partVisibilityChanged,
@@ -295,6 +283,10 @@ MainWindow::MainWindow() {
         glWidget_->setColorBarVisible(false);
         glWidget_->update();
     });
+
+    // ── 初始主题（默认深色）──
+    currentTheme_ = Theme::dark();
+    applyTheme(currentTheme_);
 }
 
 // ════════════════════════════════════════════════════════════
@@ -353,41 +345,8 @@ QWidget* MainWindow::createFilePanel() {
 
     mainLayout->addLayout(resultRow);
 
-    // ── 样式 ──
-    panel->setStyleSheet(
-        "QWidget { background: #11111b; color: #cdd6f4; }"
-
-        "QLabel {"
-        "  font-size: 12px; color: #89b4fa; font-weight: bold; }"
-
-        "QLineEdit {"
-        "  background: #1e1e2e; border: 1px solid #45475a; border-radius: 4px;"
-        "  padding: 4px 8px; font-size: 12px; color: #cdd6f4;"
-        "  selection-background-color: #45475a; }"
-        "QLineEdit:focus {"
-        "  border-color: #89b4fa; }"
-        "QLineEdit[readOnly=\"true\"] {"
-        "  color: #9399b2; }"
-
-        "QPushButton {"
-        "  background: #313244; color: #cdd6f4; border: 1px solid #45475a;"
-        "  border-radius: 4px; padding: 4px 8px; font-size: 12px; }"
-        "QPushButton:hover {"
-        "  background: #45475a; border-color: #89b4fa; }"
-        "QPushButton:pressed {"
-        "  background: #585b70; }"
-    );
-
-    // 给应用按钮加个醒目样式
-    applyBtn->setStyleSheet(
-        "QPushButton {"
-        "  background: #89b4fa; color: #1e1e2e; border: none;"
-        "  border-radius: 4px; padding: 4px 8px; font-size: 12px; font-weight: bold; }"
-        "QPushButton:hover {"
-        "  background: #b4d0fb; }"
-        "QPushButton:pressed {"
-        "  background: #74a8f7; }"
-    );
+    // 样式在 applyTheme() 中统一设置
+    filePanelApplyBtn_ = applyBtn;
 
     // ── 连接 ──
     connect(modelBrowseBtn, &QPushButton::clicked, this, &MainWindow::browseModelFile);
@@ -477,7 +436,8 @@ void MainWindow::applyFiles() {
             if (ok) {
                 emit feModelPanel_->resultsLoaded(results);
                 statusLabel_->setText("  结果加载完成");
-                statusLabel_->setStyleSheet("color: #a6e3a1; font-weight: bold;");
+                statusLabel_->setStyleSheet(
+                    QString("color: %1; font-weight: bold;").arg(currentTheme_.green));
             } else {
                 QMessageBox::warning(this, "结果文件",
                     QString("未能从 OP2 文件中解析到结果数据。\n\n文件: %1").arg(resultPath));
@@ -494,56 +454,48 @@ void MainWindow::applyFiles() {
 // ════════════════════════════════════════════════════════════
 
 void MainWindow::setupToolBar() {
-    auto* toolbar = addToolBar("主工具栏");
-    toolbar->setMovable(false);
-    toolbar->setIconSize(QSize(18, 18));
-    toolbar->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    toolbar_ = addToolBar("主工具栏");
+    toolbar_->setMovable(false);
+    toolbar_->setIconSize(QSize(18, 18));
+    toolbar_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
 
-    toolbar->setStyleSheet(
-        "QToolBar {"
-        "  background: #181825; border-bottom: 1px solid #313244;"
-        "  padding: 2px 4px; spacing: 2px; }"
-        "QToolButton {"
-        "  background: transparent; color: #cdd6f4;"
-        "  border: 1px solid transparent; border-radius: 4px;"
-        "  padding: 4px 10px; font-size: 12px; }"
-        "QToolButton:hover {"
-        "  background: #313244; border-color: #45475a; }"
-        "QToolButton:pressed {"
-        "  background: #45475a; }"
-        "QToolButton:checked {"
-        "  background: #45475a; border-color: #89b4fa; color: #89b4fa; }"
-        "QToolBar::separator {"
-        "  width: 1px; background: #313244; margin: 4px 6px; }"
-    );
-
-    auto* clearAction = toolbar->addAction("清空");
+    auto* clearAction = toolbar_->addAction("清空");
     clearAction->setToolTip("清空当前模型");
 
-    toolbar->addSeparator();
+    toolbar_->addSeparator();
 
     // ── 拾取模式 ──
     pickGroup_ = new QActionGroup(this);
     pickGroup_->setExclusive(true);
 
-    auto* nodeAction = toolbar->addAction("节点");
+    auto* nodeAction = toolbar_->addAction("节点");
     nodeAction->setCheckable(true);
     nodeAction->setChecked(true);
     nodeAction->setToolTip("节点拾取模式");
     nodeAction->setData(static_cast<int>(PickMode::Node));
     pickGroup_->addAction(nodeAction);
 
-    auto* elemAction = toolbar->addAction("单元");
+    auto* elemAction = toolbar_->addAction("单元");
     elemAction->setCheckable(true);
     elemAction->setToolTip("单元拾取模式");
     elemAction->setData(static_cast<int>(PickMode::Element));
     pickGroup_->addAction(elemAction);
 
-    auto* partAction = toolbar->addAction("部件");
+    auto* partAction = toolbar_->addAction("部件");
     partAction->setCheckable(true);
     partAction->setToolTip("部件拾取模式");
     partAction->setData(static_cast<int>(PickMode::Part));
     pickGroup_->addAction(partAction);
+
+    toolbar_->addSeparator();
+
+    // ── 主题切换 ──
+    themeAction_ = toolbar_->addAction("浅色");
+    themeAction_->setToolTip("切换深色/浅色主题");
+    connect(themeAction_, &QAction::triggered, this, [this]() {
+        currentTheme_ = currentTheme_.isDark ? Theme::light() : Theme::dark();
+        applyTheme(currentTheme_);
+    });
 
     // ── 连接 ──
     connect(clearAction, &QAction::triggered, this, [this]() {
@@ -552,7 +504,8 @@ void MainWindow::setupToolBar() {
         progressText_->setVisible(false);
         statusLabel_->setVisible(true);
         statusLabel_->setText("  就绪");
-        statusLabel_->setStyleSheet("color: #a6e3a1; font-weight: bold;");
+        statusLabel_->setStyleSheet(
+            QString("color: %1; font-weight: bold;").arg(currentTheme_.green));
     });
 
     connect(pickGroup_, &QActionGroup::triggered, this, [this](QAction* action) {
@@ -568,21 +521,12 @@ void MainWindow::setupToolBar() {
 void MainWindow::setupStatusBar() {
     auto* sb = statusBar();
     sb->setFixedHeight(26);
-    sb->setStyleSheet(
-        "QStatusBar {"
-        "  background: #11111b; border-top: 1px solid #313244;"
-        "  font-size: 11px; font-family: monospace; }"
-        "QStatusBar::item { border: none; }"
-    );
-
     // 左侧：状态文字
     statusLabel_ = new QLabel("  就绪");
-    statusLabel_->setStyleSheet("color: #a6e3a1; font-weight: bold;");
     sb->addWidget(statusLabel_, 1);
 
     // 右侧：进度文字 + 进度条（默认隐藏）
     progressText_ = new QLabel;
-    progressText_->setStyleSheet("color: #89b4fa; font-size: 11px; padding-right: 6px;");
     progressText_->setVisible(false);
     sb->addPermanentWidget(progressText_);
 
@@ -593,17 +537,101 @@ void MainWindow::setupStatusBar() {
     statusProgress_->setTextVisible(true);
     statusProgress_->setFormat("%p%");
     statusProgress_->setVisible(false);
-    statusProgress_->setStyleSheet(
+    sb->addPermanentWidget(statusProgress_);
+}
+
+void MainWindow::applyTheme(const Theme& t) {
+    // 主题按钮文字更新
+    themeAction_->setText(t.isDark ? "浅色" : "深色");
+
+    // 侧边栏
+    sidebar_->setStyleSheet(QString("QWidget { background: %1; }").arg(t.base));
+    rightSidebar_->setStyleSheet(QString("QWidget { background: %1; }").arg(t.base));
+
+    // Splitter
+    QString splitterH = QString(
+        "QSplitter::handle { background: %1; width: 3px; }"
+        "QSplitter::handle:hover { background: %2; }").arg(t.surface0, t.blue);
+    QString splitterV = QString(
+        "QSplitter::handle { background: %1; height: 3px; }"
+        "QSplitter::handle:hover { background: %2; }").arg(t.surface0, t.blue);
+    if (auto* hs = findChild<QSplitter*>("hSplitter")) hs->setStyleSheet(splitterH);
+    if (auto* vs = findChild<QSplitter*>("vSplitter")) vs->setStyleSheet(splitterV);
+
+    // 工具栏
+    toolbar_->setStyleSheet(QString(
+        "QToolBar {"
+        "  background: %1; border-bottom: 1px solid %2;"
+        "  padding: 2px 4px; spacing: 2px; }"
+        "QToolButton {"
+        "  background: transparent; color: %3;"
+        "  border: 1px solid transparent; border-radius: 4px;"
+        "  padding: 4px 10px; font-size: 12px; }"
+        "QToolButton:hover {"
+        "  background: %2; border-color: %4; }"
+        "QToolButton:pressed {"
+        "  background: %4; }"
+        "QToolButton:checked {"
+        "  background: %4; border-color: %5; color: %5; }"
+        "QToolBar::separator {"
+        "  width: 1px; background: %2; margin: 4px 6px; }"
+    ).arg(t.mantle, t.surface0, t.text, t.surface1, t.blue));
+
+    // 状态栏
+    statusBar()->setStyleSheet(QString(
+        "QStatusBar {"
+        "  background: %1; border-top: 1px solid %2;"
+        "  font-size: 11px; font-family: monospace; }"
+        "QStatusBar::item { border: none; }"
+    ).arg(t.crust, t.surface0));
+
+    statusLabel_->setStyleSheet(
+        QString("color: %1; font-weight: bold;").arg(t.green));
+    progressText_->setStyleSheet(
+        QString("color: %1; font-size: 11px; padding-right: 6px;").arg(t.blue));
+    statusProgress_->setStyleSheet(QString(
         "QProgressBar {"
-        "  border: 1px solid #45475a; border-radius: 6px;"
-        "  background: #1e1e2e; text-align: center;"
-        "  color: #cdd6f4; font-size: 10px; }"
+        "  border: 1px solid %1; border-radius: 6px;"
+        "  background: %2; text-align: center;"
+        "  color: %3; font-size: 10px; }"
         "QProgressBar::chunk {"
         "  background: qlineargradient(x1:0, y1:0, x2:1, y2:0,"
-        "    stop:0 #89b4fa, stop:1 #94e2d5);"
+        "    stop:0 %4, stop:1 %5);"
         "  border-radius: 5px; }"
-    );
-    sb->addPermanentWidget(statusProgress_);
+    ).arg(t.surface1, t.base, t.text, t.blue, t.teal));
+
+    // 底部文件面板
+    filePanel_->setStyleSheet(QString(
+        "QWidget { background: %1; color: %2; }"
+        "QLabel { font-size: 12px; color: %3; font-weight: bold; }"
+        "QLineEdit {"
+        "  background: %4; border: 1px solid %5; border-radius: 4px;"
+        "  padding: 4px 8px; font-size: 12px; color: %2;"
+        "  selection-background-color: %5; }"
+        "QLineEdit:focus { border-color: %3; }"
+        "QLineEdit[readOnly=\"true\"] { color: %6; }"
+        "QPushButton {"
+        "  background: %7; color: %2; border: 1px solid %5;"
+        "  border-radius: 4px; padding: 4px 8px; font-size: 12px; }"
+        "QPushButton:hover { background: %5; border-color: %3; }"
+        "QPushButton:pressed { background: %8; }"
+    ).arg(t.crust, t.text, t.blue, t.base, t.surface1,
+          t.overlay2, t.surface0, t.surface2));
+
+    filePanelApplyBtn_->setStyleSheet(QString(
+        "QPushButton {"
+        "  background: %1; color: %2; border: none;"
+        "  border-radius: 4px; padding: 4px 8px; font-size: 12px; font-weight: bold; }"
+        "QPushButton:hover { background: %3; }"
+        "QPushButton:pressed { background: %4; }"
+    ).arg(t.blue, t.btnText, t.blueHover, t.bluePressed));
+
+    // 各面板
+    feModelPanel_->applyTheme(t);
+    partsPanel_->applyTheme(t);
+    monitorPanel_->applyTheme(t);
+    resultPanel_->applyTheme(t);
+    glWidget_->applyTheme(t);
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {

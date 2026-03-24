@@ -7,6 +7,7 @@
 
 #include "FEModelPanel.h"
 #include "FEMeshConverter.h"
+#include "Theme.h"
 
 #include <QVBoxLayout>
 #include <QPushButton>
@@ -45,20 +46,21 @@ FEModelPanel::FEModelPanel(QWidget* parent) : QWidget(parent) {
     layout->addWidget(createSelectionGroup());
     layout->addStretch();
 
-    // ── 统一样式表（Catppuccin Mocha 配色）──
-    setStyleSheet(
-        "QWidget { background: #1e1e2e; color: #cdd6f4; }"
+    // 默认主题在 MainWindow 中统一调用 applyTheme() 设置
+}
 
+void FEModelPanel::applyTheme(const Theme& t) {
+    setStyleSheet(QString(
+        "QWidget { background: %1; color: %2; }"
         "QGroupBox {"
-        "  background: #181825; border: 1px solid #313244;"
+        "  background: %3; border: 1px solid %4;"
         "  border-radius: 6px; margin-top: 12px; padding: 16px 8px 8px 8px;"
-        "  font-weight: bold; font-size: 12px; color: #a6adc8; }"
+        "  font-weight: bold; font-size: 12px; color: %5; }"
         "QGroupBox::title {"
         "  subcontrol-origin: margin; left: 10px; padding: 0 4px;"
-        "  color: #a6e3a1; }"
-
-        "QLabel { font-size: 12px; color: #bac2de; }"
-    );
+        "  color: %6; }"
+        "QLabel { font-size: 12px; color: %7; }"
+    ).arg(t.base, t.text, t.mantle, t.surface0, t.subtext0, t.green, t.subtext1));
 }
 
 // ════════════════════════════════════════════════════════════
@@ -1007,14 +1009,55 @@ bool FEModelPanel::parseNastranOp2(const QString& filePath, FEModel& model,
         }
     };
 
-    // ── 跳过文件头（8 个 Fortran 记录）──
-    // marker(3) + date + marker(7) + label + marker(2) + OS + marker(-1) + marker(0)
-    for (int i = 0; i < 8; ++i)
-        readFortranRecord();
+    // 读取缓冲区中的 float/int（处理字节序）
+    auto readFloat = [&](const char* ptr) -> float {
+        quint32 raw;
+        memcpy(&raw, ptr, 4);
+        if (needSwap) raw = swapBytes32(raw);
+        float val;
+        memcpy(&val, &raw, 4);
+        return val;
+    };
+
+    auto readInt = [&](const char* ptr) -> qint32 {
+        quint32 raw;
+        memcpy(&raw, ptr, 4);
+        if (needSwap) raw = swapBytes32(raw);
+        return static_cast<qint32>(raw);
+    };
+
+    // ── 跳过文件头 ──
+    // 标准 Nastran: marker(3) + date + marker(7) + label + [marker(N)+data]... + marker(-1) + marker(0)
+    // MSC 2014+: marker(-1) 之前可能有额外记录
+    // 非标准（如 Autodesk）: 无文件头，直接以表名开始
+    {
+        qint32 firstVal = readMarker();
+        if (firstVal == 3) {
+            // 标准文件头：marker(3) 已读，继续读 date + marker(7) + label
+            readFortranRecord(); // date record
+            readMarker();        // marker(7)
+            readFortranRecord(); // label record
+            // 读取剩余 header 记录对，直到 marker(-1) 表示 header 结束
+            while (!file.atEnd()) {
+                qint32 m = readMarker();
+                if (m == -1) break;
+                readFortranRecord(); // 跳过数据记录
+            }
+            readMarker(); // marker(0) — header 终止标记
+        } else {
+            // 非标准格式：回退到文件开头，让表循环处理
+            file.seek(0);
+        }
+    }
 
     // ── 收集数据 ──
     std::set<int> propertyIds;
     std::map<int, int> elemPid;
+
+    // BGPDT 暂存：(X, Y, Z) 按内部 ID 顺序
+    std::vector<glm::vec3> bgpdtCoords;
+    // EQEXIN 映射：内部 ID → 外部 NID
+    std::map<int, int> internalToExternal;
 
     // ── 表级导航循环 ──
     while (!file.atEnd()) {
@@ -1037,10 +1080,12 @@ bool FEModelPanel::parseNastranOp2(const QString& filePath, FEModel& model,
         qDebug("parseNastranOp2: table '%s' at pos %lld", qPrintable(tableName), file.pos());
 
         // 判断是否为几何表
-        bool isGeom1 = tableName.startsWith("GEOM1");
-        bool isGeom2 = tableName.startsWith("GEOM2");
+        bool isGeom1 = tableName.startsWith("GEOM1") || tableName == "GEOM1S";
+        bool isGeom2 = tableName.startsWith("GEOM2") || tableName == "GEOM2S";
+        bool isBgpdt = tableName.startsWith("BGPDT");
+        bool isEqexin = tableName.startsWith("EQEXIN");
 
-        if (!isGeom1 && !isGeom2) {
+        if (!isGeom1 && !isGeom2 && !isBgpdt && !isEqexin) {
             skipTable();
             continue;
         }
@@ -1066,9 +1111,15 @@ bool FEModelPanel::parseNastranOp2(const QString& filePath, FEModel& model,
             }
             // 读取 marker(N)+record 对，直到 marker(0)
             while (true) {
+                qint64 beforePos = file.pos();
                 qint32 m = readMarker();
                 if (m == 0) break;
-                stData.append(readFortranRecord());
+                QByteArray rec = readFortranRecord();
+                if (rec.isEmpty()) {
+                    qDebug("parseNastranOp2: empty record at pos %lld (marker=%d), breaking", beforePos, m);
+                    break;
+                }
+                stData.append(rec);
             }
             subtables.push_back(stData);
             // 读取下一个 marker：0=表结束，否则是下一记录首块的 word count
@@ -1076,6 +1127,10 @@ bool FEModelPanel::parseNastranOp2(const QString& filePath, FEModel& model,
             if (nextM == 0) break;
             // 读取该 marker 对应的数据块，留给下一轮使用
             firstBlock = readFortranRecord();
+            if (firstBlock.isEmpty()) {
+                qDebug("parseNastranOp2: empty firstBlock (nextM=%d), breaking", nextM);
+                break;
+            }
             hasFirstBlock = true;
         }
 
@@ -1239,6 +1294,65 @@ bool FEModelPanel::parseNastranOp2(const QString& filePath, FEModel& model,
                        count, key1, stride, info.nodeCount);
             }
         }
+
+        if (isBgpdt) {
+            // ── BGPDT/BGPDTS: 节点坐标（按内部 ID 顺序） ──
+            // 格式：每条目 4 words = CD(int) + X(float) + Y(float) + Z(float)
+            // 第一个 subtable 是 header/key，数据从后续 subtable 开始
+            for (int si = 1; si < static_cast<int>(subtables.size()); si++) {
+                const auto& stData = subtables[si];
+                int nWords = stData.size() / 4;
+                const char* ptr = stData.constData();
+
+                // 尝试 stride=4 (CD + X + Y + Z)
+                for (int off = 0; off + 16 <= stData.size(); off += 16) {
+                    float x = readFloat(ptr + off + 4);
+                    float y = readFloat(ptr + off + 8);
+                    float z = readFloat(ptr + off + 12);
+                    bgpdtCoords.push_back(glm::vec3(x, y, z));
+                }
+            }
+            if (!bgpdtCoords.empty()) {
+                qDebug("parseNastranOp2: BGPDT parsed %d node coords", (int)bgpdtCoords.size());
+            }
+        }
+
+        if (isEqexin) {
+            // ── EQEXIN/EQEXINS: 外部 ID ↔ 内部 ID 映射 ──
+            // 格式：两个子记录，第一个是 NILS（节点数），
+            // 第二个是 (external_nid, internal_id) 对
+            for (int si = 1; si < static_cast<int>(subtables.size()); si++) {
+                const auto& stData = subtables[si];
+                int nWords = stData.size() / 4;
+                const char* ptr = stData.constData();
+
+                // 偶数个 words → (external, internal) 对
+                for (int off = 0; off + 8 <= stData.size(); off += 8) {
+                    qint32 extId = readInt(ptr + off);
+                    qint32 intId = readInt(ptr + off + 4);
+                    if (extId > 0 && intId > 0) {
+                        internalToExternal[intId] = extId;
+                    }
+                }
+            }
+            if (!internalToExternal.empty()) {
+                qDebug("parseNastranOp2: EQEXIN parsed %d ID mappings", (int)internalToExternal.size());
+            }
+        }
+    }
+
+    // ── 如果 GEOM1 没有节点但 BGPDT 有，使用 BGPDT 数据 ──
+    if (model.nodes.empty() && !bgpdtCoords.empty()) {
+        for (int i = 0; i < static_cast<int>(bgpdtCoords.size()); i++) {
+            int intId = i + 1; // 内部 ID 从 1 开始
+            int extId = intId; // 默认外部 ID = 内部 ID
+            auto it = internalToExternal.find(intId);
+            if (it != internalToExternal.end()) {
+                extId = it->second;
+            }
+            model.addNode(extId, bgpdtCoords[i]);
+        }
+        qDebug("parseNastranOp2: added %d nodes from BGPDT", (int)bgpdtCoords.size());
     }
 
     file.close();
@@ -1385,8 +1499,22 @@ bool FEModelPanel::parseNastranOp2Results(const QString& filePath, FEResultData&
     };
 
     // ── 跳过文件头 ──
-    for (int i = 0; i < 8; ++i)
-        readFortranRecord();
+    {
+        qint32 firstVal = readMarker();
+        if (firstVal == 3) {
+            readFortranRecord(); // date
+            readMarker();        // marker(7)
+            readFortranRecord(); // label
+            while (!file.atEnd()) {
+                qint32 m = readMarker();
+                if (m == -1) break;
+                readFortranRecord();
+            }
+            readMarker(); // marker(0)
+        } else {
+            file.seek(0);
+        }
+    }
 
     results.clear();
     // subcase ID → index in results.subcases

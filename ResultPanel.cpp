@@ -6,6 +6,7 @@
  */
 
 #include "ResultPanel.h"
+#include "Theme.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -24,17 +25,15 @@ void ResultPanel::setupUI()
     layout->setSpacing(6);
 
     // ── 标题 ──
-    auto* titleLabel = new QLabel("结果显示");
-    titleLabel->setStyleSheet(
-        "font-size: 13px; font-weight: bold; color: #89b4fa; padding: 4px 0;");
-    layout->addWidget(titleLabel);
+    titleLabel_ = new QLabel("结果显示");
+    layout->addWidget(titleLabel_);
 
     // 左右结构行
     auto addRow = [&](const QString& text, QComboBox*& combo, bool enabled = false) {
         auto* row = new QHBoxLayout;
         row->setSpacing(8);
         auto* label = new QLabel(text);
-        label->setStyleSheet("font-size: 11px; color: #a6adc8;");
+        rowLabels_.push_back(label);
         label->setFixedWidth(50);
         label->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         row->addWidget(label);
@@ -60,54 +59,22 @@ void ResultPanel::setupUI()
 
     applyBtn_ = new QPushButton("应用");
     applyBtn_->setEnabled(false);
-    applyBtn_->setStyleSheet(
-        "QPushButton {"
-        "  background: #89b4fa; color: #1e1e2e; border: none;"
-        "  border-radius: 4px; padding: 6px 12px; font-size: 12px; font-weight: bold; }"
-        "QPushButton:hover { background: #b4d0fb; }"
-        "QPushButton:pressed { background: #74a8f7; }"
-        "QPushButton:disabled { background: #45475a; color: #6c7086; }");
     btnRow->addWidget(applyBtn_);
 
     clearBtn_ = new QPushButton("清除");
     clearBtn_->setEnabled(false);
-    clearBtn_->setStyleSheet(
-        "QPushButton {"
-        "  background: #313244; color: #cdd6f4; border: 1px solid #45475a;"
-        "  border-radius: 4px; padding: 6px 12px; font-size: 12px; }"
-        "QPushButton:hover { background: #45475a; border-color: #89b4fa; }"
-        "QPushButton:pressed { background: #585b70; }"
-        "QPushButton:disabled { background: #1e1e2e; color: #45475a; border-color: #313244; }");
     btnRow->addWidget(clearBtn_);
 
     layout->addLayout(btnRow);
 
     // ── 信息标签 ──
     infoLabel_ = new QLabel;
-    infoLabel_->setStyleSheet("font-size: 10px; color: #6c7086; padding-top: 4px;");
     infoLabel_->setWordWrap(true);
     layout->addWidget(infoLabel_);
 
     layout->addStretch(1);
 
-    // ── 面板样式（Catppuccin Mocha） ──
-    setStyleSheet(
-        "QWidget { background: #1e1e2e; color: #cdd6f4; }"
-        "QComboBox {"
-        "  background: #313244; border: 1px solid #45475a; border-radius: 4px;"
-        "  padding: 4px 8px; font-size: 12px; color: #cdd6f4;"
-        "  min-height: 22px; }"
-        "QComboBox:hover { border-color: #89b4fa; }"
-        "QComboBox:disabled { background: #1e1e2e; color: #45475a; border-color: #313244; }"
-        "QComboBox::drop-down {"
-        "  border: none; width: 20px; }"
-        "QComboBox::down-arrow {"
-        "  image: none; border-left: 4px solid transparent;"
-        "  border-right: 4px solid transparent;"
-        "  border-top: 5px solid #89b4fa; margin-right: 6px; }"
-        "QComboBox QAbstractItemView {"
-        "  background: #313244; border: 1px solid #45475a;"
-        "  selection-background-color: #45475a; color: #cdd6f4; }");
+    // 默认主题在 MainWindow 中统一调用 applyTheme() 设置
 
     // ── 信号连接 ──
     connect(subcaseCombo_, QOverload<int>::of(&QComboBox::currentIndexChanged),
@@ -252,4 +219,50 @@ void ResultPanel::onClearClicked()
 {
     clearBtn_->setEnabled(false);
     emit clearResult();
+}
+
+void ResultPanel::applyTheme(const Theme& t) {
+    titleLabel_->setStyleSheet(
+        QString("font-size: 13px; font-weight: bold; color: %1; padding: 4px 0;").arg(t.blue));
+    for (auto* lbl : rowLabels_)
+        lbl->setStyleSheet(QString("font-size: 11px; color: %1;").arg(t.subtext0));
+    infoLabel_->setStyleSheet(
+        QString("font-size: 10px; color: %1; padding-top: 4px;").arg(t.overlay0));
+
+    applyBtn_->setStyleSheet(QString(
+        "QPushButton {"
+        "  background: %1; color: %2; border: none;"
+        "  border-radius: 4px; padding: 6px 12px; font-size: 12px; font-weight: bold; }"
+        "QPushButton:hover { background: %3; }"
+        "QPushButton:pressed { background: %4; }"
+        "QPushButton:disabled { background: %5; color: %6; }"
+    ).arg(t.blue, t.btnText, t.blueHover, t.bluePressed, t.surface1, t.overlay0));
+
+    clearBtn_->setStyleSheet(QString(
+        "QPushButton {"
+        "  background: %1; color: %2; border: 1px solid %3;"
+        "  border-radius: 4px; padding: 6px 12px; font-size: 12px; }"
+        "QPushButton:hover { background: %3; border-color: %4; }"
+        "QPushButton:pressed { background: %5; }"
+        "QPushButton:disabled { background: %6; color: %3; border-color: %1; }"
+    ).arg(t.surface0, t.text, t.surface1, t.blue, t.surface2, t.base));
+
+    setStyleSheet(QString(
+        "QWidget { background: %1; color: %2; }"
+        "QComboBox {"
+        "  background: %3; border: 1px solid %4; border-radius: 4px;"
+        "  padding: 4px 8px; font-size: 12px; color: %2;"
+        "  min-height: 22px; }"
+        "QComboBox:hover { border-color: %5; }"
+        "QComboBox:disabled { background: %1; color: %4; border-color: %3; }"
+        "QComboBox::drop-down {"
+        "  border: none; width: 20px; }"
+        "QComboBox::down-arrow {"
+        "  image: none; border-left: 4px solid transparent;"
+        "  border-right: 4px solid transparent;"
+        "  border-top: 5px solid %5; margin-right: 6px; }"
+        "QComboBox QAbstractItemView {"
+        "  background: %3; border: 1px solid %4;"
+        "  selection-background-color: %4; color: %2; }"
+    ).arg(t.base, t.text, t.surface0, t.surface1, t.blue));
 }

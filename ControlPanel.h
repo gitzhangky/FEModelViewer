@@ -14,16 +14,22 @@
 
 #include <QWidget>
 #include <QGroupBox>
+#include <QLabel>
 #include <vector>
 #include <glm/glm.hpp>
 
 #include "Geometry.h"
+
+struct Theme;
 
 class ControlPanel : public QWidget {
     Q_OBJECT
 
 public:
     explicit ControlPanel(QWidget* parent = nullptr);
+
+    /** @brief 应用主题 */
+    void applyTheme(const Theme& theme);
 
 signals:
     /** @brief 用户选择了新的几何体形状 */
@@ -53,4 +59,7 @@ private:
 
     /** @brief 预设颜色列表 */
     std::vector<ColorEntry> colors_;
+
+    /** @brief 底部提示标签（主题更新用） */
+    QLabel* infoLabel_ = nullptr;
 };

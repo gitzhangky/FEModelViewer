@@ -35,6 +35,7 @@
 #include "FEPickResult.h"
 #include "ferender_export.h"
 
+struct Theme;
 class ColorBarOverlay;   // 前向声明：色标覆盖层控件
 
 class FERENDER_EXPORT GLWidget : public QOpenGLWidget, protected QOpenGLFunctions {
@@ -54,6 +55,9 @@ public:
 
     /** @brief 自适应缩放 */
     void fitToModel(const glm::vec3& center, float size);
+
+    /** @brief 应用主题（更新背景渐变和色标文字颜色） */
+    void applyTheme(const Theme& theme);
 
     /** @brief 色标控制 */
     void setColorBarVisible(bool visible);
@@ -248,6 +252,10 @@ private:
     QString colorBarTitle_ = "Result";
     bool useVertexColor_ = false;       // 是否使用云图颜色（通过 colorVbo_）
     ColorBarOverlay* colorBarOverlay_ = nullptr;  // 独立覆盖层控件（raster 绘制，不受 GL 状态影响）
+    QColor barTextColor_{255, 255, 255};            // 色标数值文字颜色（随主题变化）
+    // 背景渐变颜色（initializeGL 使用，applyTheme 更新）
+    float bgTopColor_[3] = {0.38f, 0.45f, 0.58f};
+    float bgBotColor_[3] = {0.68f, 0.74f, 0.82f};
     glm::mat4 axesMVP_{1.0f};          // drawAxesIndicator() 计算后传给 drawAxesLabels()
 
     // ── 交互状态 ──

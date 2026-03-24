@@ -17,6 +17,7 @@
 class QLabel;
 class QVBoxLayout;
 class GLWidget;
+struct Theme;
 
 class MonitorPanel : public QGroupBox {
     Q_OBJECT
@@ -32,6 +33,9 @@ public:
      * 并启动 200ms 间隔的定时器刷新 FPS 等动态数据。
      */
     void bindToWidget(GLWidget* gl);
+
+    /** @brief 应用主题 */
+    void applyTheme(const Theme& theme);
 
 private slots:
     /** @brief 定时刷新性能统计数据 */

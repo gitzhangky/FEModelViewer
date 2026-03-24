@@ -16,11 +16,16 @@
 
 #include "FEGroup.h"
 
+struct Theme;
+
 class PartsPanel : public QWidget {
     Q_OBJECT
 
 public:
     explicit PartsPanel(QWidget* parent = nullptr);
+
+    /** @brief 应用主题 */
+    void applyTheme(const Theme& theme);
 
     /** @brief 用新的模型名称、部件列表和颜色更新树 */
     void setParts(const QString& modelName,

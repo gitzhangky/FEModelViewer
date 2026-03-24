@@ -22,6 +22,8 @@
 #include "FEGroup.h"
 #include "FEResultData.h"
 
+struct Theme;
+
 class FEModelPanel : public QWidget {
     Q_OBJECT
 
@@ -39,6 +41,9 @@ public:
 
     /** @brief 从 OP2 文件解析结果数据（位移/应力），独立于几何解析 */
     bool parseNastranOp2Results(const QString& filePath, FEResultData& results);
+
+    /** @brief 应用主题 */
+    void applyTheme(const Theme& theme);
 
     /** @brief 获取当前模型 */
     const FEModel& currentModel() const { return currentModel_; }

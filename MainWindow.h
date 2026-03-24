@@ -18,6 +18,9 @@
 #include <QLineEdit>
 #include <QPushButton>
 #include <QProgressBar>
+#include <QToolBar>
+
+#include "Theme.h"
 
 class GLWidget;
 class MonitorPanel;
@@ -38,6 +41,7 @@ private:
     void setupToolBar();
     void setupStatusBar();
     QWidget* createFilePanel();
+    void applyTheme(const Theme& theme);
 
     void browseModelFile();
     void browseResultFile();
@@ -60,4 +64,13 @@ private:
     // 底部文件面板
     QLineEdit*     modelPathEdit_  = nullptr;
     QLineEdit*     resultPathEdit_ = nullptr;
+
+    // 主题相关
+    Theme          currentTheme_;
+    QWidget*       sidebar_        = nullptr;
+    QWidget*       rightSidebar_   = nullptr;
+    QWidget*       filePanel_      = nullptr;
+    QToolBar*      toolbar_        = nullptr;
+    QPushButton*   filePanelApplyBtn_ = nullptr;
+    QAction*       themeAction_    = nullptr;
 };

@@ -15,11 +15,16 @@
 #include "FEResultData.h"
 #include "FEField.h"
 
+struct Theme;
+
 class ResultPanel : public QWidget {
     Q_OBJECT
 
 public:
     explicit ResultPanel(QWidget* parent = nullptr);
+
+    /** @brief 应用主题 */
+    void applyTheme(const Theme& theme);
 
     /** @brief 设置结果数据（来自 OP2 解析） */
     void setResults(const FEResultData& results);
@@ -55,4 +60,6 @@ private:
     QPushButton* applyBtn_     = nullptr;
     QPushButton* clearBtn_     = nullptr;
     QLabel* infoLabel_         = nullptr;
+    QLabel* titleLabel_        = nullptr;
+    std::vector<QLabel*> rowLabels_;
 };

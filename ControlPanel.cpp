@@ -4,6 +4,7 @@
  */
 
 #include "ControlPanel.h"
+#include "Theme.h"
 
 #include <QVBoxLayout>
 #include <QPushButton>
@@ -27,59 +28,60 @@ ControlPanel::ControlPanel(QWidget* parent) : QWidget(parent) {
 
     // 底部操作提示标签
     auto* infoLabel = new QLabel("左键旋转 | 右键平移\n滚轮缩放 | ESC退出");
-    infoLabel->setStyleSheet("color: #6c7086; font-size: 11px;");
+    infoLabel_ = infoLabel;
     layout->addWidget(infoLabel);
 
-    // ── 统一样式表（Catppuccin Mocha 配色方案）──
-    setStyleSheet(
-        // 面板整体背景和文字颜色
-        "QWidget { background: #1e1e2e; color: #cdd6f4; }"
+    // 默认主题在 MainWindow 中统一调用 applyTheme() 设置
+}
 
-        // 按钮：渐变背景，hover 高亮边框，按下变蓝色反色
+void ControlPanel::applyTheme(const Theme& t) {
+    infoLabel_->setStyleSheet(QString("color: %1; font-size: 11px;").arg(t.overlay0));
+
+    setStyleSheet(QString(
+        "QWidget { background: %1; color: %2; }"
+
         "QPushButton {"
         "  background: qlineargradient(x1:0, y1:0, x2:0, y2:1,"
-        "    stop:0 #45475a, stop:1 #313244);"
-        "  border: 1px solid #585b70; border-radius: 5px;"
-        "  padding: 7px 12px; color: #cdd6f4; font-size: 13px; }"
+        "    stop:0 %3, stop:1 %4);"
+        "  border: 1px solid %5; border-radius: 5px;"
+        "  padding: 7px 12px; color: %2; font-size: 13px; }"
         "QPushButton:hover {"
         "  background: qlineargradient(x1:0, y1:0, x2:0, y2:1,"
-        "    stop:0 #585b70, stop:1 #45475a);"
-        "  border-color: #89b4fa; }"
+        "    stop:0 %6, stop:1 %7);"
+        "  border-color: %8; }"
         "QPushButton:pressed {"
-        "  background: #89b4fa; color: #1e1e2e; }"
+        "  background: %8; color: %9; }"
 
-        // 分组框：深色背景，圆角边框，蓝色标题
         "QGroupBox {"
-        "  background: #181825; border: 1px solid #313244;"
+        "  background: %10; border: 1px solid %4;"
         "  border-radius: 6px; margin-top: 12px; padding: 16px 8px 8px 8px;"
-        "  font-weight: bold; font-size: 12px; color: #a6adc8; }"
+        "  font-weight: bold; font-size: 12px; color: %11; }"
         "QGroupBox::title {"
         "  subcontrol-origin: margin; left: 10px; padding: 0 4px;"
-        "  color: #89b4fa; }"
+        "  color: %8; }"
 
-        // 标签
-        "QLabel { font-size: 12px; color: #bac2de; }"
+        "QLabel { font-size: 12px; color: %12; }"
 
-        // 复选框：自定义勾选指示器样式
-        "QCheckBox { font-size: 12px; color: #bac2de; spacing: 6px; }"
+        "QCheckBox { font-size: 12px; color: %12; spacing: 6px; }"
         "QCheckBox::indicator {"
         "  width: 14px; height: 14px; border-radius: 3px;"
-        "  border: 1px solid #585b70; background: #313244; }"
+        "  border: 1px solid %5; background: %4; }"
         "QCheckBox::indicator:checked {"
-        "  background: #89b4fa; border-color: #89b4fa; }"
+        "  background: %8; border-color: %8; }"
 
-        // 下拉框：hover 蓝色边框，下拉列表统一暗色主题
         "QComboBox {"
-        "  background: #313244; border: 1px solid #45475a;"
-        "  border-radius: 5px; padding: 5px 8px; color: #cdd6f4; }"
-        "QComboBox:hover { border-color: #89b4fa; }"
+        "  background: %4; border: 1px solid %13;"
+        "  border-radius: 5px; padding: 5px 8px; color: %2; }"
+        "QComboBox:hover { border-color: %8; }"
         "QComboBox::drop-down {"
         "  border: none; width: 20px; }"
         "QComboBox QAbstractItemView {"
-        "  background: #313244; border: 1px solid #45475a;"
-        "  selection-background-color: #89b4fa;"
-        "  selection-color: #1e1e2e; color: #cdd6f4; }"
-    );
+        "  background: %4; border: 1px solid %13;"
+        "  selection-background-color: %8;"
+        "  selection-color: %9; color: %2; }"
+    ).arg(t.base, t.text, t.gradTop, t.surface0, t.surface2,
+          t.gradTopHov, t.gradBotHov, t.blue, t.btnText)
+     .arg(t.mantle, t.subtext0, t.subtext1, t.surface1));
 }
 
 QGroupBox* ControlPanel::createShapeGroup() {
