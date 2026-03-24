@@ -970,9 +970,10 @@ bool FEModelPanel::parseNastranOp2(const QString& filePath, FEModel& model,
     auto readMarker = [&]() -> qint32 {
         QByteArray rec = readFortranRecord();
         if (rec.size() < 4) return 0;
-        qint32 val;
-        memcpy(&val, rec.constData(), 4);
-        return val;
+        quint32 raw;
+        memcpy(&raw, rec.constData(), 4);
+        if (needSwap) raw = swapBytes32(raw);
+        return static_cast<qint32>(raw);
     };
 
     // 读取一个子表的全部数据（多个 marker(N)+record 对，直到 marker(0)）
@@ -989,22 +990,20 @@ bool FEModelPanel::parseNastranOp2(const QString& filePath, FEModel& model,
 
     // 跳过一个完整的表（header + 所有子表）
     auto skipTable = [&]() {
-        // header: marker(7) + record + marker(-2)
-        readMarker();
-        readFortranRecord();
-        readMarker();
-        // 子表循环：每个子表以 marker(0) 结束，表以双 marker(0) 结束
+        readMarker();        // marker(7)
+        readFortranRecord(); // header record
+        readMarker();        // marker(-2) 首个子表序号
+        // 子表循环：数据记录以 marker(0) 结束，
+        // 随后的 marker 为 0 表示表结束，负数为下一子表序号
         while (true) {
-            // 读取子表数据直到 marker(0)
             while (true) {
                 qint32 m = readMarker();
                 if (m == 0) break;
                 readFortranRecord();
             }
-            // 检查下一个 marker：0 = 表结束，否则是下一个子表的首条数据
             qint32 m = readMarker();
             if (m == 0) break;
-            readFortranRecord(); // 消费该数据记录
+            // m 为负数（-3, -4, ...），表示下一子表序号，继续循环
         }
     };
 
@@ -1052,55 +1051,32 @@ bool FEModelPanel::parseNastranOp2(const QString& filePath, FEModel& model,
         readMarker();        // marker(-2)
 
         // ── 读取所有子表数据 ──
-        // OP2 子表结构：每个子表由 marker(N)+record 对组成，以 marker(0) 结束。
-        // 表结束标志：连续两个 marker(0)（子表结束 + 表结束）。
+        // OP2 数据格式：marker(N) + data_block 对，marker(0) 结束一个逻辑记录。
+        // 逻辑记录间的 marker 是下一记录首块的 word count（非 0 则继续）。
+        // 双 marker(0) 表示表结束。
         std::vector<QByteArray> subtables;
-        bool tableEnded = false;
-        while (!tableEnded && !file.atEnd()) {
+        bool hasFirstBlock = false;
+        QByteArray firstBlock;
+        while (!file.atEnd()) {
             QByteArray stData;
-            // 读取一个子表的所有记录
+            // 如果上一轮已读取了首块数据，先放入
+            if (hasFirstBlock) {
+                stData.append(firstBlock);
+                hasFirstBlock = false;
+            }
+            // 读取 marker(N)+record 对，直到 marker(0)
             while (true) {
                 qint32 m = readMarker();
-                if (m == 0) break;  // 子表结束
-                QByteArray rec = readFortranRecord();
-                stData.append(rec);
+                if (m == 0) break;
+                stData.append(readFortranRecord());
             }
             subtables.push_back(stData);
-            // 检查表是否结束：读取下一个 marker
+            // 读取下一个 marker：0=表结束，否则是下一记录首块的 word count
             qint32 nextM = readMarker();
-            if (nextM == 0) {
-                tableEnded = true;  // 双 marker(0) = 表结束
-            } else {
-                // nextM 是下一个子表的第一条数据记录的 word count
-                // 读取该记录，作为下一个子表的开头数据
-                QByteArray firstRec = readFortranRecord();
-                // 将其放回：创建新子表，先存入这条记录
-                QByteArray nextSt;
-                nextSt.append(firstRec);
-                // 继续读取该子表的剩余记录
-                while (true) {
-                    qint32 m2 = readMarker();
-                    if (m2 == 0) break;
-                    nextSt.append(readFortranRecord());
-                }
-                subtables.push_back(nextSt);
-                // 再检查表是否结束
-                qint32 endM = readMarker();
-                if (endM == 0) {
-                    tableEnded = true;
-                } else {
-                    // 还有更多子表，把这条记录存入并继续外层循环
-                    QByteArray cont;
-                    cont.append(readFortranRecord());
-                    while (true) {
-                        qint32 m3 = readMarker();
-                        if (m3 == 0) break;
-                        cont.append(readFortranRecord());
-                    }
-                    subtables.push_back(cont);
-                    // 继续外层循环检查更多子表
-                }
-            }
+            if (nextM == 0) break;
+            // 读取该 marker 对应的数据块，留给下一轮使用
+            firstBlock = readFortranRecord();
+            hasFirstBlock = true;
         }
 
         if (isGeom1) {
@@ -1370,15 +1346,16 @@ bool FEModelPanel::parseNastranOp2Results(const QString& filePath, FEResultData&
     auto readMarker = [&]() -> qint32 {
         QByteArray rec = readFortranRecord();
         if (rec.size() < 4) return 0;
-        qint32 val;
-        memcpy(&val, rec.constData(), 4);
-        return val;
+        quint32 raw;
+        memcpy(&raw, rec.constData(), 4);
+        if (needSwap) raw = swapBytes32(raw);
+        return static_cast<qint32>(raw);
     };
 
     auto skipTable = [&]() {
-        readMarker();
-        readFortranRecord();
-        readMarker();
+        readMarker();        // marker(7)
+        readFortranRecord(); // header record
+        readMarker();        // marker(-2)
         while (true) {
             while (true) {
                 qint32 m = readMarker();
@@ -1387,7 +1364,7 @@ bool FEModelPanel::parseNastranOp2Results(const QString& filePath, FEResultData&
             }
             qint32 m = readMarker();
             if (m == 0) break;
-            readFortranRecord();
+            readFortranRecord(); // 读取 marker 对应的数据块
         }
     };
 
@@ -1466,43 +1443,24 @@ bool FEModelPanel::parseNastranOp2Results(const QString& filePath, FEResultData&
 
         // ── 读取所有子表数据 ──
         std::vector<QByteArray> subtables;
-        bool tableEnded = false;
-        while (!tableEnded && !file.atEnd()) {
+        bool hasFirstBlock = false;
+        QByteArray firstBlock;
+        while (!file.atEnd()) {
             QByteArray stData;
+            if (hasFirstBlock) {
+                stData.append(firstBlock);
+                hasFirstBlock = false;
+            }
             while (true) {
                 qint32 m = readMarker();
                 if (m == 0) break;
-                QByteArray rec = readFortranRecord();
-                stData.append(rec);
+                stData.append(readFortranRecord());
             }
             subtables.push_back(stData);
             qint32 nextM = readMarker();
-            if (nextM == 0) {
-                tableEnded = true;
-            } else {
-                QByteArray firstRec = readFortranRecord();
-                QByteArray nextSt;
-                nextSt.append(firstRec);
-                while (true) {
-                    qint32 m2 = readMarker();
-                    if (m2 == 0) break;
-                    nextSt.append(readFortranRecord());
-                }
-                subtables.push_back(nextSt);
-                qint32 endM = readMarker();
-                if (endM == 0) {
-                    tableEnded = true;
-                } else {
-                    QByteArray cont;
-                    cont.append(readFortranRecord());
-                    while (true) {
-                        qint32 m3 = readMarker();
-                        if (m3 == 0) break;
-                        cont.append(readFortranRecord());
-                    }
-                    subtables.push_back(cont);
-                }
-            }
+            if (nextM == 0) break;
+            firstBlock = readFortranRecord();
+            hasFirstBlock = true;
         }
 
         if (isOUG) {
@@ -1542,21 +1500,11 @@ bool FEModelPanel::parseNastranOp2Results(const QString& filePath, FEResultData&
 
             int parsed = 0;
             int skipped = 0;
-            // OUG 子表结构：subtable[0]=IDENT(36B), subtable[1]=metadata(~588B), subtable[2]=数据
-            // 只处理最大的子表（包含实际位移数据）
-            // 策略：找到最大的子表来解析
-            int largestIdx = -1;
-            int largestSize = 0;
-            for (int si = 0; si < static_cast<int>(subtables.size()); ++si) {
-                if (subtables[si].size() > largestSize) {
-                    largestSize = subtables[si].size();
-                    largestIdx = si;
-                }
-            }
-
-            if (largestIdx >= 0 && largestSize >= 32) {
-                const auto& stData = subtables[largestIdx];
+            // 跳过 subtable[0]（IDENT 元数据），处理所有后续数据子表
+            for (int si = 1; si < static_cast<int>(subtables.size()); ++si) {
+                const auto& stData = subtables[si];
                 int nBytes = stData.size();
+                if (nBytes < 32) continue;
                 const char* ptr = stData.constData();
 
                 // 每条目 32 bytes: NID(4) + type(4) + 6*float(24)
@@ -1649,18 +1597,11 @@ bool FEModelPanel::parseNastranOp2Results(const QString& filePath, FEResultData&
                 compVm.field.location = FieldLocation::Element;
 
                 int parsed = 0;
-                // OES 同样只处理最大的子表
-                int largestOesIdx = -1;
-                int largestOesSize = 0;
-                for (int si = 0; si < static_cast<int>(subtables.size()); ++si) {
-                    if (static_cast<int>(subtables[si].size()) > largestOesSize) {
-                        largestOesSize = subtables[si].size();
-                        largestOesIdx = si;
-                    }
-                }
-                if (largestOesIdx >= 0 && largestOesSize >= 68) {
-                    const auto& stData = subtables[largestOesIdx];
+                // 跳过 subtable[0]（IDENT），处理所有数据子表
+                for (int si = 1; si < static_cast<int>(subtables.size()); ++si) {
+                    const auto& stData = subtables[si];
                     int nBytes = stData.size();
+                    if (nBytes < 68) continue;
                     const char* ptr = stData.constData();
 
                     // 壳单元每条目 17 words = 68 bytes
@@ -1724,29 +1665,27 @@ bool FEModelPanel::parseNastranOp2Results(const QString& filePath, FEResultData&
                 compVm.field.unit = "MPa"; compVm.field.location = FieldLocation::Element;
 
                 int parsed = 0;
-                // OES 同样只处理最大的子表
-                int largestOesIdx = -1;
-                int largestOesSize = 0;
-                for (int si = 0; si < static_cast<int>(subtables.size()); ++si) {
-                    if (static_cast<int>(subtables[si].size()) > largestOesSize) {
-                        largestOesSize = subtables[si].size();
-                        largestOesIdx = si;
-                    }
-                }
-                if (largestOesIdx >= 0 && largestOesSize >= 68) {
-                    const auto& stData = subtables[largestOesIdx];
+                // 角点数查表: CHEXA=8, CTETRA=4, CPENTA=6
+                int nnodes = 0;
+                if (elemTypeCode == 67) nnodes = 8;       // CHEXA
+                else if (elemTypeCode == 39) nnodes = 4;  // CTETRA
+                else if (elemTypeCode == 68) nnodes = 6;  // CPENTA
+                // 每个单元: EID(4) + center(44) + nnodes * corner(40)
+                int entrySize = 44 + nnodes * 40;
+
+                // 跳过 subtable[0]（IDENT），处理所有数据子表
+                for (int si = 1; si < static_cast<int>(subtables.size()); ++si) {
+                    const auto& stData = subtables[si];
                     int nBytes = stData.size();
+                    if (nBytes < entrySize) continue;
                     const char* ptr = stData.constData();
 
                     int offset = 0;
-                    while (offset + 4 <= nBytes) {
+                    while (offset + entrySize <= nBytes) {
                         qint32 eid = readInt(ptr + offset);
                         if (eid <= 0 || eid > 100000000) break;
 
                         // 中心点: EID(4) + cid(4) + sx,sy,sz,txy,tyz,txz,se,eps,eci (9*4=36)
-                        // = 44 bytes for center
-                        if (offset + 44 > nBytes) break;
-
                         float sx  = readFloat(ptr + offset + 8);
                         float sy  = readFloat(ptr + offset + 12);
                         float sz  = readFloat(ptr + offset + 16);
@@ -1766,15 +1705,7 @@ bool FEModelPanel::parseNastranOp2Results(const QString& filePath, FEResultData&
                         compVm.field.values[eid] = vm;
                         parsed++;
 
-                        // 跳过角点数据
-                        // 角点数: CHEXA=8, CTETRA=4, CPENTA=6
-                        int nnodes = 0;
-                        if (elemTypeCode == 67) nnodes = 8;       // CHEXA
-                        else if (elemTypeCode == 39) nnodes = 4;  // CTETRA
-                        else if (elemTypeCode == 68) nnodes = 6;  // CPENTA
-
-                        // 中心 (44 bytes) + nnodes * (cid + 9 floats = 40 bytes)
-                        offset += 44 + nnodes * 40;
+                        offset += entrySize;
                     }
                 }
 
