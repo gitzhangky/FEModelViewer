@@ -6,6 +6,7 @@
  *   - 工具栏（拾取模式切换）
  *   - 左侧边栏（模型树 + 选中信息 + 监控面板）
  *   - 中央 GL 视口
+ *   - 右侧边栏（拾取控制 + 结果面板）
  *   - 底部文件导入面板（模型文件 + 结果文件）
  *   - 状态栏（模型统计）
  */
@@ -27,6 +28,7 @@ class MonitorPanel;
 class FEModelPanel;
 class PartsPanel;
 class ResultPanel;
+class PickPanel;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -52,6 +54,7 @@ private:
     FEModelPanel*  feModelPanel_  = nullptr;
     PartsPanel*    partsPanel_    = nullptr;
     ResultPanel*   resultPanel_   = nullptr;
+    PickPanel*     pickPanel_     = nullptr;
 
     // 工具栏拾取模式动作组
     QActionGroup*  pickGroup_     = nullptr;

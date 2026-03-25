@@ -140,6 +140,7 @@ qt5_wrap_cpp(VIEWER_MOC_SRCS
     FEModelPanel.h
     PartsPanel.h
     ResultPanel.h
+    PickPanel.h
     ControlPanel.h
     MonitorPanel.h
 )
@@ -150,6 +151,7 @@ add_executable(${PROJECT_NAME}
     FEModelPanel.cpp
     PartsPanel.cpp
     ResultPanel.cpp
+    PickPanel.cpp
     ControlPanel.cpp
     MonitorPanel.cpp
     ${VIEWER_MOC_SRCS}

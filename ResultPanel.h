@@ -9,6 +9,7 @@
 
 #include <QWidget>
 #include <QComboBox>
+#include <QGroupBox>
 #include <QPushButton>
 #include <QLabel>
 
@@ -59,7 +60,7 @@ private:
     QComboBox* colormapCombo_  = nullptr;
     QPushButton* applyBtn_     = nullptr;
     QPushButton* clearBtn_     = nullptr;
+    QGroupBox* resultGroup_    = nullptr;
     QLabel* infoLabel_         = nullptr;
-    QLabel* titleLabel_        = nullptr;
     std::vector<QLabel*> rowLabels_;
 };

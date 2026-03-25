@@ -20,13 +20,17 @@ ResultPanel::ResultPanel(QWidget* parent)
 
 void ResultPanel::setupUI()
 {
-    auto* layout = new QVBoxLayout(this);
-    layout->setContentsMargins(8, 8, 8, 8);
-    layout->setSpacing(6);
+    setMinimumWidth(140);
 
-    // ── 标题 ──
-    titleLabel_ = new QLabel("结果显示");
-    layout->addWidget(titleLabel_);
+    auto* layout = new QVBoxLayout(this);
+    layout->setContentsMargins(6, 6, 6, 6);
+    layout->setSpacing(4);
+
+    // ── 卡片：结果显示 ──
+    resultGroup_ = new QGroupBox("结果显示");
+    auto* cardLayout = new QVBoxLayout(resultGroup_);
+    cardLayout->setContentsMargins(8, 8, 8, 8);
+    cardLayout->setSpacing(6);
 
     // 左右结构行
     auto addRow = [&](const QString& text, QComboBox*& combo, bool enabled = false) {
@@ -41,7 +45,7 @@ void ResultPanel::setupUI()
         combo->setEnabled(enabled);
         combo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
         row->addWidget(combo);
-        layout->addLayout(row);
+        cardLayout->addLayout(row);
     };
 
     addRow("工况", subcaseCombo_);
@@ -65,13 +69,14 @@ void ResultPanel::setupUI()
     clearBtn_->setEnabled(false);
     btnRow->addWidget(clearBtn_);
 
-    layout->addLayout(btnRow);
+    cardLayout->addLayout(btnRow);
 
     // ── 信息标签 ──
     infoLabel_ = new QLabel;
     infoLabel_->setWordWrap(true);
-    layout->addWidget(infoLabel_);
+    cardLayout->addWidget(infoLabel_);
 
+    layout->addWidget(resultGroup_);
     layout->addStretch(1);
 
     // 默认主题在 MainWindow 中统一调用 applyTheme() 设置
@@ -222,13 +227,7 @@ void ResultPanel::onClearClicked()
 }
 
 void ResultPanel::applyTheme(const Theme& t) {
-    titleLabel_->setStyleSheet(
-        QString("font-size: 13px; font-weight: bold; color: %1; padding: 4px 0;").arg(t.blue));
-    for (auto* lbl : rowLabels_)
-        lbl->setStyleSheet(QString("font-size: 11px; color: %1;").arg(t.subtext0));
-    infoLabel_->setStyleSheet(
-        QString("font-size: 10px; color: %1; padding-top: 4px;").arg(t.overlay0));
-
+    // 按钮单独设样式（避免被 QGroupBox 内的通用规则覆盖）
     applyBtn_->setStyleSheet(QString(
         "QPushButton {"
         "  background: %1; color: %2; border: none;"
@@ -247,22 +246,31 @@ void ResultPanel::applyTheme(const Theme& t) {
         "QPushButton:disabled { background: %6; color: %3; border-color: %1; }"
     ).arg(t.surface0, t.text, t.surface1, t.blue, t.surface2, t.base));
 
+    // 卡片 + ComboBox 统一主题
     setStyleSheet(QString(
         "QWidget { background: %1; color: %2; }"
+        "QGroupBox {"
+        "  background: %3; border: 1px solid %4;"
+        "  border-radius: 6px; margin-top: 12px; padding: 16px 8px 8px 8px;"
+        "  font-weight: bold; font-size: 12px; color: %5; }"
+        "QGroupBox::title {"
+        "  subcontrol-origin: margin; left: 10px; padding: 0 4px;"
+        "  color: %6; }"
+        "QLabel { font-size: 11px; color: %7; }"
         "QComboBox {"
-        "  background: %3; border: 1px solid %4; border-radius: 4px;"
+        "  background: %4; border: 1px solid %8; border-radius: 4px;"
         "  padding: 4px 8px; font-size: 12px; color: %2;"
         "  min-height: 22px; }"
-        "QComboBox:hover { border-color: %5; }"
-        "QComboBox:disabled { background: %1; color: %4; border-color: %3; }"
+        "QComboBox:hover { border-color: %6; }"
+        "QComboBox:disabled { background: %1; color: %8; border-color: %4; }"
         "QComboBox::drop-down {"
         "  border: none; width: 20px; }"
         "QComboBox::down-arrow {"
         "  image: none; border-left: 4px solid transparent;"
         "  border-right: 4px solid transparent;"
-        "  border-top: 5px solid %5; margin-right: 6px; }"
+        "  border-top: 5px solid %6; margin-right: 6px; }"
         "QComboBox QAbstractItemView {"
-        "  background: %3; border: 1px solid %4;"
-        "  selection-background-color: %4; color: %2; }"
-    ).arg(t.base, t.text, t.surface0, t.surface1, t.blue));
+        "  background: %4; border: 1px solid %8;"
+        "  selection-background-color: %8; color: %2; }"
+    ).arg(t.base, t.text, t.mantle, t.surface0, t.subtext0, t.blue, t.subtext1, t.surface1));
 }

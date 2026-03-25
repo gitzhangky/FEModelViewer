@@ -27,6 +27,7 @@
 #include "FEModelPanel.h"
 #include "PartsPanel.h"
 #include "ResultPanel.h"
+#include "PickPanel.h"
 #include "FEGroup.h"
 #include "FEPickResult.h"
 #include "FEMeshConverter.h"
@@ -81,7 +82,8 @@ MainWindow::MainWindow() {
     // ── GL 视口 ──
     glWidget_ = new GLWidget;
 
-    // ── 右侧结果面板 ──
+    // ── 右侧面板 ──
+    pickPanel_ = new PickPanel;
     resultPanel_ = new ResultPanel;
 
     rightSidebar_ = new QWidget;
@@ -90,6 +92,7 @@ MainWindow::MainWindow() {
     auto* rightLayout = new QVBoxLayout(rightSidebar_);
     rightLayout->setContentsMargins(0, 0, 0, 0);
     rightLayout->setSpacing(0);
+    rightLayout->addWidget(pickPanel_);
     rightLayout->addWidget(resultPanel_);
 
     // ── 水平 Splitter: 左侧边栏 | GL视口 | 右侧边栏 ──
@@ -187,6 +190,27 @@ MainWindow::MainWindow() {
     // 部件拾取 → 同步模型树选中状态
     connect(glWidget_, &GLWidget::partsPicked,
             partsPanel_, &PartsPanel::selectParts);
+
+    // ── 拾取面板连接 ──
+
+    // 拾取面板切换模式 → GLWidget + 同步工具栏
+    connect(pickPanel_, &PickPanel::pickModeChanged, this, [this](int mode) {
+        glWidget_->setPickMode(static_cast<PickMode>(mode));
+        // 同步工具栏选中状态
+        for (auto* action : pickGroup_->actions()) {
+            if (action->data().toInt() == mode) {
+                action->setChecked(true);
+                break;
+            }
+        }
+    });
+
+    // 显示控制和ID标签信号暂时只连接，渲染实现后续开发
+    // connect(pickPanel_, &PickPanel::nodeVisibilityChanged, ...);
+    // connect(pickPanel_, &PickPanel::elementVisibilityChanged, ...);
+    // connect(pickPanel_, &PickPanel::nodeLabelChanged, ...);
+    // connect(pickPanel_, &PickPanel::elementLabelChanged, ...);
+    // connect(pickPanel_, &PickPanel::partLabelChanged, ...);
 
     monitorPanel_->bindToWidget(glWidget_);
 
@@ -404,9 +428,10 @@ void MainWindow::browseResultFile() {
     }
 
     QFileDialog dialog(this, "选择结果文件", lastDir,
-        "结果文件 (*.odb *.op2 *.h3d *.rst *.xdb);;"
-        "ABAQUS ODB (*.odb);;"
+        "结果文件 (*.odb *.op2 *.h3d *.rst *.xdb *.unv);;"
         "Nastran OP2 (*.op2);;"
+        "Universal UNV (*.unv);;"
+        "ABAQUS ODB (*.odb);;"
         "HyperWorks H3D (*.h3d);;"
         "所有文件 (*)");
     dialog.setFileMode(QFileDialog::ExistingFile);
@@ -437,18 +462,23 @@ void MainWindow::applyFiles() {
     // 加载结果文件
     if (!resultPath.isEmpty()) {
         QString suffix = QFileInfo(resultPath).suffix().toLower();
+        FEResultData results;
+        bool ok = false;
+
         if (suffix == "op2") {
-            FEResultData results;
-            bool ok = feModelPanel_->parseNastranOp2Results(resultPath, results);
-            if (ok) {
-                emit feModelPanel_->resultsLoaded(results);
-                statusLabel_->setText("  结果加载完成");
-                statusLabel_->setStyleSheet(
-                    QString("color: %1; font-weight: bold;").arg(currentTheme_.green));
-            } else {
-                QMessageBox::warning(this, "结果文件",
-                    QString("未能从 OP2 文件中解析到结果数据。\n\n文件: %1").arg(resultPath));
-            }
+            ok = feModelPanel_->parseNastranOp2Results(resultPath, results);
+        } else if (suffix == "unv") {
+            ok = feModelPanel_->parseUnvResults(resultPath, results);
+        }
+
+        if (ok) {
+            emit feModelPanel_->resultsLoaded(results);
+            statusLabel_->setText("  结果加载完成");
+            statusLabel_->setStyleSheet(
+                QString("color: %1; font-weight: bold;").arg(currentTheme_.green));
+        } else if (suffix == "op2" || suffix == "unv") {
+            QMessageBox::warning(this, "结果文件",
+                QString("未能从结果文件中解析到数据。\n\n文件: %1").arg(resultPath));
         } else {
             QMessageBox::information(this, "结果文件",
                 QString("暂不支持该格式的结果文件。\n\n文件: %1").arg(resultPath));
@@ -516,8 +546,20 @@ void MainWindow::setupToolBar() {
     });
 
     connect(pickGroup_, &QActionGroup::triggered, this, [this](QAction* action) {
-        PickMode mode = static_cast<PickMode>(action->data().toInt());
-        glWidget_->setPickMode(mode);
+        int mode = action->data().toInt();
+        glWidget_->setPickMode(static_cast<PickMode>(mode));
+        // 同步拾取面板单选按钮
+        pickPanel_->blockSignals(true);
+        auto buttons = pickPanel_->findChildren<QRadioButton*>();
+        for (auto* btn : buttons) {
+            // pickGroup_ 中 id 与 PickMode 值对应
+            auto* group = pickPanel_->findChild<QButtonGroup*>();
+            if (group && group->id(btn) == mode) {
+                btn->setChecked(true);
+                break;
+            }
+        }
+        pickPanel_->blockSignals(false);
     });
 }
 
@@ -637,6 +679,7 @@ void MainWindow::applyTheme(const Theme& t) {
     feModelPanel_->applyTheme(t);
     partsPanel_->applyTheme(t);
     monitorPanel_->applyTheme(t);
+    pickPanel_->applyTheme(t);
     resultPanel_->applyTheme(t);
     glWidget_->applyTheme(t);
 }

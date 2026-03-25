@@ -42,6 +42,9 @@ public:
     /** @brief 从 OP2 文件解析结果数据（位移/应力），独立于几何解析 */
     bool parseNastranOp2Results(const QString& filePath, FEResultData& results);
 
+    /** @brief 从 UNV 文件解析结果数据（Dataset 2414/55），独立于几何解析 */
+    bool parseUnvResults(const QString& filePath, FEResultData& results);
+
     /** @brief 应用主题 */
     void applyTheme(const Theme& theme);
 
