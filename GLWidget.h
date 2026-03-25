@@ -77,6 +77,9 @@ public:
     /** @brief 设置拾取模式 */
     void setPickMode(PickMode mode) { pickMode_ = mode; }
 
+    /** @brief 设置是否显示选中项的 ID 标签 */
+    void setShowLabels(bool show);
+
     /** @brief 设置是否使用顶点颜色（云图模式） */
     void setUseVertexColor(bool use);
 
@@ -136,6 +139,7 @@ private:
     void uploadMesh();
     void drawAxesIndicator();
     void drawAxesLabels(QPainter& painter);  // 坐标轴标签（需外部提供 QPainter）
+    void drawIdLabels(QPainter& painter, const glm::mat4& mvp);  // 选中项 ID 标签
     void drawColorBar(QPainter& painter);
     void uploadColors();      // 将部件颜色上传到 colorVbo_
     void rebuildEdgeIbo();    // 根据部件可见性重建边线 IBO
@@ -184,6 +188,7 @@ private:
     std::vector<int> vertexToNode_;     // 渲染顶点索引 → FEM 节点 ID
     PickMode pickMode_ = PickMode::Node;  // 当前拾取模式（与下拉框默认值同步）
     FESelection selection_;             // 当前选中状态
+    bool showLabels_ = false;           // 是否显示选中项的 ID 标签
 
     // ── 部件可见性 ──
     std::vector<int> triToPart_;                        // 三角形 → 部件索引

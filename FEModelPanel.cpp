@@ -31,6 +31,13 @@
 #include <set>
 #include <unordered_set>
 
+// Qt 5.14 将 SkipEmptyParts 从 QString 移到 Qt 命名空间
+#if QT_VERSION >= QT_VERSION_CHECK(5, 14, 0)
+#define SKIP_EMPTY Qt::SkipEmptyParts
+#else
+#define SKIP_EMPTY QString::SkipEmptyParts
+#endif
+
 // ════════════════════════════════════════════════════════════
 // 构造函数
 // ════════════════════════════════════════════════════════════
@@ -1965,9 +1972,14 @@ QGroupBox* FEModelPanel::createSelectionGroup() {
     selIdsLabel_   = new QLabel("ID: -");
     selIdsLabel_->setWordWrap(true);
 
+    labelCheck_ = new QCheckBox("显示ID标签");
+    labelCheck_->setChecked(false);
+    connect(labelCheck_, &QCheckBox::toggled, this, &FEModelPanel::labelVisibilityChanged);
+
     layout->addWidget(selModeLabel_);
     layout->addWidget(selCountLabel_);
     layout->addWidget(selIdsLabel_);
+    layout->addWidget(labelCheck_);
 
     return group;
 }
@@ -2200,7 +2212,7 @@ bool FEModelPanel::parseUnvResults(const QString& filePath, FEResultData& result
             // Record 4: 6 integers
             if (in.atEnd()) break;
             line = in.readLine().trimmed();
-            QStringList ids = line.split(QRegExp("\\s+"), Qt::SkipEmptyParts);
+            QStringList ids = line.split(QRegExp("\\s+"), SKIP_EMPTY);
             if (ids.size() < 6) {
                 // 跳到数据集结束
                 while (!in.atEnd()) { if (in.readLine().trimmed() == "-1") break; }
@@ -2217,7 +2229,7 @@ bool FEModelPanel::parseUnvResults(const QString& filePath, FEResultData& result
             // Record 5: 8 integers (设计号/迭代/解集/边界/载荷集/模态/时间步/频率)
             if (in.atEnd()) break;
             line = in.readLine().trimmed();
-            QStringList r5 = line.split(QRegExp("\\s+"), Qt::SkipEmptyParts);
+            QStringList r5 = line.split(QRegExp("\\s+"), SKIP_EMPTY);
             int loadSetId = (r5.size() >= 5) ? r5[4].toInt() : 1;
             int modeNumber = (r5.size() >= 6) ? r5[5].toInt() : 0;
             int timeStepNum = (r5.size() >= 7) ? r5[6].toInt() : 0;
@@ -2229,7 +2241,7 @@ bool FEModelPanel::parseUnvResults(const QString& filePath, FEResultData& result
             // Record 7: 实数值（2, 4 或 12 个），取决于分析类型
             if (in.atEnd()) break;
             line = in.readLine().trimmed();
-            QStringList r7 = line.split(QRegExp("\\s+"), Qt::SkipEmptyParts);
+            QStringList r7 = line.split(QRegExp("\\s+"), SKIP_EMPTY);
             // 某些分析类型有第二行实数
             if (analysisType >= 3 && analysisType <= 7) {
                 if (!in.atEnd()) in.readLine();  // 额外实数行
@@ -2283,7 +2295,7 @@ bool FEModelPanel::parseUnvResults(const QString& filePath, FEResultData& result
                 if (line == "-1") break;  // 数据集结束
 
                 // 节点/单元 ID 行
-                QStringList parts = line.split(QRegExp("\\s+"), Qt::SkipEmptyParts);
+                QStringList parts = line.split(QRegExp("\\s+"), SKIP_EMPTY);
                 if (parts.isEmpty()) continue;
 
                 int entityId = parts[0].toInt();
@@ -2299,12 +2311,12 @@ bool FEModelPanel::parseUnvResults(const QString& filePath, FEResultData& result
                     for (int n = 0; n < numNodes && !in.atEnd(); ++n) {
                         line = in.readLine().trimmed();
                         if (line == "-1") break;
-                        QStringList vals = line.split(QRegExp("\\s+"), Qt::SkipEmptyParts);
+                        QStringList vals = line.split(QRegExp("\\s+"), SKIP_EMPTY);
                         // 如果值不够一行，读取下一行续接
                         while (vals.size() < nvalsPerEntity && !in.atEnd()) {
                             QString extra = in.readLine().trimmed();
                             if (extra == "-1") break;
-                            vals.append(extra.split(QRegExp("\\s+"), Qt::SkipEmptyParts));
+                            vals.append(extra.split(QRegExp("\\s+"), SKIP_EMPTY));
                         }
                         if (isReal && vals.size() >= nvalsPerEntity) {
                             for (int v = 0; v < nvalsPerEntity; ++v)
@@ -2322,12 +2334,12 @@ bool FEModelPanel::parseUnvResults(const QString& filePath, FEResultData& result
                     line = in.readLine().trimmed();
                     if (line == "-1") break;
 
-                    QStringList vals = line.split(QRegExp("\\s+"), Qt::SkipEmptyParts);
+                    QStringList vals = line.split(QRegExp("\\s+"), SKIP_EMPTY);
                     // 多行续接
                     while (vals.size() < nvalsPerEntity && !in.atEnd()) {
                         QString extra = in.readLine().trimmed();
                         if (extra == "-1") break;
-                        vals.append(extra.split(QRegExp("\\s+"), Qt::SkipEmptyParts));
+                        vals.append(extra.split(QRegExp("\\s+"), SKIP_EMPTY));
                     }
 
                     if (isReal) {
@@ -2404,7 +2416,7 @@ bool FEModelPanel::parseUnvResults(const QString& filePath, FEResultData& result
             // Record 1: ID1-8 (analysis case, 5 ints, model type, analysis type)
             if (in.atEnd()) break;
             line = in.readLine().trimmed();
-            QStringList r1 = line.split(QRegExp("\\s+"), Qt::SkipEmptyParts);
+            QStringList r1 = line.split(QRegExp("\\s+"), SKIP_EMPTY);
             if (r1.size() < 2) {
                 while (!in.atEnd()) { if (in.readLine().trimmed() == "-1") break; }
                 continue;
@@ -2413,12 +2425,12 @@ bool FEModelPanel::parseUnvResults(const QString& filePath, FEResultData& result
             // Record 2: Analysis specific data (varies)
             if (in.atEnd()) break;
             line = in.readLine().trimmed();
-            QStringList r2 = line.split(QRegExp("\\s+"), Qt::SkipEmptyParts);
+            QStringList r2 = line.split(QRegExp("\\s+"), SKIP_EMPTY);
 
             // Record 3: Analysis type specific data
             if (in.atEnd()) break;
             line = in.readLine().trimmed();
-            QStringList r3 = line.split(QRegExp("\\s+"), Qt::SkipEmptyParts);
+            QStringList r3 = line.split(QRegExp("\\s+"), SKIP_EMPTY);
 
             int datasetLabel = r1.size() >= 1 ? r1[0].toInt() : 0;
             int subcaseId = datasetLabel > 0 ? datasetLabel : 1;
@@ -2432,7 +2444,7 @@ bool FEModelPanel::parseUnvResults(const QString& filePath, FEResultData& result
             // Record 6: Data definition (ndval + nvals)
             if (in.atEnd()) break;
             line = in.readLine().trimmed();
-            QStringList r6 = line.split(QRegExp("\\s+"), Qt::SkipEmptyParts);
+            QStringList r6 = line.split(QRegExp("\\s+"), SKIP_EMPTY);
             int ndval = r6.size() >= 1 ? r6[0].toInt() : 0;
             // nvals 可能在不同位置...Dataset 55 格式比较灵活
 
@@ -2445,7 +2457,7 @@ bool FEModelPanel::parseUnvResults(const QString& filePath, FEResultData& result
                 line = in.readLine().trimmed();
                 if (line == "-1") break;
 
-                QStringList parts = line.split(QRegExp("\\s+"), Qt::SkipEmptyParts);
+                QStringList parts = line.split(QRegExp("\\s+"), SKIP_EMPTY);
                 if (parts.isEmpty()) continue;
                 int nodeId = parts[0].toInt();
 
@@ -2453,7 +2465,7 @@ bool FEModelPanel::parseUnvResults(const QString& filePath, FEResultData& result
                 line = in.readLine().trimmed();
                 if (line == "-1") break;
 
-                QStringList vals = line.split(QRegExp("\\s+"), Qt::SkipEmptyParts);
+                QStringList vals = line.split(QRegExp("\\s+"), SKIP_EMPTY);
                 if (vals.size() >= 3) {
                     float vx = vals[0].toFloat();
                     float vy = vals[1].toFloat();

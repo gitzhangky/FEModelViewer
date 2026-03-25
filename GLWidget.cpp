@@ -939,13 +939,15 @@ void GLWidget::paintGL() {
     // ── 绘制坐标轴指示器（GL 部分，不含 QPainter 标签） ──
     drawAxesIndicator();
 
-    // ── QPainter 阶段：仅轴标签（色标已由独立覆盖层控件绘制） ──
+    // ── QPainter 阶段：轴标签 + ID 标签（色标已由独立覆盖层控件绘制） ──
     {
         QPainter painter(this);
         painter.beginNativePainting();
         painter.endNativePainting();
         painter.setRenderHint(QPainter::Antialiasing);
         drawAxesLabels(painter);
+        if (showLabels_ && selection_.hasSelection())
+            drawIdLabels(painter, mvp);
         painter.end();
     }
 
@@ -1752,6 +1754,116 @@ void GLWidget::drawAxesLabels(QPainter& painter) {
         painter.setPen(l.color);
         painter.drawText(QRectF(pos.x() - 12, pos.y() - 12, 24, 24),
                          Qt::AlignCenter, l.name);
+    }
+}
+
+void GLWidget::setShowLabels(bool show) {
+    if (showLabels_ != show) {
+        showLabels_ = show;
+        update();
+    }
+}
+
+void GLWidget::drawIdLabels(QPainter& painter, const glm::mat4& mvp) {
+    int w = width();
+    int h = height();
+
+    // 世界坐标 → 屏幕坐标
+    auto project = [&](const glm::vec3& pos) -> QPointF {
+        glm::vec4 clip = mvp * glm::vec4(pos, 1.0f);
+        if (clip.w <= 0.0f) return QPointF(-1, -1);
+        float nx = clip.x / clip.w;
+        float ny = clip.y / clip.w;
+        float sx = (nx * 0.5f + 0.5f) * w;
+        float sy = (1.0f - (ny * 0.5f + 0.5f)) * h;
+        return QPointF(sx, sy);
+    };
+
+    QFont font = painter.font();
+    font.setPixelSize(11);
+    font.setBold(true);
+    painter.setFont(font);
+
+    // 描边文字：深色轮廓 + 亮色正文（避免 drawRect 导致 GL 状态崩溃）
+    QColor outlineColor(0, 0, 0, 220);
+    QColor textColor(255, 200, 0);
+    const int offsetY = -14;  // 标签偏移到实体上方
+
+    // 绘制带描边的文字（4方向偏移描边 + 正文叠加）
+    auto drawOutlinedText = [&](int x, int y, const QString& text) {
+        painter.setPen(outlineColor);
+        for (int dx = -1; dx <= 1; ++dx)
+            for (int dy = -1; dy <= 1; ++dy)
+                if (dx != 0 || dy != 0)
+                    painter.drawText(x + dx, y + dy, text);
+        painter.setPen(textColor);
+        painter.drawText(x, y, text);
+    };
+
+    QFontMetrics fm(font);
+
+    // ── 节点标签 ──
+    if (!selection_.selectedNodes.empty() && !vertexToNode_.empty()) {
+        std::unordered_map<int, int> nodeToVert;
+        for (int i = 0; i < static_cast<int>(vertexToNode_.size()); ++i) {
+            int nid = vertexToNode_[i];
+            if (nid >= 0 && nodeToVert.find(nid) == nodeToVert.end())
+                nodeToVert[nid] = i;
+        }
+
+        for (int nid : selection_.selectedNodes) {
+            auto it = nodeToVert.find(nid);
+            if (it == nodeToVert.end()) continue;
+            int vi = it->second;
+            if (vi * 6 + 2 >= static_cast<int>(mesh_.vertices.size())) continue;
+
+            glm::vec3 pos(mesh_.vertices[vi * 6],
+                          mesh_.vertices[vi * 6 + 1],
+                          mesh_.vertices[vi * 6 + 2]);
+            QPointF sp = project(pos);
+            if (sp.x() < 0) continue;
+
+            QString text = QString::number(nid);
+            int tx = static_cast<int>(sp.x()) - fm.horizontalAdvance(text) / 2;
+            int ty = static_cast<int>(sp.y()) + offsetY;
+            drawOutlinedText(tx, ty, text);
+        }
+    }
+
+    // ── 单元标签（在单元重心位置显示） ──
+    if (!selection_.selectedElements.empty() && !triToElem_.empty()) {
+        struct ElemAccum { float sx = 0, sy = 0, sz = 0; int count = 0; };
+        std::unordered_map<int, ElemAccum> elemCentroids;
+
+        int triCount = static_cast<int>(triToElem_.size());
+        int idxCount = static_cast<int>(mesh_.indices.size());
+        for (int t = 0; t < triCount; ++t) {
+            if (t * 3 + 2 >= idxCount) break;
+            int eid = triToElem_[t];
+            if (selection_.selectedElements.count(eid) == 0) continue;
+            auto& acc = elemCentroids[eid];
+            for (int k = 0; k < 3; ++k) {
+                unsigned int vi = mesh_.indices[t * 3 + k];
+                if (vi * 6 + 2 < mesh_.vertices.size()) {
+                    acc.sx += mesh_.vertices[vi * 6];
+                    acc.sy += mesh_.vertices[vi * 6 + 1];
+                    acc.sz += mesh_.vertices[vi * 6 + 2];
+                    acc.count++;
+                }
+            }
+        }
+
+        for (const auto& [eid, acc] : elemCentroids) {
+            if (acc.count == 0) continue;
+            glm::vec3 center(acc.sx / acc.count, acc.sy / acc.count, acc.sz / acc.count);
+            QPointF sp = project(center);
+            if (sp.x() < 0) continue;
+
+            QString text = QString::number(eid);
+            int tx = static_cast<int>(sp.x()) - fm.horizontalAdvance(text) / 2;
+            int ty = static_cast<int>(sp.y()) + offsetY;
+            drawOutlinedText(tx, ty, text);
+        }
     }
 }
 

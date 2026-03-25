@@ -13,6 +13,7 @@
 #include <QWidget>
 #include <QGroupBox>
 #include <QLabel>
+#include <QCheckBox>
 #include <QString>
 #include <functional>
 
@@ -71,6 +72,9 @@ signals:
     /** @brief 结果数据加载完成 */
     void resultsLoaded(const FEResultData& results);
 
+    /** @brief ID标签显示/隐藏 */
+    void labelVisibilityChanged(bool visible);
+
 public slots:
     void updateSelectionInfo(PickMode mode, int count, const std::vector<int>& ids);
 
@@ -98,4 +102,5 @@ private:
     QLabel* selModeLabel_   = nullptr;
     QLabel* selCountLabel_  = nullptr;
     QLabel* selIdsLabel_    = nullptr;
+    QCheckBox* labelCheck_  = nullptr;
 };

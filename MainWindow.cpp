@@ -27,7 +27,6 @@
 #include "FEModelPanel.h"
 #include "PartsPanel.h"
 #include "ResultPanel.h"
-#include "PickPanel.h"
 #include "FEGroup.h"
 #include "FEPickResult.h"
 #include "FEMeshConverter.h"
@@ -83,7 +82,6 @@ MainWindow::MainWindow() {
     glWidget_ = new GLWidget;
 
     // ── 右侧面板 ──
-    pickPanel_ = new PickPanel;
     resultPanel_ = new ResultPanel;
 
     rightSidebar_ = new QWidget;
@@ -92,7 +90,6 @@ MainWindow::MainWindow() {
     auto* rightLayout = new QVBoxLayout(rightSidebar_);
     rightLayout->setContentsMargins(0, 0, 0, 0);
     rightLayout->setSpacing(0);
-    rightLayout->addWidget(pickPanel_);
     rightLayout->addWidget(resultPanel_);
 
     // ── 水平 Splitter: 左侧边栏 | GL视口 | 右侧边栏 ──
@@ -191,26 +188,9 @@ MainWindow::MainWindow() {
     connect(glWidget_, &GLWidget::partsPicked,
             partsPanel_, &PartsPanel::selectParts);
 
-    // ── 拾取面板连接 ──
-
-    // 拾取面板切换模式 → GLWidget + 同步工具栏
-    connect(pickPanel_, &PickPanel::pickModeChanged, this, [this](int mode) {
-        glWidget_->setPickMode(static_cast<PickMode>(mode));
-        // 同步工具栏选中状态
-        for (auto* action : pickGroup_->actions()) {
-            if (action->data().toInt() == mode) {
-                action->setChecked(true);
-                break;
-            }
-        }
-    });
-
-    // 显示控制和ID标签信号暂时只连接，渲染实现后续开发
-    // connect(pickPanel_, &PickPanel::nodeVisibilityChanged, ...);
-    // connect(pickPanel_, &PickPanel::elementVisibilityChanged, ...);
-    // connect(pickPanel_, &PickPanel::nodeLabelChanged, ...);
-    // connect(pickPanel_, &PickPanel::elementLabelChanged, ...);
-    // connect(pickPanel_, &PickPanel::partLabelChanged, ...);
+    // ID 标签显隐 → GLWidget
+    connect(feModelPanel_, &FEModelPanel::labelVisibilityChanged,
+            glWidget_, &GLWidget::setShowLabels);
 
     monitorPanel_->bindToWidget(glWidget_);
 
@@ -548,18 +528,6 @@ void MainWindow::setupToolBar() {
     connect(pickGroup_, &QActionGroup::triggered, this, [this](QAction* action) {
         int mode = action->data().toInt();
         glWidget_->setPickMode(static_cast<PickMode>(mode));
-        // 同步拾取面板单选按钮
-        pickPanel_->blockSignals(true);
-        auto buttons = pickPanel_->findChildren<QRadioButton*>();
-        for (auto* btn : buttons) {
-            // pickGroup_ 中 id 与 PickMode 值对应
-            auto* group = pickPanel_->findChild<QButtonGroup*>();
-            if (group && group->id(btn) == mode) {
-                btn->setChecked(true);
-                break;
-            }
-        }
-        pickPanel_->blockSignals(false);
     });
 }
 
@@ -679,7 +647,6 @@ void MainWindow::applyTheme(const Theme& t) {
     feModelPanel_->applyTheme(t);
     partsPanel_->applyTheme(t);
     monitorPanel_->applyTheme(t);
-    pickPanel_->applyTheme(t);
     resultPanel_->applyTheme(t);
     glWidget_->applyTheme(t);
 }

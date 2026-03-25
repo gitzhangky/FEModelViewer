@@ -3,7 +3,7 @@
  * @brief 右侧拾取控制面板实现
  *
  * 单个 QGroupBox 卡片，内含拾取模式、显示控制、ID标签三个区域。
- * 纯界面面板，渲染逻辑后续开发。
+ * 显隐和标签的操作对象由当前拾取模式决定。
  */
 
 #include "PickPanel.h"
@@ -59,23 +59,9 @@ PickPanel::PickPanel(QWidget* parent)
     cardLayout->addWidget(sep1);
 
     // ── 显示控制 ──
-    visLabel_ = new QLabel("显示");
-    cardLayout->addWidget(visLabel_);
-
-    nodeVisCheck_ = new QCheckBox("节点");
-    elemVisCheck_ = new QCheckBox("单元");
-    partVisCheck_ = new QCheckBox("部件");
-    nodeVisCheck_->setChecked(false);
-    elemVisCheck_->setChecked(true);
-    partVisCheck_->setChecked(true);
-
-    auto* visRow = new QHBoxLayout;
-    visRow->setSpacing(10);
-    visRow->addWidget(nodeVisCheck_);
-    visRow->addWidget(elemVisCheck_);
-    visRow->addWidget(partVisCheck_);
-    visRow->addStretch();
-    cardLayout->addLayout(visRow);
+    visCheck_ = new QCheckBox("显示");
+    visCheck_->setChecked(true);
+    cardLayout->addWidget(visCheck_);
 
     // ── 分隔线 ──
     auto* sep2 = new QFrame;
@@ -85,37 +71,24 @@ PickPanel::PickPanel(QWidget* parent)
     cardLayout->addWidget(sep2);
 
     // ── ID标签 ──
-    labelLabel_ = new QLabel("标签");
-    cardLayout->addWidget(labelLabel_);
-
-    nodeLabelCheck_ = new QCheckBox("节点ID");
-    elemLabelCheck_ = new QCheckBox("单元ID");
-    partLabelCheck_ = new QCheckBox("部件ID");
-    nodeLabelCheck_->setChecked(false);
-    elemLabelCheck_->setChecked(false);
-    partLabelCheck_->setChecked(false);
-
-    auto* labelRow = new QHBoxLayout;
-    labelRow->setSpacing(10);
-    labelRow->addWidget(nodeLabelCheck_);
-    labelRow->addWidget(elemLabelCheck_);
-    labelRow->addWidget(partLabelCheck_);
-    labelRow->addStretch();
-    cardLayout->addLayout(labelRow);
+    labelCheck_ = new QCheckBox("标签");
+    labelCheck_->setChecked(false);
+    cardLayout->addWidget(labelCheck_);
 
     layout->addWidget(pickGroup_);
 
     // ── 信号连接 ──
-    connect(modeGroup_, QOverload<int>::of(&QButtonGroup::idClicked),
+    // Qt 5.15 引入 idClicked，低版本使用 buttonClicked(int)
+#if QT_VERSION >= QT_VERSION_CHECK(5, 15, 0)
+    connect(modeGroup_, &QButtonGroup::idClicked,
             this, &PickPanel::pickModeChanged);
+#else
+    connect(modeGroup_, QOverload<int>::of(&QButtonGroup::buttonClicked),
+            this, &PickPanel::pickModeChanged);
+#endif
 
-    connect(nodeVisCheck_, &QCheckBox::toggled, this, &PickPanel::nodeVisibilityChanged);
-    connect(elemVisCheck_, &QCheckBox::toggled, this, &PickPanel::elementVisibilityChanged);
-    connect(partVisCheck_, &QCheckBox::toggled, this, &PickPanel::partVisibilityChanged);
-
-    connect(nodeLabelCheck_, &QCheckBox::toggled, this, &PickPanel::nodeLabelChanged);
-    connect(elemLabelCheck_, &QCheckBox::toggled, this, &PickPanel::elementLabelChanged);
-    connect(partLabelCheck_, &QCheckBox::toggled, this, &PickPanel::partLabelChanged);
+    connect(visCheck_,   &QCheckBox::toggled, this, &PickPanel::visibilityChanged);
+    connect(labelCheck_, &QCheckBox::toggled, this, &PickPanel::labelChanged);
 }
 
 void PickPanel::applyTheme(const Theme& t)

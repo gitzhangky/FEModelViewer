@@ -3,6 +3,7 @@
  * @brief 右侧拾取控制面板
  *
  * 单个"拾取"卡片内包含：拾取模式切换、显示/隐藏、ID标签显示/隐藏。
+ * 显隐和标签的操作对象由当前拾取模式决定。
  * 采用 QGroupBox 卡片风格，与左侧边栏一致。
  */
 
@@ -30,15 +31,11 @@ signals:
     // ── 拾取模式 ──
     void pickModeChanged(int mode);  // 0=Node, 1=Element, 2=Part
 
-    // ── 显示/隐藏 ──
-    void nodeVisibilityChanged(bool visible);
-    void elementVisibilityChanged(bool visible);
-    void partVisibilityChanged(bool visible);
+    // ── 显示/隐藏（操作对象由当前拾取模式决定）──
+    void visibilityChanged(bool visible);
 
-    // ── ID标签显示/隐藏 ──
-    void nodeLabelChanged(bool visible);
-    void elementLabelChanged(bool visible);
-    void partLabelChanged(bool visible);
+    // ── ID标签显示/隐藏（操作对象由当前拾取模式决定）──
+    void labelChanged(bool visible);
 
 private:
     QGroupBox* pickGroup_      = nullptr;   // 卡片容器
@@ -51,13 +48,9 @@ private:
 
     // 显示/隐藏
     QLabel*    visLabel_       = nullptr;
-    QCheckBox* nodeVisCheck_   = nullptr;
-    QCheckBox* elemVisCheck_   = nullptr;
-    QCheckBox* partVisCheck_   = nullptr;
+    QCheckBox* visCheck_       = nullptr;
 
     // ID标签
     QLabel*    labelLabel_     = nullptr;
-    QCheckBox* nodeLabelCheck_ = nullptr;
-    QCheckBox* elemLabelCheck_ = nullptr;
-    QCheckBox* partLabelCheck_ = nullptr;
+    QCheckBox* labelCheck_     = nullptr;
 };
