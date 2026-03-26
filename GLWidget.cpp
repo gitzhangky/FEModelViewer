@@ -675,6 +675,13 @@ void GLWidget::initializeGL() {
 }
 
 void GLWidget::paintGL() {
+    // 恢复 GL 状态（QPainter 可能在上一帧末尾修改了 viewport/深度/混合等）
+    int dpr_ = devicePixelRatio();
+    glViewport(0, 0, width() * dpr_, height() * dpr_);
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LESS);
+    glDisable(GL_BLEND);
+
     // ── 处理延迟拾取请求（全部使用原始 GL 调用，不污染 Qt 状态追踪） ──
     if (pickPointPending_) {
         pickPointPending_ = false;
@@ -684,11 +691,14 @@ void GLWidget::paintGL() {
         pickRectPending_ = false;
         pickInRect(pendingPickRect_);
     }
-
-    // 恢复 GL 状态（QPainter 可能在上一帧末尾修改了这些）
-    glEnable(GL_DEPTH_TEST);
-    glDepthFunc(GL_LESS);
-    glDisable(GL_BLEND);
+    if (deselectPointPending_) {
+        deselectPointPending_ = false;
+        deselectAtPoint(pendingDeselectPos_);
+    }
+    if (deselectRectPending_) {
+        deselectRectPending_ = false;
+        deselectInRect(pendingDeselectRect_);
+    }
 
     // 如果网格数据有更新，重新上传到 GPU
     if (needsUpload_) uploadMesh();
@@ -987,21 +997,34 @@ void GLWidget::mousePressEvent(QMouseEvent* e) {
     lastPos_ = e->pos();
     isDragging_ = false;
     isBoxSelecting_ = false;
+    isBoxDeselecting_ = false;
 
-    // Shift + 左键 → 开始框选
-    if ((e->button() == Qt::LeftButton) && (e->modifiers() & Qt::ShiftModifier)) {
-        isBoxSelecting_ = true;
-        boxOrigin_ = e->pos();
-        if (!rubberBand_)
-            rubberBand_ = new QRubberBand(QRubberBand::Rectangle, this);
-        rubberBand_->setGeometry(QRect(boxOrigin_, QSize()));
-        rubberBand_->show();
+    bool hasMod = (e->modifiers() & (Qt::ControlModifier | Qt::ShiftModifier));
+
+    if (hasMod) {
+        if (e->button() == Qt::LeftButton) {
+            // Ctrl/Shift + 左键 → 框选/点选（添加选中）
+            isBoxSelecting_ = true;
+            boxOrigin_ = e->pos();
+            if (!rubberBand_)
+                rubberBand_ = new QRubberBand(QRubberBand::Rectangle, this);
+            rubberBand_->setGeometry(QRect(boxOrigin_, QSize()));
+            rubberBand_->show();
+        } else if (e->button() == Qt::RightButton) {
+            // Ctrl/Shift + 右键 → 框选/点选（取消选中）
+            isBoxDeselecting_ = true;
+            boxOrigin_ = e->pos();
+            if (!rubberBand_)
+                rubberBand_ = new QRubberBand(QRubberBand::Rectangle, this);
+            rubberBand_->setGeometry(QRect(boxOrigin_, QSize()));
+            rubberBand_->show();
+        }
     }
 }
 
 void GLWidget::mouseMoveEvent(QMouseEvent* e) {
-    // 框选模式：更新矩形
-    if (isBoxSelecting_ && rubberBand_) {
+    // 框选模式（选中/取消）：更新矩形
+    if ((isBoxSelecting_ || isBoxDeselecting_) && rubberBand_) {
         rubberBand_->setGeometry(QRect(boxOrigin_, e->pos()).normalized());
         return;
     }
@@ -1019,8 +1042,14 @@ void GLWidget::mouseMoveEvent(QMouseEvent* e) {
             return;
     }
 
-    if (e->buttons() & Qt::LeftButton)                              cam_.rotate(dx, dy);
-    if (e->buttons() & (Qt::RightButton | Qt::MiddleButton))        cam_.pan(dx, dy);
+    // Ctrl/Shift + 左键用于拾取，不旋转
+    if ((e->buttons() & Qt::LeftButton) &&
+        !(e->modifiers() & (Qt::ControlModifier | Qt::ShiftModifier)))
+        cam_.rotate(dx, dy);
+    // Ctrl/Shift + 右键用于取消拾取，不平移
+    if ((e->buttons() & (Qt::RightButton | Qt::MiddleButton)) &&
+        !(e->modifiers() & (Qt::ControlModifier | Qt::ShiftModifier)))
+        cam_.pan(dx, dy);
 
     // 部件模式轮廓边依赖视角，相机变化时需要刷新
     if (pickMode_ == PickMode::Part && selection_.hasSelection())
@@ -1030,26 +1059,45 @@ void GLWidget::mouseMoveEvent(QMouseEvent* e) {
 }
 
 void GLWidget::mouseReleaseEvent(QMouseEvent* e) {
-    if (e->button() == Qt::LeftButton) {
-        if (isBoxSelecting_ && rubberBand_) {
-            // 框选完成
-            rubberBand_->hide();
-            QRect rect = QRect(boxOrigin_, e->pos()).normalized();
-            if (rect.width() > 3 && rect.height() > 3) {
-                // 延迟到 paintGL() 中执行，避免 makeCurrent/doneCurrent 污染 GL 状态
-                pickRectPending_ = true;
-                pendingPickRect_ = rect;
-                update();
-            }
-            isBoxSelecting_ = false;
-        } else if (!isDragging_) {
-            // 点选（未拖拽）— 延迟到 paintGL() 中执行
+    // ── Ctrl/Shift + 左键：添加选中（点选/框选） ──
+    if (e->button() == Qt::LeftButton && isBoxSelecting_ && rubberBand_) {
+        rubberBand_->hide();
+        isBoxSelecting_ = false;
+
+        QRect rect = QRect(boxOrigin_, e->pos()).normalized();
+        if (rect.width() > 3 && rect.height() > 3) {
+            // 框选
+            pickRectPending_ = true;
+            pendingPickRect_ = rect;
+            update();
+        } else {
+            // 范围太小视为点选
             pickPointPending_ = true;
             pendingPickPos_ = e->pos();
-            pendingPickCtrl_ = (e->modifiers() & Qt::ControlModifier);
+            pendingPickCtrl_ = (e->modifiers() & (Qt::ControlModifier | Qt::ShiftModifier));
             update();
         }
     }
+
+    // ── Ctrl/Shift + 右键：取消选中（点选/框选） ──
+    if (e->button() == Qt::RightButton && isBoxDeselecting_ && rubberBand_) {
+        rubberBand_->hide();
+        isBoxDeselecting_ = false;
+
+        QRect rect = QRect(boxOrigin_, e->pos()).normalized();
+        if (rect.width() > 3 && rect.height() > 3) {
+            // 框选取消
+            deselectRectPending_ = true;
+            pendingDeselectRect_ = rect;
+            update();
+        } else {
+            // 范围太小视为点选取消
+            deselectPointPending_ = true;
+            pendingDeselectPos_ = e->pos();
+            update();
+        }
+    }
+
     isDragging_ = false;
 }
 
@@ -1124,9 +1172,11 @@ void GLWidget::renderPickBuffer(const glm::mat4& mvp) {
 
     // ── 保存所有关键 GL 状态 ──
     GLint prevFbo, prevProgram, prevVao, prevABO, prevEBO;
+    GLint prevViewport[4];
     GLfloat prevClearColor[4];
     GLboolean prevDepthTest, prevBlend;
     glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFbo);
+    glGetIntegerv(GL_VIEWPORT, prevViewport);
     glGetFloatv(GL_COLOR_CLEAR_VALUE, prevClearColor);
     glGetIntegerv(GL_CURRENT_PROGRAM, &prevProgram);
     glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &prevVao);
@@ -1137,6 +1187,10 @@ void GLWidget::renderPickBuffer(const glm::mat4& mvp) {
 
     // ── 全部使用原始 GL 调用，不触碰任何 Qt 包装器 ──
     glBindFramebuffer(GL_FRAMEBUFFER, pickFbo_->handle());
+
+    // 设置 viewport 匹配 FBO 尺寸（QPainter 可能在上一帧修改了 viewport）
+    int dpr = devicePixelRatio();
+    glViewport(0, 0, width() * dpr, height() * dpr);
 
     glClearColor(0, 0, 0, 1);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -1193,6 +1247,7 @@ void GLWidget::renderPickBuffer(const glm::mat4& mvp) {
 
     // ── 恢复所有 GL 状态（同样使用原始调用） ──
     glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(prevFbo));
+    glViewport(prevViewport[0], prevViewport[1], prevViewport[2], prevViewport[3]);
     glClearColor(prevClearColor[0], prevClearColor[1], prevClearColor[2], prevClearColor[3]);
     glBindVAO_(static_cast<GLuint>(prevVao));
     glUseProg_(static_cast<GLuint>(prevProgram));
@@ -1435,9 +1490,190 @@ void GLWidget::pickInRect(const QRect& rect) {
     }
 }
 
+void GLWidget::deselectAtPoint(const QPoint& pos) {
+    if (!pickFbo_ || triToElem_.empty()) return;
+
+    float aspect = (height() > 0) ? static_cast<float>(width()) / height() : 1.0f;
+    glm::mat4 projection = glm::perspective(glm::radians(45.0f), aspect, cam_.distance * 0.01f, cam_.distance * 10.0f);
+    glm::mat4 view = cam_.viewMatrix();
+    glm::mat4 mvp = projection * view;
+
+    renderPickBuffer(mvp);
+
+    unsigned char pixel[4] = {0};
+    {
+        GLint prevFbo;
+        glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFbo);
+        glBindFramebuffer(GL_FRAMEBUFFER, pickFbo_->handle());
+        int dpr = devicePixelRatio();
+        int px = pos.x() * dpr;
+        int py = (height() - pos.y()) * dpr;
+        glReadPixels(px, py, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
+        glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(prevFbo));
+    }
+
+    int elemId = colorToId(pixel[0], pixel[1], pixel[2]);
+
+    if (pickMode_ == PickMode::Node) {
+        int closestNode = -1;
+        if (elemId >= 0) {
+            float ndcX = (2.0f * pos.x() / width()) - 1.0f;
+            float ndcY = 1.0f - (2.0f * pos.y() / height());
+            float minDist2 = 1e30f;
+            int triCount = static_cast<int>(triToElem_.size());
+            for (int t = 0; t < triCount; ++t) {
+                if (triToElem_[t] != elemId) continue;
+                for (int v = 0; v < 3; ++v) {
+                    unsigned int vi = mesh_.indices[t * 3 + v];
+                    glm::vec4 wp(mesh_.vertices[vi * 6], mesh_.vertices[vi * 6 + 1],
+                                 mesh_.vertices[vi * 6 + 2], 1.0f);
+                    glm::vec4 clip = mvp * wp;
+                    if (clip.w <= 0) continue;
+                    float sx = clip.x / clip.w;
+                    float sy = clip.y / clip.w;
+                    float d2 = (sx - ndcX) * (sx - ndcX) + (sy - ndcY) * (sy - ndcY);
+                    if (d2 < minDist2) { minDist2 = d2; closestNode = (vi < vertexToNode_.size()) ? vertexToNode_[vi] : static_cast<int>(vi); }
+                }
+            }
+        }
+        if (closestNode >= 0) selection_.selectedNodes.erase(closestNode);
+
+    } else if (pickMode_ == PickMode::Part) {
+        if (elemId >= 0 && !elemToPart_.empty()) {
+            auto it = elemToPart_.find(elemId);
+            if (it != elemToPart_.end()) deselectPart(it->second);
+        }
+
+    } else {
+        if (elemId >= 0) selection_.selectedElements.erase(elemId);
+    }
+
+    selectionDirty_ = true;
+    {
+        std::vector<int> ids;
+        if (!selection_.selectedNodes.empty())
+            ids.assign(selection_.selectedNodes.begin(), selection_.selectedNodes.end());
+        else
+            ids.assign(selection_.selectedElements.begin(), selection_.selectedElements.end());
+        std::sort(ids.begin(), ids.end());
+        emit selectionChanged(pickMode_, static_cast<int>(ids.size()), ids);
+    }
+    if (pickMode_ == PickMode::Part) {
+        std::vector<int> pickedParts;
+        for (int pi = 0; pi < static_cast<int>(partElementIds_.size()); ++pi)
+            if (isPartFullySelected(pi)) pickedParts.push_back(pi);
+        emit partsPicked(pickedParts);
+    }
+}
+
+void GLWidget::deselectInRect(const QRect& rect) {
+    if (triToElem_.empty()) return;
+
+    float aspect = (height() > 0) ? static_cast<float>(width()) / height() : 1.0f;
+    glm::mat4 projection = glm::perspective(glm::radians(45.0f), aspect, cam_.distance * 0.01f, cam_.distance * 10.0f);
+    glm::mat4 mvp = projection * cam_.viewMatrix();
+
+    float ndcL = (2.0f * rect.left() / width()) - 1.0f;
+    float ndcR = (2.0f * rect.right() / width()) - 1.0f;
+    float ndcT = 1.0f - (2.0f * rect.top() / height());
+    float ndcB = 1.0f - (2.0f * rect.bottom() / height());
+    if (ndcL > ndcR) std::swap(ndcL, ndcR);
+    if (ndcB > ndcT) std::swap(ndcB, ndcT);
+
+    int vertCount = static_cast<int>(mesh_.vertices.size() / 6);
+
+    if (pickMode_ == PickMode::Node) {
+        std::unordered_set<int> removedNodes;
+        for (int vi = 0; vi < vertCount; ++vi) {
+            glm::vec4 wp(mesh_.vertices[vi * 6], mesh_.vertices[vi * 6 + 1],
+                         mesh_.vertices[vi * 6 + 2], 1.0f);
+            glm::vec4 clip = mvp * wp;
+            if (clip.w <= 0) continue;
+            float sx = clip.x / clip.w;
+            float sy = clip.y / clip.w;
+            if (sx >= ndcL && sx <= ndcR && sy >= ndcB && sy <= ndcT) {
+                int nodeId = (vi < static_cast<int>(vertexToNode_.size())) ? vertexToNode_[vi] : vi;
+                if (nodeId >= 0 && removedNodes.insert(nodeId).second)
+                    selection_.selectedNodes.erase(nodeId);
+            }
+        }
+    } else if (pickMode_ == PickMode::Part) {
+        std::unordered_set<int> hitParts;
+        int triCount = static_cast<int>(triToElem_.size());
+        for (int t = 0; t < triCount; ++t) {
+            bool anyInside = false;
+            for (int v = 0; v < 3; ++v) {
+                unsigned int vi = mesh_.indices[t * 3 + v];
+                glm::vec4 wp(mesh_.vertices[vi * 6], mesh_.vertices[vi * 6 + 1],
+                             mesh_.vertices[vi * 6 + 2], 1.0f);
+                glm::vec4 clip = mvp * wp;
+                if (clip.w <= 0) continue;
+                float sx = clip.x / clip.w;
+                float sy = clip.y / clip.w;
+                if (sx >= ndcL && sx <= ndcR && sy >= ndcB && sy <= ndcT) { anyInside = true; break; }
+            }
+            if (anyInside && t < static_cast<int>(triToPart_.size()))
+                hitParts.insert(triToPart_[t]);
+        }
+        for (int p : hitParts) deselectPart(p);
+    } else {
+        int triCount = static_cast<int>(triToElem_.size());
+        for (int t = 0; t < triCount; ++t) {
+            int elemId = triToElem_[t];
+            if (!selection_.isElementSelected(elemId)) continue;
+            bool anyInside = false;
+            for (int v = 0; v < 3; ++v) {
+                unsigned int vi = mesh_.indices[t * 3 + v];
+                glm::vec4 wp(mesh_.vertices[vi * 6], mesh_.vertices[vi * 6 + 1],
+                             mesh_.vertices[vi * 6 + 2], 1.0f);
+                glm::vec4 clip = mvp * wp;
+                if (clip.w <= 0) continue;
+                float sx = clip.x / clip.w;
+                float sy = clip.y / clip.w;
+                if (sx >= ndcL && sx <= ndcR && sy >= ndcB && sy <= ndcT) { anyInside = true; break; }
+            }
+            if (anyInside) selection_.selectedElements.erase(elemId);
+        }
+    }
+
+    selectionDirty_ = true;
+    {
+        std::vector<int> ids;
+        if (!selection_.selectedNodes.empty())
+            ids.assign(selection_.selectedNodes.begin(), selection_.selectedNodes.end());
+        else
+            ids.assign(selection_.selectedElements.begin(), selection_.selectedElements.end());
+        std::sort(ids.begin(), ids.end());
+        emit selectionChanged(pickMode_, static_cast<int>(ids.size()), ids);
+    }
+    if (pickMode_ == PickMode::Part) {
+        std::vector<int> pickedParts;
+        for (int pi = 0; pi < static_cast<int>(partElementIds_.size()); ++pi)
+            if (isPartFullySelected(pi)) pickedParts.push_back(pi);
+        emit partsPicked(pickedParts);
+    }
+}
+
 // ============================================================
 // 私有方法
 // ============================================================
+
+void GLWidget::setPickMode(PickMode mode) {
+    if (mode == pickMode_) return;
+    pickMode_ = mode;
+
+    // 切换拾取模式时清除之前的选中状态
+    if (selection_.hasSelection()) {
+        selection_.clear();
+        selectionDirty_ = true;
+        partEdgeCacheValid_ = false;
+        selEdgeVertCount_ = 0;
+        emit selectionChanged(pickMode_, 0, {});
+        if (mode == PickMode::Part)
+            emit partsPicked({});
+        update();
+    }
+}
 
 void GLWidget::selectPart(int partIndex) {
     if (partIndex < 0 || partIndex >= static_cast<int>(partElementIds_.size())) return;
@@ -1802,67 +2038,109 @@ void GLWidget::drawIdLabels(QPainter& painter, const glm::mat4& mvp) {
 
     QFontMetrics fm(font);
 
-    // ── 节点标签 ──
-    if (!selection_.selectedNodes.empty() && !vertexToNode_.empty()) {
-        std::unordered_map<int, int> nodeToVert;
-        for (int i = 0; i < static_cast<int>(vertexToNode_.size()); ++i) {
-            int nid = vertexToNode_[i];
-            if (nid >= 0 && nodeToVert.find(nid) == nodeToVert.end())
-                nodeToVert[nid] = i;
-        }
+    if (pickMode_ == PickMode::Node) {
+        // ── 节点标签 ──
+        if (!selection_.selectedNodes.empty() && !vertexToNode_.empty()) {
+            std::unordered_map<int, int> nodeToVert;
+            for (int i = 0; i < static_cast<int>(vertexToNode_.size()); ++i) {
+                int nid = vertexToNode_[i];
+                if (nid >= 0 && nodeToVert.find(nid) == nodeToVert.end())
+                    nodeToVert[nid] = i;
+            }
 
-        for (int nid : selection_.selectedNodes) {
-            auto it = nodeToVert.find(nid);
-            if (it == nodeToVert.end()) continue;
-            int vi = it->second;
-            if (vi * 6 + 2 >= static_cast<int>(mesh_.vertices.size())) continue;
+            for (int nid : selection_.selectedNodes) {
+                auto it = nodeToVert.find(nid);
+                if (it == nodeToVert.end()) continue;
+                int vi = it->second;
+                if (vi * 6 + 2 >= static_cast<int>(mesh_.vertices.size())) continue;
 
-            glm::vec3 pos(mesh_.vertices[vi * 6],
-                          mesh_.vertices[vi * 6 + 1],
-                          mesh_.vertices[vi * 6 + 2]);
-            QPointF sp = project(pos);
-            if (sp.x() < 0) continue;
+                glm::vec3 pos(mesh_.vertices[vi * 6],
+                              mesh_.vertices[vi * 6 + 1],
+                              mesh_.vertices[vi * 6 + 2]);
+                QPointF sp = project(pos);
+                if (sp.x() < 0) continue;
 
-            QString text = QString::number(nid);
-            int tx = static_cast<int>(sp.x()) - fm.horizontalAdvance(text) / 2;
-            int ty = static_cast<int>(sp.y()) + offsetY;
-            drawOutlinedText(tx, ty, text);
-        }
-    }
-
-    // ── 单元标签（在单元重心位置显示） ──
-    if (!selection_.selectedElements.empty() && !triToElem_.empty()) {
-        struct ElemAccum { float sx = 0, sy = 0, sz = 0; int count = 0; };
-        std::unordered_map<int, ElemAccum> elemCentroids;
-
-        int triCount = static_cast<int>(triToElem_.size());
-        int idxCount = static_cast<int>(mesh_.indices.size());
-        for (int t = 0; t < triCount; ++t) {
-            if (t * 3 + 2 >= idxCount) break;
-            int eid = triToElem_[t];
-            if (selection_.selectedElements.count(eid) == 0) continue;
-            auto& acc = elemCentroids[eid];
-            for (int k = 0; k < 3; ++k) {
-                unsigned int vi = mesh_.indices[t * 3 + k];
-                if (vi * 6 + 2 < mesh_.vertices.size()) {
-                    acc.sx += mesh_.vertices[vi * 6];
-                    acc.sy += mesh_.vertices[vi * 6 + 1];
-                    acc.sz += mesh_.vertices[vi * 6 + 2];
-                    acc.count++;
-                }
+                QString text = QString::number(nid);
+                int tx = static_cast<int>(sp.x()) - fm.horizontalAdvance(text) / 2;
+                int ty = static_cast<int>(sp.y()) + offsetY;
+                drawOutlinedText(tx, ty, text);
             }
         }
 
-        for (const auto& [eid, acc] : elemCentroids) {
-            if (acc.count == 0) continue;
-            glm::vec3 center(acc.sx / acc.count, acc.sy / acc.count, acc.sz / acc.count);
-            QPointF sp = project(center);
-            if (sp.x() < 0) continue;
+    } else if (pickMode_ == PickMode::Part) {
+        // ── 部件标签（在部件重心位置显示部件索引） ──
+        if (!selection_.selectedElements.empty() && !triToElem_.empty() && !triToPart_.empty()) {
+            // 收集选中的部件索引
+            std::set<int> selectedParts;
+            for (int pi = 0; pi < static_cast<int>(partElementIds_.size()); ++pi) {
+                if (isPartFullySelected(pi))
+                    selectedParts.insert(pi);
+            }
 
-            QString text = QString::number(eid);
-            int tx = static_cast<int>(sp.x()) - fm.horizontalAdvance(text) / 2;
-            int ty = static_cast<int>(sp.y()) + offsetY;
-            drawOutlinedText(tx, ty, text);
+            // 计算每个选中部件的重心
+            for (int pi : selectedParts) {
+                if (pi < 0 || pi >= static_cast<int>(partTriangles_.size())) continue;
+                float sx = 0, sy = 0, sz = 0;
+                int count = 0;
+                for (int t : partTriangles_[pi]) {
+                    if (t * 3 + 2 >= static_cast<int>(mesh_.indices.size())) continue;
+                    for (int k = 0; k < 3; ++k) {
+                        unsigned int vi = mesh_.indices[t * 3 + k];
+                        if (vi * 6 + 2 < mesh_.vertices.size()) {
+                            sx += mesh_.vertices[vi * 6];
+                            sy += mesh_.vertices[vi * 6 + 1];
+                            sz += mesh_.vertices[vi * 6 + 2];
+                            count++;
+                        }
+                    }
+                }
+                if (count == 0) continue;
+                glm::vec3 center(sx / count, sy / count, sz / count);
+                QPointF sp = project(center);
+                if (sp.x() < 0) continue;
+
+                QString text = QString("Part %1").arg(pi + 1);
+                int tx = static_cast<int>(sp.x()) - fm.horizontalAdvance(text) / 2;
+                int ty = static_cast<int>(sp.y()) + offsetY;
+                drawOutlinedText(tx, ty, text);
+            }
+        }
+
+    } else {
+        // ── 单元标签（在单元重心位置显示） ──
+        if (!selection_.selectedElements.empty() && !triToElem_.empty()) {
+            struct ElemAccum { float sx = 0, sy = 0, sz = 0; int count = 0; };
+            std::unordered_map<int, ElemAccum> elemCentroids;
+
+            int triCount = static_cast<int>(triToElem_.size());
+            int idxCount = static_cast<int>(mesh_.indices.size());
+            for (int t = 0; t < triCount; ++t) {
+                if (t * 3 + 2 >= idxCount) break;
+                int eid = triToElem_[t];
+                if (selection_.selectedElements.count(eid) == 0) continue;
+                auto& acc = elemCentroids[eid];
+                for (int k = 0; k < 3; ++k) {
+                    unsigned int vi = mesh_.indices[t * 3 + k];
+                    if (vi * 6 + 2 < mesh_.vertices.size()) {
+                        acc.sx += mesh_.vertices[vi * 6];
+                        acc.sy += mesh_.vertices[vi * 6 + 1];
+                        acc.sz += mesh_.vertices[vi * 6 + 2];
+                        acc.count++;
+                    }
+                }
+            }
+
+            for (const auto& [eid, acc] : elemCentroids) {
+                if (acc.count == 0) continue;
+                glm::vec3 center(acc.sx / acc.count, acc.sy / acc.count, acc.sz / acc.count);
+                QPointF sp = project(center);
+                if (sp.x() < 0) continue;
+
+                QString text = QString::number(eid);
+                int tx = static_cast<int>(sp.x()) - fm.horizontalAdvance(text) / 2;
+                int ty = static_cast<int>(sp.y()) + offsetY;
+                drawOutlinedText(tx, ty, text);
+            }
         }
     }
 }

@@ -75,7 +75,7 @@ public:
     void setVertexToNodeMap(const std::vector<int>& map);
 
     /** @brief 设置拾取模式 */
-    void setPickMode(PickMode mode) { pickMode_ = mode; }
+    void setPickMode(PickMode mode);
 
     /** @brief 设置是否显示选中项的 ID 标签 */
     void setShowLabels(bool show);
@@ -148,6 +148,8 @@ private:
     void renderPickBuffer(const glm::mat4& mvp);
     void pickAtPoint(const QPoint& pos, bool ctrlHeld);
     void pickInRect(const QRect& rect);
+    void deselectAtPoint(const QPoint& pos);
+    void deselectInRect(const QRect& rect);
     glm::vec3 idToColor(int id);
     int colorToId(unsigned char r, unsigned char g, unsigned char b);
     void rebuildSelectionEdges();
@@ -268,16 +270,21 @@ private:
     QPoint lastPos_;
     QPoint pressPos_;                   // 鼠标按下位置（区分点击和拖拽）
     bool isDragging_ = false;           // 是否正在拖拽旋转/平移
-    bool isBoxSelecting_ = false;       // 是否正在框选
+    bool isBoxSelecting_ = false;       // 是否正在框选（添加）
+    bool isBoxDeselecting_ = false;     // 是否正在框选（取消）
     QRubberBand* rubberBand_ = nullptr; // 框选矩形
     QPoint boxOrigin_;                  // 框选起始点
 
     // ── 延迟拾取（避免在 paintGL 外调用 makeCurrent 导致 GL 状态污染） ──
     bool pickPointPending_ = false;     // 点选待处理
     QPoint pendingPickPos_;             // 点选位置
-    bool pendingPickCtrl_ = false;      // 是否按住 Ctrl
+    bool pendingPickCtrl_ = false;      // 是否按住 Ctrl/Shift（累加模式）
     bool pickRectPending_ = false;      // 框选待处理
     QRect pendingPickRect_;             // 框选矩形
+    bool deselectPointPending_ = false; // 点选取消待处理
+    QPoint pendingDeselectPos_;         // 点选取消位置
+    bool deselectRectPending_ = false;  // 框选取消待处理
+    QRect pendingDeselectRect_;         // 框选取消矩形
     glm::vec3 color_{0.55f, 0.75f, 0.73f};
 
     // ── 坐标轴指示器 ──
