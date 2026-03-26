@@ -849,8 +849,16 @@ explicit GLWidget(QWidget* parent = nullptr);
 #### 拾取模式
 
 ```cpp
-void setPickMode(PickMode mode);  // Node / Element / Part
+void setPickMode(PickMode mode);  // Node / Element / Part — 切换时自动清除之前的选中状态
 ```
+
+#### 按 ID 选中
+
+```cpp
+void selectByIds(PickMode mode, const std::vector<int>& ids);
+```
+
+按指定模式和 ID 列表选中节点/单元/部件，自动切换拾取模式、高亮选中项并显示 ID 标签。供搜索框等外部调用。
 
 #### 部件可见性（Slot）
 
@@ -1102,6 +1110,9 @@ QObject::connect(&viewer, &GLWidget::selectionChanged,
             for (int id : ids) qDebug() << "  Element" << id;
         }
     });
+
+// 按 ID 搜索并高亮（支持节点/单元/部件）
+viewer.selectByIds(PickMode::Node, {1, 3, 5, 10});
 
 // 连接部件拾取信号（Part 模式下）
 QObject::connect(&viewer, &GLWidget::partsPicked,
