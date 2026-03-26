@@ -80,6 +80,9 @@ public:
     /** @brief 设置是否显示选中项的 ID 标签 */
     void setShowLabels(bool show);
 
+    /** @brief 按 ID 列表选中节点或单元（供搜索框调用） */
+    void selectByIds(PickMode mode, const std::vector<int>& ids);
+
     /** @brief 设置是否使用顶点颜色（云图模式） */
     void setUseVertexColor(bool use);
 

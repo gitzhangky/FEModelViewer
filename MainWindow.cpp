@@ -192,6 +192,10 @@ MainWindow::MainWindow() {
     connect(feModelPanel_, &FEModelPanel::labelVisibilityChanged,
             glWidget_, &GLWidget::setShowLabels);
 
+    // ID 搜索 → GLWidget 选中高亮
+    connect(feModelPanel_, &FEModelPanel::searchRequested,
+            glWidget_, &GLWidget::selectByIds);
+
     monitorPanel_->bindToWidget(glWidget_);
 
     // ── 结果面板连接 ──

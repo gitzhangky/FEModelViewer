@@ -2000,6 +2000,36 @@ void GLWidget::setShowLabels(bool show) {
     }
 }
 
+void GLWidget::selectByIds(PickMode mode, const std::vector<int>& ids) {
+    pickMode_ = mode;
+    selection_.clear();
+
+    if (mode == PickMode::Node) {
+        for (int id : ids) selection_.selectedNodes.insert(id);
+    } else if (mode == PickMode::Part) {
+        for (int pi : ids) selectPart(pi);
+    } else {
+        for (int id : ids) selection_.selectedElements.insert(id);
+    }
+
+    selectionDirty_ = true;
+    showLabels_ = true;
+
+    // 发射选中变更信号
+    std::vector<int> sortedIds(ids.begin(), ids.end());
+    std::sort(sortedIds.begin(), sortedIds.end());
+    emit selectionChanged(mode, static_cast<int>(sortedIds.size()), sortedIds);
+
+    if (mode == PickMode::Part) {
+        std::vector<int> pickedParts;
+        for (int pi = 0; pi < static_cast<int>(partElementIds_.size()); ++pi)
+            if (isPartFullySelected(pi)) pickedParts.push_back(pi);
+        emit partsPicked(pickedParts);
+    }
+
+    update();
+}
+
 void GLWidget::drawIdLabels(QPainter& painter, const glm::mat4& mvp) {
     int w = width();
     int h = height();

@@ -14,6 +14,9 @@
 #include <QGroupBox>
 #include <QLabel>
 #include <QCheckBox>
+#include <QLineEdit>
+#include <QComboBox>
+#include <QPushButton>
 #include <QString>
 #include <functional>
 
@@ -75,12 +78,17 @@ signals:
     /** @brief ID标签显示/隐藏 */
     void labelVisibilityChanged(bool visible);
 
+    /** @brief 搜索选中请求（模式 + ID 列表） */
+    void searchRequested(PickMode mode, const std::vector<int>& ids);
+
 public slots:
     void updateSelectionInfo(PickMode mode, int count, const std::vector<int>& ids);
 
 private:
     QGroupBox* createInfoGroup();       // 模型信息分组
     QGroupBox* createSelectionGroup();  // 选中信息分组
+    QGroupBox* createSearchGroup();     // 搜索分组
+    void onSearchTriggered();           // 执行搜索
 
     bool parseAbaqusInp(const QString& filePath, FEModel& model, const std::function<void(int)>& progress = nullptr);
     bool parseNastranBdf(const QString& filePath, FEModel& model, const std::function<void(int)>& progress = nullptr);
@@ -103,4 +111,9 @@ private:
     QLabel* selCountLabel_  = nullptr;
     QLabel* selIdsLabel_    = nullptr;
     QCheckBox* labelCheck_  = nullptr;
+
+    // ── 搜索 ──
+    QComboBox* searchTypeCombo_ = nullptr;
+    QLineEdit* searchInput_     = nullptr;
+    QPushButton* searchBtn_     = nullptr;
 };

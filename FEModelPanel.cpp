@@ -25,6 +25,7 @@
 #include <QElapsedTimer>
 #include <QThread>
 #include <QEventLoop>
+#include <QRegularExpressionValidator>
 #include <functional>
 #include <atomic>
 #include <map>
@@ -51,6 +52,7 @@ FEModelPanel::FEModelPanel(QWidget* parent) : QWidget(parent) {
 
     layout->addWidget(createInfoGroup());
     layout->addWidget(createSelectionGroup());
+    layout->addWidget(createSearchGroup());
     layout->addStretch();
 
     // 默认主题在 MainWindow 中统一调用 applyTheme() 设置
@@ -67,7 +69,37 @@ void FEModelPanel::applyTheme(const Theme& t) {
         "  subcontrol-origin: margin; left: 10px; padding: 0 4px;"
         "  color: %6; }"
         "QLabel { font-size: 12px; color: %7; }"
-    ).arg(t.base, t.text, t.mantle, t.surface0, t.subtext0, t.green, t.subtext1));
+        "QLabel#searchHint { font-size: 10px; color: %8; }"
+        "QLineEdit {"
+        "  background: %4; border: 1px solid %9; border-radius: 4px;"
+        "  padding: 4px 8px; font-size: 12px; color: %2;"
+        "  min-height: 22px; }"
+        "QLineEdit:focus { border-color: %6; }"
+        "QComboBox {"
+        "  background: %4; border: 1px solid %9; border-radius: 4px;"
+        "  padding: 4px 8px; font-size: 12px; color: %2;"
+        "  min-height: 22px; }"
+        "QComboBox:hover { border-color: %6; }"
+        "QComboBox::drop-down { border: none; width: 20px; }"
+        "QComboBox::down-arrow {"
+        "  image: none; border-left: 4px solid transparent;"
+        "  border-right: 4px solid transparent;"
+        "  border-top: 5px solid %6; margin-right: 6px; }"
+        "QComboBox QAbstractItemView {"
+        "  background: %4; border: 1px solid %9;"
+        "  selection-background-color: %9; color: %2; }"
+    ).arg(t.base, t.text, t.mantle, t.surface0, t.subtext0, t.green, t.subtext1, t.overlay0, t.surface1));
+
+    // 搜索按钮单独设样式
+    if (searchBtn_) {
+        searchBtn_->setStyleSheet(QString(
+            "QPushButton {"
+            "  background: %1; color: %2; border: none;"
+            "  border-radius: 4px; padding: 5px 8px; font-size: 12px; font-weight: bold; }"
+            "QPushButton:hover { background: %3; }"
+            "QPushButton:pressed { background: %4; }"
+        ).arg(t.blue, t.btnText, t.blueHover, t.bluePressed));
+    }
 }
 
 // ════════════════════════════════════════════════════════════
@@ -1982,6 +2014,88 @@ QGroupBox* FEModelPanel::createSelectionGroup() {
     layout->addWidget(labelCheck_);
 
     return group;
+}
+
+QGroupBox* FEModelPanel::createSearchGroup() {
+    auto* group = new QGroupBox("ID 搜索");
+    auto* layout = new QVBoxLayout(group);
+
+    // 类型选择行
+    auto* typeRow = new QHBoxLayout;
+    auto* typeLabel = new QLabel("类型:");
+    typeLabel->setFixedWidth(36);
+    typeLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    searchTypeCombo_ = new QComboBox;
+    searchTypeCombo_->addItem("节点", static_cast<int>(PickMode::Node));
+    searchTypeCombo_->addItem("单元", static_cast<int>(PickMode::Element));
+    searchTypeCombo_->addItem("部件", static_cast<int>(PickMode::Part));
+    searchTypeCombo_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    typeRow->addWidget(typeLabel);
+    typeRow->addWidget(searchTypeCombo_);
+    layout->addLayout(typeRow);
+
+    // 输入行
+    auto* inputRow = new QHBoxLayout;
+    searchInput_ = new QLineEdit;
+    searchInput_->setPlaceholderText("如 1,3,5-10");
+    // 只允许输入数字、逗号和短横线
+    searchInput_->setValidator(new QRegularExpressionValidator(
+        QRegularExpression("[0-9,\\-]+"), searchInput_));
+    searchInput_->setToolTip("支持格式：\n"
+                             "  单个 ID：42\n"
+                             "  多个 ID：1,3,5\n"
+                             "  范围：5-10\n"
+                             "  混合：1,3,5-10,20");
+    inputRow->addWidget(searchInput_);
+
+    searchBtn_ = new QPushButton("定位");
+    searchBtn_->setFixedWidth(42);
+    inputRow->addWidget(searchBtn_);
+    layout->addLayout(inputRow);
+
+    // 格式提示
+    auto* hintLabel = new QLabel("支持: 单个 42 | 多个 1,3,5 | 范围 5-10");
+    hintLabel->setObjectName("searchHint");
+    hintLabel->setWordWrap(true);
+    layout->addWidget(hintLabel);
+
+    connect(searchBtn_, &QPushButton::clicked, this, &FEModelPanel::onSearchTriggered);
+    connect(searchInput_, &QLineEdit::returnPressed, this, &FEModelPanel::onSearchTriggered);
+
+    return group;
+}
+
+void FEModelPanel::onSearchTriggered() {
+    QString text = searchInput_->text().trimmed();
+    if (text.isEmpty()) return;
+
+    // 解析 ID：支持逗号分隔和范围（如 1,3,5-10）
+    std::vector<int> ids;
+    QStringList parts = text.split(',', Qt::SkipEmptyParts);
+    for (const QString& part : parts) {
+        QString p = part.trimmed();
+        if (p.contains('-')) {
+            QStringList range = p.split('-');
+            if (range.size() == 2) {
+                bool ok1, ok2;
+                int from = range[0].trimmed().toInt(&ok1);
+                int to = range[1].trimmed().toInt(&ok2);
+                if (ok1 && ok2) {
+                    for (int i = qMin(from, to); i <= qMax(from, to); ++i)
+                        ids.push_back(i);
+                }
+            }
+        } else {
+            bool ok;
+            int id = p.toInt(&ok);
+            if (ok) ids.push_back(id);
+        }
+    }
+
+    if (ids.empty()) return;
+
+    PickMode mode = static_cast<PickMode>(searchTypeCombo_->currentData().toInt());
+    emit searchRequested(mode, ids);
 }
 
 void FEModelPanel::updateSelectionInfo(PickMode mode, int count, const std::vector<int>& ids) {
