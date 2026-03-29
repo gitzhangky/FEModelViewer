@@ -40,6 +40,7 @@ public:
         hasExtremes_ = true;
         update();
     }
+    void setIdLabel(const QString& label) { idLabel_ = label; update(); }
 
 protected:
     void paintEvent(QPaintEvent*) override {
@@ -107,8 +108,8 @@ protected:
             painter.setFont(infoFont);
             painter.setPen(textColor_);
 
-            QString maxLine = QString("Max: %1 (ID: %2)").arg(formatValue(maxVal_)).arg(maxId_);
-            QString minLine = QString("Min: %1 (ID: %2)").arg(formatValue(minVal_)).arg(minId_);
+            QString maxLine = QString("Max: %1 (%2: %3)").arg(formatValue(maxVal_)).arg(idLabel_).arg(maxId_);
+            QString minLine = QString("Min: %1 (%2: %3)").arg(formatValue(minVal_)).arg(idLabel_).arg(minId_);
 
             painter.drawText(margin, infoY, 200, 16, Qt::AlignLeft | Qt::AlignVCenter, maxLine);
             painter.drawText(margin, infoY + 18, 200, 16, Qt::AlignLeft | Qt::AlignVCenter, minLine);
@@ -124,6 +125,7 @@ private:
     bool hasExtremes_ = false;
     int minId_ = -1, maxId_ = -1;
     float minVal_ = 0.0f, maxVal_ = 0.0f;
+    QString idLabel_ = "ID";  // "Node ID" 或 "Ele ID"
 };
 
 // ============================================================
@@ -248,22 +250,24 @@ void main() {
     vec3 V = normalize(uViewPos - vWorldPos);
     vec3 H = normalize(L1 + V);
 
-    float ambient, kDiff1, kDiff2, kSpec;
+    float ambient, kDiff1, kDiff2, kSpec, shininess;
     if (uContourMode) {
         // 云图模式：高环境光保护色谱颜色，无高光
         ambient = 0.55;
         kDiff1  = 0.35;
         kDiff2  = 0.10;
         kSpec   = 0.0;
+        shininess = 32.0;
     } else {
-        // 几何模式：与原始光照参数一致
+        // 几何模式：柔和高光，避免冲淡部件颜色
         ambient = 0.65;
         kDiff1  = 0.35;
         kDiff2  = 0.20;
-        kSpec   = 0.25;
+        kSpec   = 0.10;
+        shininess = 64.0;
     }
 
-    float spec = pow(max(dot(N, H), 0.0), 32.0) * kSpec;
+    float spec = pow(max(dot(N, H), 0.0), shininess) * kSpec;
     float diffuse = diff1 * kDiff1 + diff2 * kDiff2;
     float sideFactor = gl_FrontFacing ? 1.0 : 0.8;
 
@@ -2282,6 +2286,11 @@ void GLWidget::setColorBarTitle(const QString& title) {
 
 void GLWidget::setColorBarExtremes(int minId, float minVal, int maxId, float maxVal) {
     if (colorBarOverlay_) colorBarOverlay_->setExtremes(minId, minVal, maxId, maxVal);
+    update();
+}
+
+void GLWidget::setColorBarIdLabel(const QString& label) {
+    if (colorBarOverlay_) colorBarOverlay_->setIdLabel(label);
     update();
 }
 

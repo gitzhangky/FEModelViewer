@@ -48,7 +48,7 @@ public:
      * @param dx 鼠标水平移动量（像素）
      * @param dy 鼠标垂直移动量（像素）
      *
-     * 更新 yaw 和 pitch 角度，pitch 被限制在 [-89°, 89°] 避免万向锁。
+     * 更新 yaw 和 pitch 角度，允许 360° 自由旋转（无万向锁限制）。
      */
     void rotate(float dx, float dy);
 

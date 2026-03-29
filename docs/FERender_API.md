@@ -834,6 +834,7 @@ explicit GLWidget(QWidget* parent = nullptr);
 | `void setColorBarRange(float min, float max)` | 设置色标值域范围 |
 | `void setColorBarTitle(const QString& title)` | 设置色标标题 |
 | `void setColorBarExtremes(int minId, float minVal, int maxId, float maxVal)` | 设置色标极值信息（最大/最小值及对应 ID，显示在色标下方） |
+| `void setColorBarIdLabel(const QString& label)` | 设置色标极值 ID 的标签前缀（如 `"Node ID"` 或 `"Ele ID"`） |
 
 #### 拾取映射表
 
@@ -1065,6 +1066,7 @@ viewer.setVertexScalars(scalars, sMin, sMax, 12);
 viewer.setColorBarVisible(true);
 viewer.setColorBarRange(sMin, sMax);
 viewer.setColorBarTitle("Von Mises Stress [MPa]");
+viewer.setColorBarIdLabel("Node ID");                     // 设置 ID 标签类型
 viewer.setColorBarExtremes(sMinId, sMin, sMaxId, sMax);  // 色标下方显示极值 ID
 ```
 

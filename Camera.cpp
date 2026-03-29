@@ -28,24 +28,35 @@ glm::mat4 Camera::viewMatrix() const {
     // glm::lookAt(eye, center, up) 生成观察矩阵
     // eye:    相机位置
     // center: 注视目标点
-    // up:     世界空间的上方向（Y 轴正方向）
-    return glm::lookAt(eye(), target, glm::vec3(0.0f, 1.0f, 0.0f));
+    // up:     根据 pitch 判断是否翻转（当相机倒置时 up 方向取反）
+    //         利用 cos(pitch) 的符号判断：pitch 在 (-90°,90°) 区间时 cos>0，up 朝 +Y
+    //         pitch 在 (90°,270°)（即 cos<0）时 up 朝 -Y，保证 lookAt 不退化
+    float cp = cos(glm::radians(pitch));
+    glm::vec3 up(0.0f, (cp >= 0.0f) ? 1.0f : -1.0f, 0.0f);
+    return glm::lookAt(eye(), target, up);
 }
 
 void Camera::rotate(float dx, float dy) {
+    // 当相机倒置时（cos(pitch) < 0），水平拖动方向需要取反，否则左右旋转会反直觉
+    float cp = cos(glm::radians(pitch));
+    float yawSign = (cp >= 0.0f) ? 1.0f : -1.0f;
+
     // 鼠标水平移动 → 改变 yaw（左右旋转）
-    yaw   -= dx * rotateSensitivity;
-    // 鼠标垂直移动 → 改变 pitch（上下仰俯）
+    yaw   -= dx * rotateSensitivity * yawSign;
+    // 鼠标垂直移动 → 改变 pitch（上下仰俯），允许自由旋转
     pitch += dy * rotateSensitivity;
-    // 限制 pitch 在 [-89°, 89°]，防止翻转（万向锁）
-    pitch  = glm::clamp(pitch, -89.0f, 89.0f);
+
+    // 将角度归一化到 [-180°, 180°)，避免浮点累积
+    yaw   = fmod(yaw,   360.0f);
+    pitch = fmod(pitch, 360.0f);
 }
 
 void Camera::pan(float dx, float dy) {
     // 从视线方向和世界 up 推导出相机坐标系的真实 right 和 up 向量
     // 这样无论相机俯仰多少度，平移方向都与屏幕像素方向完全对齐
     glm::vec3 viewDir = glm::normalize(target - eye());
-    glm::vec3 worldUp(0.0f, 1.0f, 0.0f);
+    float cp = cos(glm::radians(pitch));
+    glm::vec3 worldUp(0.0f, (cp >= 0.0f) ? 1.0f : -1.0f, 0.0f);
     glm::vec3 right  = glm::normalize(glm::cross(viewDir, worldUp));
     glm::vec3 up     = glm::cross(right, viewDir);
 

@@ -249,6 +249,18 @@ MainWindow::MainWindow() {
                 if (it != field.values.end())
                     nodeValueMap[modelNids[k]] = it->second;
             }
+            // NID 重映射时，极值 ID 也需要映射为模型节点 ID（否则搜索找不到）
+            auto remapId = [&](int resultId) -> int {
+                auto it = std::lower_bound(resultNids.begin(), resultNids.end(), resultId);
+                if (it != resultNids.end() && *it == resultId) {
+                    int idx = static_cast<int>(std::distance(resultNids.begin(), it));
+                    if (idx < static_cast<int>(modelNids.size()))
+                        return modelNids[idx];
+                }
+                return resultId;
+            };
+            minId = remapId(minId);
+            maxId = remapId(maxId);
         }
 
         if (field.location == FieldLocation::Element) {
@@ -283,6 +295,7 @@ MainWindow::MainWindow() {
         glWidget_->setColorBarVisible(true);
         glWidget_->setColorBarRange(minVal, maxVal);
         glWidget_->setColorBarTitle(title);
+        glWidget_->setColorBarIdLabel(field.location == FieldLocation::Element ? "Ele ID" : "Node ID");
         glWidget_->setColorBarExtremes(minId, minVal, maxId, maxVal);
     });
 

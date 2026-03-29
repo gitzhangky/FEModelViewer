@@ -64,6 +64,7 @@ public:
     void setColorBarRange(float min, float max);
     void setColorBarTitle(const QString& title);
     void setColorBarExtremes(int minId, float minVal, int maxId, float maxVal);
+    void setColorBarIdLabel(const QString& label);
 
     /** @brief 设置三角形→单元映射表（用于拾取） */
     void setTriangleToElementMap(const std::vector<int>& map);

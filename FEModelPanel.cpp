@@ -2071,7 +2071,7 @@ void FEModelPanel::onSearchTriggered() {
 
     // 解析 ID：支持逗号分隔和范围（如 1,3,5-10）
     std::vector<int> ids;
-    QStringList parts = text.split(',', Qt::SkipEmptyParts);
+    QStringList parts = text.split(',', SKIP_EMPTY);
     for (const QString& part : parts) {
         QString p = part.trimmed();
         if (p.contains('-')) {
