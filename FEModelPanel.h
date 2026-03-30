@@ -18,7 +18,6 @@
 #include <QComboBox>
 #include <QPushButton>
 #include <QString>
-#include <functional>
 
 #include "FEModel.h"
 #include "FERenderData.h"
@@ -43,11 +42,11 @@ public:
     /** @brief 清空当前模型 */
     void clearModel();
 
-    /** @brief 从 OP2 文件解析结果数据（位移/应力），独立于几何解析 */
-    bool parseNastranOp2Results(const QString& filePath, FEResultData& results);
+    /** @brief 从 OP2 文件解析结果数据（位移/应力），委托给 FEParser */
+    static bool parseNastranOp2Results(const QString& filePath, FEResultData& results);
 
-    /** @brief 从 UNV 文件解析结果数据（Dataset 2414/55），独立于几何解析 */
-    bool parseUnvResults(const QString& filePath, FEResultData& results);
+    /** @brief 从 UNV 文件解析结果数据（Dataset 2414/55），委托给 FEParser */
+    static bool parseUnvResults(const QString& filePath, FEResultData& results);
 
     /** @brief 应用主题 */
     void applyTheme(const Theme& theme);
@@ -90,9 +89,7 @@ private:
     QGroupBox* createSearchGroup();     // 搜索分组
     void onSearchTriggered();           // 执行搜索
 
-    bool parseAbaqusInp(const QString& filePath, FEModel& model, const std::function<void(int)>& progress = nullptr);
-    bool parseNastranBdf(const QString& filePath, FEModel& model, const std::function<void(int)>& progress = nullptr);
-    bool parseNastranOp2(const QString& filePath, FEModel& model, const std::function<void(int)>& progress = nullptr);
+    // 解析逻辑已移至 FEParser 静态工具类
 
     void updateInfoLabels();
 

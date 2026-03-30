@@ -95,6 +95,7 @@ set(RENDER_HEADERS
     FERenderData.h
     FEResultData.h
     FEPickResult.h
+    FEParser.h
 )
 
 set(RENDER_SOURCES
@@ -104,9 +105,17 @@ set(RENDER_SOURCES
     FEModel.cpp
     FEField.cpp
     FEMeshConverter.cpp
+    FEParser_inp.cpp
+    FEParser_bdf.cpp
+    FEParser_op2.cpp
+    FEParser_op2results.cpp
+    FEParser_unv.cpp
 )
 
-add_library(FERender SHARED ${RENDER_SOURCES} ${RENDER_HEADERS})
+# Shader 资源文件
+qt5_add_resources(RENDER_QRC shaders.qrc)
+
+add_library(FERender SHARED ${RENDER_SOURCES} ${RENDER_HEADERS} ${RENDER_QRC})
 
 include(GenerateExportHeader)
 generate_export_header(FERender

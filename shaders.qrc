@@ -1,0 +1,12 @@
+<RCC>
+    <qresource prefix="/shaders">
+        <file alias="scene.vert">shaders/scene.vert</file>
+        <file alias="scene.frag">shaders/scene.frag</file>
+        <file alias="pick.vert">shaders/pick.vert</file>
+        <file alias="pick.frag">shaders/pick.frag</file>
+        <file alias="background.vert">shaders/background.vert</file>
+        <file alias="background.frag">shaders/background.frag</file>
+        <file alias="axes.vert">shaders/axes.vert</file>
+        <file alias="axes.frag">shaders/axes.frag</file>
+    </qresource>
+</RCC>

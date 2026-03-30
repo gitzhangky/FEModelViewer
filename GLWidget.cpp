@@ -129,229 +129,19 @@ private:
 };
 
 // ============================================================
-// GLSL 着色器源码
+// GLSL 着色器加载（从 Qt 资源加载外部 .glsl 文件）
 // ============================================================
 
-/**
- * 顶点着色器：
- *   - 将顶点位置变换到裁剪空间（uMVP）
- *   - 计算世界空间位置和法线，传递给片段着色器用于光照计算
- */
-static const char* vertSrc = R"(
-#version 410 core
-layout (location = 0) in vec3 aPos;
-layout (location = 1) in vec3 aNormal;
-layout (location = 2) in vec3 aColor;
-layout (location = 3) in float aScalar;
+#include <QFile>
 
-uniform mat4 uMVP;
-uniform mat4 uModel;
-uniform mat3 uNormalMat;
-out vec3 vWorldPos;
-out vec3 vNormal;
-out vec3 vColor;
-out float vScalar;
-
-void main() {
-    vec4 worldPos = uModel * vec4(aPos, 1.0);
-    vWorldPos = worldPos.xyz;
-    vNormal   = normalize(uNormalMat * aNormal);
-    vColor    = aColor;
-    vScalar   = aScalar;
-    gl_Position = uMVP * vec4(aPos, 1.0);
-}
-)";
-
-/**
- * 片段着色器（改进光照模型）：
- *   - 线框模式：直接输出纯色
- *   - 光照模式：主光 + 补光 + 环境光 + 高光
- *   - 部件颜色：用 gl_PrimitiveID 查 texture buffer 获取部件索引
- */
-static const char* fragSrc = R"(
-#version 410 core
-in vec3 vWorldPos;
-in vec3 vNormal;
-in vec3 vColor;
-in float vScalar;
-
-uniform vec3 uLightDir;
-uniform vec3 uViewPos;
-uniform vec3 uColor;
-uniform bool uWireframe;
-uniform float uWireAlpha;
-uniform bool uUseVertexColor;
-uniform bool uContourMode;
-uniform float uScalarMin;
-uniform float uScalarMax;
-uniform int uNumBands;
-uniform samplerBuffer uTriPartMap;
-out vec4 outColor;
-
-// 部件调色板（与 C++ 端 kPartPalette 一致）
-const vec3 kPalette[8] = vec3[8](
-    vec3(0.61, 0.86, 0.63),
-    vec3(0.54, 0.71, 0.98),
-    vec3(0.98, 0.70, 0.53),
-    vec3(0.82, 0.62, 0.98),
-    vec3(0.58, 0.89, 0.83),
-    vec3(0.98, 0.89, 0.69),
-    vec3(0.94, 0.56, 0.66),
-    vec3(0.71, 0.71, 0.98)
-);
-
-vec3 jetColor(float t) {
-    t = clamp(t, 0.0, 1.0);
-    float r, g, b;
-    if (t < 0.125)      { r = 0.0; g = 0.0; b = 0.5 + t/0.125*0.5; }
-    else if (t < 0.375) { r = 0.0; g = (t-0.125)/0.25; b = 1.0; }
-    else if (t < 0.625) { r = (t-0.375)/0.25; g = 1.0; b = 1.0-(t-0.375)/0.25; }
-    else if (t < 0.875) { r = 1.0; g = 1.0-(t-0.625)/0.25; b = 0.0; }
-    else                 { r = 1.0-(t-0.875)/0.125*0.5; g = 0.0; b = 0.0; }
-    return vec3(r, g, b);
-}
-
-void main() {
-    vec3 surfaceColor = uUseVertexColor ? vColor : uColor;
-
-    if (uWireframe) {
-        outColor = vec4(surfaceColor, uWireAlpha);
-        return;
+static QByteArray loadShaderSource(const QString& resourcePath) {
+    QFile f(resourcePath);
+    if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        qWarning("GLWidget: failed to load shader %s", qPrintable(resourcePath));
+        return {};
     }
-
-    if (uContourMode) {
-        // 云图模式：标量值量化 + Jet colormap
-        float range = uScalarMax - uScalarMin;
-        float t = (range > 1e-10) ? clamp((vScalar - uScalarMin) / range, 0.0, 1.0) : 0.5;
-        int band = int(t * float(uNumBands));
-        if (band >= uNumBands) band = uNumBands - 1;
-        float qt = (float(band) + 0.5) / float(uNumBands);
-        surfaceColor = jetColor(qt);
-    } else if (uUseVertexColor) {
-        // 部件颜色模式：用 gl_PrimitiveID 查 triToPart texture buffer
-        int partIdx = int(texelFetch(uTriPartMap, gl_PrimitiveID).r);
-        int idx = partIdx % 8;
-        if (idx < 0) idx += 8;
-        surfaceColor = kPalette[idx];
-    }
-
-    vec3 N = normalize(vNormal);
-    if (!gl_FrontFacing) N = -N;
-
-    // 主方向光
-    vec3 L1 = normalize(-uLightDir);
-    float diff1 = max(dot(N, L1), 0.0);
-
-    // 补光（从相反方向来，强度较弱，避免背光面全黑）
-    vec3 L2 = normalize(vec3(0.3, 0.5, 0.4));
-    float diff2 = max(dot(N, L2), 0.0);
-
-    // Blinn-Phong 高光（主光源）
-    vec3 V = normalize(uViewPos - vWorldPos);
-    vec3 H = normalize(L1 + V);
-
-    float ambient, kDiff1, kDiff2, kSpec, shininess;
-    if (uContourMode) {
-        // 云图模式：高环境光保护色谱颜色，无高光
-        ambient = 0.55;
-        kDiff1  = 0.35;
-        kDiff2  = 0.10;
-        kSpec   = 0.0;
-        shininess = 32.0;
-    } else {
-        // 几何模式：柔和高光，避免冲淡部件颜色
-        ambient = 0.65;
-        kDiff1  = 0.35;
-        kDiff2  = 0.20;
-        kSpec   = 0.10;
-        shininess = 64.0;
-    }
-
-    float spec = pow(max(dot(N, H), 0.0), shininess) * kSpec;
-    float diffuse = diff1 * kDiff1 + diff2 * kDiff2;
-    float sideFactor = gl_FrontFacing ? 1.0 : 0.8;
-
-    vec3 color = surfaceColor * (ambient + diffuse) * sideFactor + vec3(spec * sideFactor);
-    // 防止过曝
-    color = min(color, vec3(1.0));
-    outColor = vec4(color, 1.0);
+    return f.readAll();
 }
-)";
-
-// ============================================================
-// 渐变背景着色器
-// ============================================================
-
-static const char* bgVertSrc = R"(
-#version 410 core
-layout (location = 0) in vec2 aPos;
-layout (location = 1) in vec3 aColor;
-out vec3 vColor;
-void main() {
-    vColor = aColor;
-    gl_Position = vec4(aPos, 0.0, 1.0);
-}
-)";
-
-static const char* bgFragSrc = R"(
-#version 410 core
-in vec3 vColor;
-out vec4 outColor;
-void main() {
-    outColor = vec4(vColor, 1.0);
-}
-)";
-
-// ============================================================
-// 坐标轴指示器着色器（纯色线段，顶点自带颜色）
-// ============================================================
-
-static const char* axesVertSrc = R"(
-#version 410 core
-layout (location = 0) in vec3 aPos;
-layout (location = 1) in vec3 aColor;
-
-uniform mat4 uMVP;
-
-out vec3 vColor;
-
-void main() {
-    vColor = aColor;
-    gl_Position = uMVP * vec4(aPos, 1.0);
-}
-)";
-
-static const char* axesFragSrc = R"(
-#version 410 core
-in vec3 vColor;
-out vec4 outColor;
-
-void main() {
-    outColor = vec4(vColor, 1.0);
-}
-)";
-
-// ============================================================
-// 拾取着色器（每个三角形用唯一颜色编码单元 ID）
-// ============================================================
-
-static const char* pickVertSrc = R"(
-#version 410 core
-layout (location = 0) in vec3 aPos;
-uniform mat4 uMVP;
-void main() {
-    gl_Position = uMVP * vec4(aPos, 1.0);
-}
-)";
-
-static const char* pickFragSrc = R"(
-#version 410 core
-uniform vec3 uPickColor;
-out vec4 outColor;
-void main() {
-    outColor = vec4(uPickColor, 1.0);
-}
-)";
 
 // ── 部件颜色调色板（Catppuccin Mocha）──
 static const glm::vec3 kPartPalette[] = {
@@ -479,8 +269,8 @@ void GLWidget::initializeGL() {
 
     // 编译并链接着色器程序
     shader_ = new QOpenGLShaderProgram(this);
-    shader_->addShaderFromSourceCode(QOpenGLShader::Vertex, vertSrc);
-    shader_->addShaderFromSourceCode(QOpenGLShader::Fragment, fragSrc);
+    shader_->addShaderFromSourceCode(QOpenGLShader::Vertex, loadShaderSource(":/shaders/scene.vert"));
+    shader_->addShaderFromSourceCode(QOpenGLShader::Fragment, loadShaderSource(":/shaders/scene.frag"));
     shader_->link();
 
     // 创建 VAO（顶点数组对象）、VBO（顶点缓冲）、IBO（索引缓冲）
@@ -497,8 +287,8 @@ void GLWidget::initializeGL() {
 
     // ── 拾取着色器 ──
     pickShader_ = new QOpenGLShaderProgram(this);
-    pickShader_->addShaderFromSourceCode(QOpenGLShader::Vertex, pickVertSrc);
-    pickShader_->addShaderFromSourceCode(QOpenGLShader::Fragment, pickFragSrc);
+    pickShader_->addShaderFromSourceCode(QOpenGLShader::Vertex, loadShaderSource(":/shaders/pick.vert"));
+    pickShader_->addShaderFromSourceCode(QOpenGLShader::Fragment, loadShaderSource(":/shaders/pick.frag"));
     pickShader_->link();
 
     // ── 拾取专用 VAO（避免共用 vao_ 导致顶点属性状态泄漏到 QPainter） ──
@@ -514,8 +304,8 @@ void GLWidget::initializeGL() {
 
     // ── 渐变背景着色器 + VAO/VBO（一次性创建）──
     bgShader_ = new QOpenGLShaderProgram(this);
-    bgShader_->addShaderFromSourceCode(QOpenGLShader::Vertex, bgVertSrc);
-    bgShader_->addShaderFromSourceCode(QOpenGLShader::Fragment, bgFragSrc);
+    bgShader_->addShaderFromSourceCode(QOpenGLShader::Vertex, loadShaderSource(":/shaders/background.vert"));
+    bgShader_->addShaderFromSourceCode(QOpenGLShader::Fragment, loadShaderSource(":/shaders/background.frag"));
     bgShader_->link();
 
     bgVao_.create();
@@ -543,8 +333,8 @@ void GLWidget::initializeGL() {
 
     // ── 坐标轴指示器着色器 ──
     axesShader_ = new QOpenGLShaderProgram(this);
-    axesShader_->addShaderFromSourceCode(QOpenGLShader::Vertex, axesVertSrc);
-    axesShader_->addShaderFromSourceCode(QOpenGLShader::Fragment, axesFragSrc);
+    axesShader_->addShaderFromSourceCode(QOpenGLShader::Vertex, loadShaderSource(":/shaders/axes.vert"));
+    axesShader_->addShaderFromSourceCode(QOpenGLShader::Fragment, loadShaderSource(":/shaders/axes.frag"));
     axesShader_->link();
 
     // ── 生成坐标轴几何数据（实心轴杆圆柱 + 箭头圆锥 + 中心球）──

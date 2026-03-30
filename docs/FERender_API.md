@@ -21,6 +21,7 @@
   - [2.5 FEModel — 有限元模型容器](#25-femodel--有限元模型容器)
   - [2.6 FEField — 结果场与色谱](#26-ffield--结果场与色谱)
   - [2.7 FEResultData — 多工况结果层级](#27-feresultdata--多工况结果层级)
+  - [2.8 FEParser — 有限元文件解析器](#28-feparser--有限元文件解析器)
 - [3. 转换层 API](#3-转换层-api)
   - [3.1 Mesh — 三角网格数据结构](#31-mesh--三角网格数据结构)
   - [3.2 Geometry — 基础几何体生成器](#32-geometry--基础几何体生成器)
@@ -525,6 +526,69 @@ dispType.components.push_back(magComp);
 
 sc.resultTypes.push_back(dispType);
 results.subcases.push_back(sc);
+```
+
+### 2.8 FEParser — 有限元文件解析器
+
+**头文件**：`FEParser.h`
+
+无状态静态工具类，负责解析各种有限元文件格式并填充 `FEModel` / `FEResultData`。
+
+```cpp
+class FERENDER_EXPORT FEParser {
+public:
+    /** 解析 ABAQUS INP 文件（含 *INCLUDE 递归展开） */
+    static bool parseAbaqusInp(const QString& filePath, FEModel& model,
+                                const std::function<void(int)>& progress = nullptr);
+
+    /** 解析 Nastran BDF/FEM 文件（固定/自由格式，CORD2R 坐标系变换） */
+    static bool parseNastranBdf(const QString& filePath, FEModel& model,
+                                 const std::function<void(int)>& progress = nullptr);
+
+    /** 解析 Nastran OP2 二进制几何数据（GEOM1/GEOM2/BGPDT/EQEXIN） */
+    static bool parseNastranOp2(const QString& filePath, FEModel& model,
+                                 const std::function<void(int)>& progress = nullptr);
+
+    /** 解析 Nastran OP2 结果数据（位移 OUG + 应力 OES） */
+    static bool parseNastranOp2Results(const QString& filePath, FEResultData& results);
+
+    /** 解析 UNV 结果数据（Dataset 2414 / 55） */
+    static bool parseUnvResults(const QString& filePath, FEResultData& results);
+};
+```
+
+**参数说明**：
+
+| 参数 | 说明 |
+|------|------|
+| `filePath` | 文件绝对路径 |
+| `model` | 输出：填充节点、单元、部件数据 |
+| `results` | 输出：填充多工况位移/应力结果 |
+| `progress` | 可选回调，参数为 0-100 的进度百分比 |
+
+**支持的 OP2 应力单元类型**：
+
+| 类别 | 类型码 |
+|------|--------|
+| Rod/Bar | CROD(1), CBEAM(2), CTUBE(3), CONROD(10), CBAR(34/100) |
+| Shell | CQUAD4(33/144), CTRIA3(74), CTRIA6(75), composite(95/97), nonlinear(88), CQUAD8(64) |
+| Solid | CTETRA(39/85), CHEXA(67/86/93), CPENTA(68/91) |
+| Spring/Bush | CELAS(11/12), CBUSH(102) |
+
+**使用示例**：
+
+```cpp
+#include "FEParser.h"
+
+FEModel model;
+bool ok = FEParser::parseNastranOp2("model.op2", model, [](int pct) {
+    qDebug("进度: %d%%", pct);
+});
+
+if (ok) {
+    FEResultData results;
+    FEParser::parseNastranOp2Results("model.op2", results);
+}
 ```
 
 ---
@@ -1168,6 +1232,7 @@ viewer.fitToModel(model.computeCenter(), model.computeSize());
 | `FEModel.h` | `FEModel` | 模型顶层容器 |
 | `FEField.h` | `FEScalarField`, `FEVectorField`, `ColorMap`, `ColorMapType` | 结果场与色谱 |
 | `FEResultData.h` | `FEResultData`, `FESubcase`, `FEResultType`, `FEResultComponent` | 多工况结果层级 |
+| `FEParser.h` | `FEParser` | 有限元文件解析器（INP/BDF/OP2/UNV） |
 | `Geometry.h` | `Mesh`, `Geometry::*` | 网格结构与几何体生成 |
 | `FERenderData.h` | `FERenderData` | 渲染数据包（Mesh + 映射表） |
 | `FEMeshConverter.h` | `FEMeshConverter` | 网格转换器 |
