@@ -5,3 +5,6 @@ build-vs/
 *.dSYM/
 install/
 install-vs/
+.cache/
+.vscode/
+.claude/settings.local.json

@@ -523,12 +523,24 @@ void MainWindow::setupToolBar() {
 
     toolbar_->addSeparator();
 
-    // ── 主题切换 ──
-    themeAction_ = toolbar_->addAction("浅色");
-    themeAction_->setToolTip("切换深色/浅色主题");
+    // ── 主题切换（下拉菜单） ──
+    themeMenu_ = new QMenu(this);
+    for (int i = 0; i < Theme::count(); ++i) {
+        Theme th = Theme::byIndex(i);
+        QAction* act = themeMenu_->addAction(th.name);
+        connect(act, &QAction::triggered, this, [this, i]() {
+            themeIndex_ = i;
+            currentTheme_ = Theme::byIndex(i);
+            applyTheme(currentTheme_);
+        });
+    }
+    themeAction_ = toolbar_->addAction("主题");
+    themeAction_->setToolTip("切换主题风格");
+    themeAction_->setMenu(themeMenu_);
+    // 点击按钮时弹出菜单
     connect(themeAction_, &QAction::triggered, this, [this]() {
-        currentTheme_ = currentTheme_.isDark ? Theme::light() : Theme::dark();
-        applyTheme(currentTheme_);
+        if (auto* btn = toolbar_->widgetForAction(themeAction_))
+            themeMenu_->popup(btn->mapToGlobal(btn->rect().bottomLeft()));
     });
 
     // ── 连接 ──
@@ -576,7 +588,7 @@ void MainWindow::setupStatusBar() {
 
 void MainWindow::applyTheme(const Theme& t) {
     // 主题按钮文字更新
-    themeAction_->setText(t.isDark ? "浅色" : "深色");
+    themeAction_->setText(t.name);
 
     // 侧边栏
     sidebar_->setStyleSheet(QString("QWidget { background: %1; }").arg(t.base));
@@ -610,6 +622,24 @@ void MainWindow::applyTheme(const Theme& t) {
         "QToolBar::separator {"
         "  width: 1px; background: %2; margin: 4px 6px; }"
     ).arg(t.mantle, t.surface0, t.text, t.surface1, t.blue));
+
+    // 主题下拉菜单
+    themeMenu_->setStyleSheet(QString(
+        "QMenu {"
+        "  background: %1; border: 1px solid %2; border-radius: 4px;"
+        "  padding: 4px 0; }"
+        "QMenu::item {"
+        "  color: %3; padding: 6px 20px; font-size: 12px; }"
+        "QMenu::item:selected {"
+        "  background: %4; color: %5; }"
+    ).arg(t.mantle, t.surface0, t.text, t.surface1, t.blue));
+
+    // 标记当前主题（在菜单项前加勾选标记）
+    auto actions = themeMenu_->actions();
+    for (int i = 0; i < actions.size(); ++i)
+        actions[i]->setCheckable(true);
+    for (int i = 0; i < actions.size(); ++i)
+        actions[i]->setChecked(i == themeIndex_);
 
     // 状态栏
     statusBar()->setStyleSheet(QString(

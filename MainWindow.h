@@ -20,6 +20,7 @@
 #include <QPushButton>
 #include <QProgressBar>
 #include <QToolBar>
+#include <QMenu>
 
 #include "Theme.h"
 
@@ -74,4 +75,6 @@ private:
     QToolBar*      toolbar_        = nullptr;
     QPushButton*   filePanelApplyBtn_ = nullptr;
     QAction*       themeAction_    = nullptr;
+    QMenu*         themeMenu_      = nullptr;
+    int            themeIndex_     = 0;
 };
