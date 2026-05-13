@@ -2,13 +2,11 @@
  * @file MainWindow.h
  * @brief 主窗口声明
  *
- * MainWindow 是应用程序的顶层窗口，负责：
- *   - 工具栏（拾取模式切换）
- *   - 左侧边栏（模型树 + 选中信息 + 监控面板）
+ * 基于 QDockWidget 的可停靠面板布局：
+ *   - 工具栏（拾取模式切换 + 主题选择）
  *   - 中央 GL 视口
- *   - 右侧边栏（拾取控制 + 结果面板）
- *   - 底部文件导入面板（模型文件 + 结果文件）
- *   - 状态栏（模型统计）
+ *   - 停靠面板：模型树、模型信息、监控、结果显示、文件导入
+ *   - 状态栏
  */
 
 #pragma once
@@ -69,8 +67,6 @@ private:
 
     // 主题相关
     Theme          currentTheme_;
-    QWidget*       sidebar_        = nullptr;
-    QWidget*       rightSidebar_   = nullptr;
     QWidget*       filePanel_      = nullptr;
     QToolBar*      toolbar_        = nullptr;
     QPushButton*   filePanelApplyBtn_ = nullptr;

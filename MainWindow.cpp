@@ -2,23 +2,20 @@
  * @file MainWindow.cpp
  * @brief 主窗口实现
  *
- * 布局结构：
- *   ┌──────────────────────────────────────────────────────┐
- *   │  工具栏: [清空] | [节点][单元][部件] 拾取模式        │
- *   ├────────────┬─────────────────────────────────────────┤
- *   │ ┌────────┐ │                                         │
- *   │ │模型树  │ │                                         │
- *   │ │(Parts) │ │          GLWidget (OpenGL 视口)         │
- *   │ ├────────┤ │                                         │
- *   │ │选中信息│ │                                         │
- *   │ ├────────┤ │                                         │
- *   │ │监控    │ │                                         │
- *   │ └────────┘ │                                         │
- *   ├────────────┴─────────────────────────────────────────┤
- *   │  文件导入: 模型文件 [...] [路径] | 结果文件 [...] [路径] [应用] │
- *   ├──────────────────────────────────────────────────────┤
- *   │  状态栏                                              │
- *   └──────────────────────────────────────────────────────┘
+ * 基于 QDockWidget 的可停靠面板布局：
+ *   ┌──────────────────────────────────────────────────────────┐
+ *   │  工具栏: [清空] | [节点][单元][部件] | [主题]            │
+ *   ├──────────┬────────────────────────────────┬─────────────┤
+ *   │ [模型树] │                                │ [结果显示]  │
+ *   │──────────│      GLWidget (中央部件)       │             │
+ *   │ [模型信息│                                │             │
+ *   │  |监控]  │                                │             │
+ *   ├──────────┴────────────────────────────────┴─────────────┤
+ *   │ [文件导入]                                               │
+ *   ├──────────────────────────────────────────────────────────┤
+ *   │  状态栏                                                  │
+ *   └──────────────────────────────────────────────────────────┘
+ *   所有 [面板] 均为 QDockWidget，可拖拽、浮动、合并标签页
  */
 
 #include "MainWindow.h"
@@ -35,9 +32,9 @@
 
 #include <glm/glm.hpp>
 #include <vector>
+#include <QDockWidget>
 #include <QHBoxLayout>
 #include <QVBoxLayout>
-#include <QSplitter>
 #include <QToolBar>
 #include <QAction>
 #include <QActionGroup>
@@ -55,70 +52,48 @@
 MainWindow::MainWindow() {
     setWindowTitle("FEModelViewer");
     resize(1100, 800);
+    setDockNestingEnabled(true);
 
     // ── 工具栏 ──
     setupToolBar();
 
-    // ── 左侧边栏 ──
-    sidebar_ = new QWidget;
-    sidebar_->setMinimumWidth(200);
+    // ── GL 视口（中央部件）──
+    glWidget_ = new GLWidget;
+    setCentralWidget(glWidget_);
 
-    auto* sidebarLayout = new QVBoxLayout(sidebar_);
-    sidebarLayout->setContentsMargins(0, 0, 0, 0);
-    sidebarLayout->setSpacing(0);
-
+    // ── 创建面板 ──
     partsPanel_ = new PartsPanel;
-    partsPanel_->setMinimumHeight(120);
-
     feModelPanel_ = new FEModelPanel;
     monitorPanel_ = new MonitorPanel;
-
-    sidebarLayout->addWidget(partsPanel_, 3);
-    sidebarLayout->addWidget(feModelPanel_, 2);
-    sidebarLayout->addWidget(monitorPanel_, 0);
-
-    // ── GL 视口 ──
-    glWidget_ = new GLWidget;
-
-    // ── 右侧面板 ──
     resultPanel_ = new ResultPanel;
-
-    rightSidebar_ = new QWidget;
-    rightSidebar_->setMinimumWidth(180);
-    rightSidebar_->setMaximumWidth(280);
-    auto* rightLayout = new QVBoxLayout(rightSidebar_);
-    rightLayout->setContentsMargins(0, 0, 0, 0);
-    rightLayout->setSpacing(0);
-    rightLayout->addWidget(resultPanel_);
-
-    // ── 水平 Splitter: 左侧边栏 | GL视口 | 右侧边栏 ──
-    auto* hSplitter = new QSplitter(Qt::Horizontal);
-    hSplitter->setChildrenCollapsible(false);
-    hSplitter->addWidget(sidebar_);
-    hSplitter->addWidget(glWidget_);
-    hSplitter->addWidget(rightSidebar_);
-    hSplitter->setSizes({240, 640, 220});
-    hSplitter->setStretchFactor(0, 0);
-    hSplitter->setStretchFactor(1, 1);
-    hSplitter->setStretchFactor(2, 0);
-
-    hSplitter->setObjectName("hSplitter");
-
-    // ── 底部文件导入面板 ──
     filePanel_ = createFilePanel();
 
-    // ── 垂直 Splitter: 上方主区域 + 下方文件面板 ──
-    auto* vSplitter = new QSplitter(Qt::Vertical);
-    vSplitter->setChildrenCollapsible(false);
-    vSplitter->addWidget(hSplitter);
-    vSplitter->addWidget(filePanel_);
-    // 文件面板固定高度，主区域自适应
-    vSplitter->setStretchFactor(0, 1);
-    vSplitter->setStretchFactor(1, 0);
+    // ── 停靠面板 ──
+    auto makeDock = [this](const QString& title, QWidget* widget) {
+        auto* dock = new QDockWidget(title, this);
+        dock->setWidget(widget);
+        dock->setFeatures(QDockWidget::DockWidgetMovable |
+                          QDockWidget::DockWidgetFloatable);
+        return dock;
+    };
 
-    vSplitter->setObjectName("vSplitter");
+    auto* partsDock   = makeDock("模型树",   partsPanel_);
+    auto* modelDock   = makeDock("模型信息", feModelPanel_);
+    auto* monitorDock = makeDock("监控",     monitorPanel_);
+    auto* resultDock  = makeDock("结果显示", resultPanel_);
+    auto* fileDock    = makeDock("文件导入", filePanel_);
 
-    setCentralWidget(vSplitter);
+    // 默认布局：左侧 模型树 + (模型信息|监控)tab，右侧 结果显示，底部 文件导入
+    addDockWidget(Qt::LeftDockWidgetArea, partsDock);
+    splitDockWidget(partsDock, modelDock, Qt::Vertical);
+    tabifyDockWidget(modelDock, monitorDock);
+    modelDock->raise();
+
+    addDockWidget(Qt::RightDockWidgetArea, resultDock);
+    addDockWidget(Qt::BottomDockWidgetArea, fileDock);
+
+    resizeDocks({partsDock}, {220}, Qt::Horizontal);
+    resizeDocks({resultDock}, {200}, Qt::Horizontal);
 
     // ── 状态栏 ──
     setupStatusBar();
@@ -248,8 +223,7 @@ MainWindow::MainWindow() {
 
 QWidget* MainWindow::createFilePanel() {
     auto* panel = new QWidget;
-    panel->setMinimumHeight(70);
-    panel->setMaximumHeight(120);
+    panel->setMaximumHeight(100);
 
     auto* mainLayout = new QVBoxLayout(panel);
     mainLayout->setContentsMargins(14, 10, 14, 10);
@@ -520,19 +494,40 @@ void MainWindow::applyTheme(const Theme& t) {
     // 主题按钮文字更新
     themeAction_->setText(t.name);
 
-    // 侧边栏
-    sidebar_->setStyleSheet(QString("QWidget { background: %1; }").arg(t.base));
-    rightSidebar_->setStyleSheet(QString("QWidget { background: %1; }").arg(t.base));
+    // 主窗口背景 + 分隔线 + 标签页
+    setStyleSheet(QString(
+        "QMainWindow { background: %1; }"
+        "QMainWindow::separator {"
+        "  background: %2; width: 3px; height: 3px; }"
+        "QMainWindow::separator:hover {"
+        "  background: %3; }"
+        "QTabBar {"
+        "  background: %1; }"
+        "QTabBar::tab {"
+        "  background: %4; color: %5;"
+        "  border-top-left-radius: 4px; border-top-right-radius: 4px;"
+        "  padding: 5px 12px; font-size: 11px; margin-right: 1px; }"
+        "QTabBar::tab:selected {"
+        "  background: %6; color: %3; }"
+        "QTabBar::tab:hover:!selected {"
+        "  background: %2; }"
+        "QTabWidget::pane {"
+        "  background: %1; border: none; }"
+    ).arg(t.mantle, t.surface0, t.blue, t.crust, t.subtext0, t.base));
 
-    // Splitter — 更宽的把手，圆角，hover 时柔和高亮
-    QString splitterH = QString(
-        "QSplitter::handle { background: %1; width: 5px; border-radius: 2px; margin: 2px 0; }"
-        "QSplitter::handle:hover { background: %2; }").arg(t.surface0, t.blue);
-    QString splitterV = QString(
-        "QSplitter::handle { background: %1; height: 5px; border-radius: 2px; margin: 0 2px; }"
-        "QSplitter::handle:hover { background: %2; }").arg(t.surface0, t.blue);
-    if (auto* hs = findChild<QSplitter*>("hSplitter")) hs->setStyleSheet(splitterH);
-    if (auto* vs = findChild<QSplitter*>("vSplitter")) vs->setStyleSheet(splitterV);
+    // 停靠面板标题栏
+    QString dockStyle = QString(
+        "QDockWidget {"
+        "  color: %1; font-size: 11px; font-weight: bold;"
+        "  background: %2; }"
+        "QDockWidget::title {"
+        "  background: %3; border-bottom: 1px solid %4;"
+        "  padding: 6px 10px; }"
+        "QDockWidget::float-button:hover {"
+        "  background: %4; border-radius: 3px; }"
+    ).arg(t.subtext0, t.base, t.mantle, t.surface0);
+    for (auto* dock : findChildren<QDockWidget*>())
+        dock->setStyleSheet(dockStyle);
 
     // 工具栏 — 更宽松的间距，checked 状态用底部强调线
     toolbar_->setStyleSheet(QString(
