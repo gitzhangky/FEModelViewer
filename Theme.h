@@ -140,143 +140,143 @@ struct Theme {
         return t;
     }
 
-    /** 深海蓝 — 深蓝色调，科技感 */
+    /** Tokyo Night — 深蓝紫色调，科技感 */
     static Theme ocean() {
         Theme t;
-        t.name        = "深海蓝";
+        t.name        = "东京之夜";
         t.isDark      = true;
-        t.base        = "#0d1b2a";
-        t.mantle      = "#0a1628";
-        t.crust       = "#071020";
-        t.surface0    = "#1b2d45";
-        t.surface1    = "#243b55";
-        t.surface2    = "#2e4a66";
-        t.overlay0    = "#4a6a8a";
-        t.overlay2    = "#7a9ab5";
-        t.subtext0    = "#a0bdd0";
-        t.subtext1    = "#b8d0e0";
-        t.text        = "#d6e5f0";
-        t.blue        = "#48b9e6";
-        t.blueHover   = "#6fcbef";
-        t.bluePressed = "#35a5d4";
-        t.green       = "#50d890";
-        t.red         = "#ff6b7a";
-        t.teal        = "#00d4aa";
-        t.btnText     = "#0d1b2a";
-        t.gradTop     = "#243b55";
-        t.gradBot     = "#1b2d45";
-        t.gradTopHov  = "#2e4a66";
-        t.gradBotHov  = "#243b55";
-        // GL 视口渐变：深海蓝到靛蓝
-        t.bgTopR = 0.10f; t.bgTopG = 0.18f; t.bgTopB = 0.32f;
-        t.bgBotR = 0.22f; t.bgBotG = 0.40f; t.bgBotB = 0.58f;
+        t.base        = "#24283b";
+        t.mantle      = "#1f2335";
+        t.crust       = "#1a1e30";
+        t.surface0    = "#292e42";
+        t.surface1    = "#343a55";
+        t.surface2    = "#414868";
+        t.overlay0    = "#565f89";
+        t.overlay2    = "#737aa2";
+        t.subtext0    = "#a9b1d6";
+        t.subtext1    = "#b4bce3";
+        t.text        = "#c0caf5";
+        t.blue        = "#7aa2f7";
+        t.blueHover   = "#8db4ff";
+        t.bluePressed = "#6990e5";
+        t.green       = "#9ece6a";
+        t.red         = "#f7768e";
+        t.teal        = "#7dcfff";
+        t.btnText     = "#1a1e30";
+        t.gradTop     = "#343a55";
+        t.gradBot     = "#292e42";
+        t.gradTopHov  = "#414868";
+        t.gradBotHov  = "#343a55";
+        // GL 视口渐变
+        t.bgTopR = 0.12f; t.bgTopG = 0.14f; t.bgTopB = 0.21f;
+        t.bgBotR = 0.26f; t.bgBotG = 0.32f; t.bgBotB = 0.50f;
         // 色标文字
-        t.barTextR = 214; t.barTextG = 229; t.barTextB = 240;
+        t.barTextR = 192; t.barTextG = 202; t.barTextB = 245;
         return t;
     }
 
-    /** 森林 — 深绿色调，自然感 */
+    /** Gruvbox — 暖色大地色调，自然质朴 */
     static Theme forest() {
         Theme t;
-        t.name        = "森林";
+        t.name        = "大地";
         t.isDark      = true;
-        t.base        = "#1a2318";
-        t.mantle      = "#151e14";
-        t.crust       = "#101810";
-        t.surface0    = "#2a3a26";
-        t.surface1    = "#354832";
-        t.surface2    = "#40563d";
-        t.overlay0    = "#5a7a55";
-        t.overlay2    = "#82a57c";
-        t.subtext0    = "#a5c4a0";
-        t.subtext1    = "#b8d4b4";
-        t.text        = "#d4e8d0";
-        t.blue        = "#7ec880";
-        t.blueHover   = "#9cd89e";
-        t.bluePressed = "#66b868";
-        t.green       = "#a8e6a0";
-        t.red         = "#e87070";
-        t.teal        = "#60d0a0";
-        t.btnText     = "#1a2318";
-        t.gradTop     = "#354832";
-        t.gradBot     = "#2a3a26";
-        t.gradTopHov  = "#40563d";
-        t.gradBotHov  = "#354832";
-        // GL 视口渐变：林间雾气
-        t.bgTopR = 0.16f; t.bgTopG = 0.24f; t.bgTopB = 0.18f;
-        t.bgBotR = 0.38f; t.bgBotG = 0.52f; t.bgBotB = 0.40f;
+        t.base        = "#282828";
+        t.mantle      = "#1d2021";
+        t.crust       = "#181a1b";
+        t.surface0    = "#3c3836";
+        t.surface1    = "#504945";
+        t.surface2    = "#665c54";
+        t.overlay0    = "#7c6f64";
+        t.overlay2    = "#a89984";
+        t.subtext0    = "#bdae93";
+        t.subtext1    = "#d5c4a1";
+        t.text        = "#ebdbb2";
+        t.blue        = "#8ec07c";
+        t.blueHover   = "#a4d092";
+        t.bluePressed = "#7ab068";
+        t.green       = "#b8bb26";
+        t.red         = "#fb4934";
+        t.teal        = "#83a598";
+        t.btnText     = "#1d2021";
+        t.gradTop     = "#504945";
+        t.gradBot     = "#3c3836";
+        t.gradTopHov  = "#665c54";
+        t.gradBotHov  = "#504945";
+        // GL 视口渐变
+        t.bgTopR = 0.15f; t.bgTopG = 0.13f; t.bgTopB = 0.11f;
+        t.bgBotR = 0.34f; t.bgBotG = 0.30f; t.bgBotB = 0.25f;
         // 色标文字
-        t.barTextR = 212; t.barTextG = 232; t.barTextB = 208;
+        t.barTextR = 235; t.barTextG = 219; t.barTextB = 178;
         return t;
     }
 
-    /** 暮光 — 暖色调，沉稳 */
+    /** Dracula — 经典暗紫色调，鲜明活泼 */
     static Theme sunset() {
         Theme t;
         t.name        = "暮光";
         t.isDark      = true;
-        t.base        = "#1f1520";
-        t.mantle      = "#1a111c";
-        t.crust       = "#140d16";
-        t.surface0    = "#302435";
-        t.surface1    = "#3e3045";
-        t.surface2    = "#4d3d55";
-        t.overlay0    = "#6e5a78";
-        t.overlay2    = "#9580a0";
-        t.subtext0    = "#b8a5c5";
-        t.subtext1    = "#c8b8d2";
-        t.text        = "#e4d8ec";
-        t.blue        = "#e8a060";
-        t.blueHover   = "#f0b878";
-        t.bluePressed = "#d89050";
-        t.green       = "#c8d87a";
-        t.red         = "#f06888";
-        t.teal        = "#e89060";
-        t.btnText     = "#1f1520";
-        t.gradTop     = "#3e3045";
-        t.gradBot     = "#302435";
-        t.gradTopHov  = "#4d3d55";
-        t.gradBotHov  = "#3e3045";
-        // GL 视口渐变：日落晚霞
-        t.bgTopR = 0.22f; t.bgTopG = 0.14f; t.bgTopB = 0.24f;
-        t.bgBotR = 0.60f; t.bgBotG = 0.35f; t.bgBotB = 0.30f;
+        t.base        = "#282a36";
+        t.mantle      = "#22232e";
+        t.crust       = "#1d1e28";
+        t.surface0    = "#343746";
+        t.surface1    = "#44475a";
+        t.surface2    = "#545768";
+        t.overlay0    = "#6272a4";
+        t.overlay2    = "#8791b8";
+        t.subtext0    = "#a6b0cc";
+        t.subtext1    = "#bcc4da";
+        t.text        = "#f8f8f2";
+        t.blue        = "#bd93f9";
+        t.blueHover   = "#caa8ff";
+        t.bluePressed = "#a97ee8";
+        t.green       = "#50fa7b";
+        t.red         = "#ff5555";
+        t.teal        = "#8be9fd";
+        t.btnText     = "#282a36";
+        t.gradTop     = "#44475a";
+        t.gradBot     = "#343746";
+        t.gradTopHov  = "#545768";
+        t.gradBotHov  = "#44475a";
+        // GL 视口渐变
+        t.bgTopR = 0.16f; t.bgTopG = 0.16f; t.bgTopB = 0.21f;
+        t.bgBotR = 0.32f; t.bgBotG = 0.34f; t.bgBotB = 0.48f;
         // 色标文字
-        t.barTextR = 228; t.barTextG = 216; t.barTextB = 236;
+        t.barTextR = 248; t.barTextG = 248; t.barTextB = 242;
         return t;
     }
 
-    /** 北欧极光 — Nord 冷灰蓝色调，柔和 */
+    /** Solarized — 经典青蓝色调，低对比护眼 */
     static Theme nord() {
         Theme t;
-        t.name        = "北欧极光";
+        t.name        = "青玉";
         t.isDark      = true;
-        t.base        = "#2e3440";
-        t.mantle      = "#292e39";
-        t.crust       = "#242933";
-        t.surface0    = "#3b4252";
-        t.surface1    = "#434c5e";
-        t.surface2    = "#4c566a";
-        t.overlay0    = "#616e88";
-        t.overlay2    = "#8891a5";
-        t.subtext0    = "#a3adc2";
-        t.subtext1    = "#b8c1d4";
-        t.text        = "#d8dee9";
-        t.blue        = "#88c0d0";
-        t.blueHover   = "#a0d0dd";
-        t.bluePressed = "#70b0c0";
-        t.green       = "#a3be8c";
-        t.red         = "#bf616a";
-        t.teal        = "#8fbcbb";
-        t.btnText     = "#2e3440";
-        t.gradTop     = "#434c5e";
-        t.gradBot     = "#3b4252";
-        t.gradTopHov  = "#4c566a";
-        t.gradBotHov  = "#434c5e";
-        // GL 视口渐变：北极光
-        t.bgTopR = 0.22f; t.bgTopG = 0.26f; t.bgTopB = 0.32f;
-        t.bgBotR = 0.46f; t.bgBotG = 0.58f; t.bgBotB = 0.65f;
+        t.base        = "#002b36";
+        t.mantle      = "#00252f";
+        t.crust       = "#001f28";
+        t.surface0    = "#073642";
+        t.surface1    = "#0d4150";
+        t.surface2    = "#1a5060";
+        t.overlay0    = "#586e75";
+        t.overlay2    = "#657b83";
+        t.subtext0    = "#839496";
+        t.subtext1    = "#93a1a1";
+        t.text        = "#eee8d5";
+        t.blue        = "#268bd2";
+        t.blueHover   = "#4aa0e0";
+        t.bluePressed = "#1a7abc";
+        t.green       = "#859900";
+        t.red         = "#dc322f";
+        t.teal        = "#2aa198";
+        t.btnText     = "#fdf6e3";
+        t.gradTop     = "#0d4150";
+        t.gradBot     = "#073642";
+        t.gradTopHov  = "#1a5060";
+        t.gradBotHov  = "#0d4150";
+        // GL 视口渐变
+        t.bgTopR = 0.00f; t.bgTopG = 0.17f; t.bgTopB = 0.21f;
+        t.bgBotR = 0.07f; t.bgBotG = 0.32f; t.bgBotB = 0.38f;
         // 色标文字
-        t.barTextR = 216; t.barTextG = 222; t.barTextB = 233;
+        t.barTextR = 238; t.barTextG = 232; t.barTextB = 213;
         return t;
     }
 };

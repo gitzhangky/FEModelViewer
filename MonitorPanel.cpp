@@ -68,11 +68,11 @@ void MonitorPanel::applyTheme(const Theme& t) {
     setStyleSheet(QString(
         "QGroupBox {"
         "  background: %1; border: 1px solid %2;"
-        "  border-radius: 6px; margin-top: 12px; padding: 16px 8px 8px 8px;"
+        "  border-radius: 8px; margin-top: 14px; padding: 14px 10px 10px 10px;"
         "  font-weight: bold; font-size: 12px; color: %3; }"
         "QGroupBox::title {"
-        "  subcontrol-origin: margin; left: 10px; padding: 0 4px;"
+        "  subcontrol-origin: margin; left: 12px; padding: 0 6px;"
         "  color: %4; }"
-        "QLabel { color: %5; font-size: 11px; font-family: monospace; }"
-    ).arg(t.mantle, t.surface0, t.subtext0, t.red, t.overlay2));
+        "QLabel { color: %5; font-size: 11px; font-family: monospace; padding: 1px 0; }"
+    ).arg(t.mantle, t.surface0, t.subtext0, t.teal, t.overlay2));
 }

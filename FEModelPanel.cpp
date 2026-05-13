@@ -45,8 +45,8 @@ FEModelPanel::FEModelPanel(QWidget* parent) : QWidget(parent) {
     setMinimumWidth(140);
 
     auto* layout = new QVBoxLayout(this);
-    layout->setContentsMargins(6, 6, 6, 6);
-    layout->setSpacing(4);
+    layout->setContentsMargins(8, 6, 8, 6);
+    layout->setSpacing(6);
 
     layout->addWidget(createInfoGroup());
     layout->addWidget(createSelectionGroup());
@@ -61,39 +61,47 @@ void FEModelPanel::applyTheme(const Theme& t) {
         "QWidget { background: %1; color: %2; }"
         "QGroupBox {"
         "  background: %3; border: 1px solid %4;"
-        "  border-radius: 6px; margin-top: 12px; padding: 16px 8px 8px 8px;"
+        "  border-radius: 8px; margin-top: 14px; padding: 14px 10px 10px 10px;"
         "  font-weight: bold; font-size: 12px; color: %5; }"
         "QGroupBox::title {"
-        "  subcontrol-origin: margin; left: 10px; padding: 0 4px;"
+        "  subcontrol-origin: margin; left: 12px; padding: 0 6px;"
         "  color: %6; }"
-        "QLabel { font-size: 12px; color: %7; }"
-        "QLabel#searchHint { font-size: 10px; color: %8; }"
+        "QLabel { font-size: 12px; color: %7; padding: 1px 0; }"
+        "QLabel#searchHint { font-size: 10px; color: %8; padding: 2px 0; }"
         "QLineEdit {"
-        "  background: %4; border: 1px solid %9; border-radius: 4px;"
-        "  padding: 4px 8px; font-size: 12px; color: %2;"
-        "  min-height: 22px; }"
+        "  background: %4; border: 1px solid %9; border-radius: 5px;"
+        "  padding: 5px 10px; font-size: 12px; color: %2;"
+        "  min-height: 24px; }"
         "QLineEdit:focus { border-color: %6; }"
         "QComboBox {"
-        "  background: %4; border: 1px solid %9; border-radius: 4px;"
-        "  padding: 4px 8px; font-size: 12px; color: %2;"
-        "  min-height: 22px; }"
+        "  background: %4; border: 1px solid %9; border-radius: 5px;"
+        "  padding: 5px 10px; font-size: 12px; color: %2;"
+        "  min-height: 24px; }"
         "QComboBox:hover { border-color: %6; }"
-        "QComboBox::drop-down { border: none; width: 20px; }"
+        "QComboBox::drop-down { border: none; width: 24px; }"
         "QComboBox::down-arrow {"
-        "  image: none; border-left: 4px solid transparent;"
-        "  border-right: 4px solid transparent;"
-        "  border-top: 5px solid %6; margin-right: 6px; }"
+        "  image: none; border-left: 5px solid transparent;"
+        "  border-right: 5px solid transparent;"
+        "  border-top: 6px solid %6; margin-right: 8px; }"
         "QComboBox QAbstractItemView {"
-        "  background: %4; border: 1px solid %9;"
-        "  selection-background-color: %9; color: %2; }"
+        "  background: %3; border: 1px solid %9; border-radius: 4px;"
+        "  padding: 4px; selection-background-color: %9; color: %2;"
+        "  outline: none; }"
+        "QCheckBox { font-size: 12px; color: %7; spacing: 8px; padding: 2px 0; }"
+        "QCheckBox::indicator {"
+        "  width: 16px; height: 16px; border-radius: 4px;"
+        "  border: 2px solid %9; background: %4; }"
+        "QCheckBox::indicator:checked {"
+        "  background: %6; border-color: %6; }"
+        "QCheckBox::indicator:hover { border-color: %6; }"
     ).arg(t.base, t.text, t.mantle, t.surface0, t.subtext0, t.green, t.subtext1, t.overlay0, t.surface1));
 
-    // 搜索按钮单独设样式
     if (searchBtn_) {
         searchBtn_->setStyleSheet(QString(
             "QPushButton {"
             "  background: %1; color: %2; border: none;"
-            "  border-radius: 4px; padding: 5px 8px; font-size: 12px; font-weight: bold; }"
+            "  border-radius: 5px; padding: 6px 10px; font-size: 12px; font-weight: bold;"
+            "  min-height: 24px; }"
             "QPushButton:hover { background: %3; }"
             "QPushButton:pressed { background: %4; }"
         ).arg(t.blue, t.btnText, t.blueHover, t.bluePressed));

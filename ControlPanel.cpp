@@ -35,7 +35,7 @@ ControlPanel::ControlPanel(QWidget* parent) : QWidget(parent) {
 }
 
 void ControlPanel::applyTheme(const Theme& t) {
-    infoLabel_->setStyleSheet(QString("color: %1; font-size: 11px;").arg(t.overlay0));
+    infoLabel_->setStyleSheet(QString("color: %1; font-size: 11px; padding: 4px 0;").arg(t.overlay0));
 
     setStyleSheet(QString(
         "QWidget { background: %1; color: %2; }"
@@ -43,8 +43,8 @@ void ControlPanel::applyTheme(const Theme& t) {
         "QPushButton {"
         "  background: qlineargradient(x1:0, y1:0, x2:0, y2:1,"
         "    stop:0 %3, stop:1 %4);"
-        "  border: 1px solid %5; border-radius: 5px;"
-        "  padding: 7px 12px; color: %2; font-size: 13px; }"
+        "  border: 1px solid %5; border-radius: 6px;"
+        "  padding: 8px 14px; color: %2; font-size: 12px; }"
         "QPushButton:hover {"
         "  background: qlineargradient(x1:0, y1:0, x2:0, y2:1,"
         "    stop:0 %6, stop:1 %7);"
@@ -54,31 +54,35 @@ void ControlPanel::applyTheme(const Theme& t) {
 
         "QGroupBox {"
         "  background: %10; border: 1px solid %4;"
-        "  border-radius: 6px; margin-top: 12px; padding: 16px 8px 8px 8px;"
+        "  border-radius: 8px; margin-top: 14px; padding: 14px 10px 10px 10px;"
         "  font-weight: bold; font-size: 12px; color: %11; }"
         "QGroupBox::title {"
-        "  subcontrol-origin: margin; left: 10px; padding: 0 4px;"
+        "  subcontrol-origin: margin; left: 12px; padding: 0 6px;"
         "  color: %8; }"
 
         "QLabel { font-size: 12px; color: %12; }"
 
-        "QCheckBox { font-size: 12px; color: %12; spacing: 6px; }"
+        "QCheckBox { font-size: 12px; color: %12; spacing: 8px; padding: 2px 0; }"
         "QCheckBox::indicator {"
-        "  width: 14px; height: 14px; border-radius: 3px;"
-        "  border: 1px solid %5; background: %4; }"
+        "  width: 16px; height: 16px; border-radius: 4px;"
+        "  border: 2px solid %5; background: %4; }"
         "QCheckBox::indicator:checked {"
         "  background: %8; border-color: %8; }"
+        "QCheckBox::indicator:hover { border-color: %8; }"
 
         "QComboBox {"
         "  background: %4; border: 1px solid %13;"
-        "  border-radius: 5px; padding: 5px 8px; color: %2; }"
+        "  border-radius: 5px; padding: 5px 10px; color: %2; min-height: 24px; }"
         "QComboBox:hover { border-color: %8; }"
-        "QComboBox::drop-down {"
-        "  border: none; width: 20px; }"
+        "QComboBox::drop-down { border: none; width: 24px; }"
+        "QComboBox::down-arrow {"
+        "  image: none; border-left: 5px solid transparent;"
+        "  border-right: 5px solid transparent;"
+        "  border-top: 6px solid %8; margin-right: 8px; }"
         "QComboBox QAbstractItemView {"
-        "  background: %4; border: 1px solid %13;"
-        "  selection-background-color: %8;"
-        "  selection-color: %9; color: %2; }"
+        "  background: %10; border: 1px solid %13; border-radius: 4px;"
+        "  padding: 4px; selection-background-color: %8;"
+        "  selection-color: %9; color: %2; outline: none; }"
     ).arg(t.base, t.text, t.gradTop, t.surface0, t.surface2,
           t.gradTopHov, t.gradBotHov, t.blue, t.btnText)
      .arg(t.mantle, t.subtext0, t.subtext1, t.surface1));

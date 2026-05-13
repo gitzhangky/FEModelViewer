@@ -19,8 +19,8 @@ PickPanel::PickPanel(QWidget* parent)
     setMinimumWidth(140);
 
     auto* layout = new QVBoxLayout(this);
-    layout->setContentsMargins(6, 6, 6, 6);
-    layout->setSpacing(4);
+    layout->setContentsMargins(8, 6, 8, 6);
+    layout->setSpacing(6);
 
     // ════════════════════════════════════════
     // 单个卡片：拾取
@@ -93,31 +93,30 @@ PickPanel::PickPanel(QWidget* parent)
 
 void PickPanel::applyTheme(const Theme& t)
 {
-    // 与左侧 FEModelPanel 一致的 QGroupBox 卡片风格
     setStyleSheet(QString(
         "QWidget { background: %1; color: %2; }"
         "QGroupBox {"
         "  background: %3; border: 1px solid %4;"
-        "  border-radius: 6px; margin-top: 12px; padding: 16px 8px 8px 8px;"
+        "  border-radius: 8px; margin-top: 14px; padding: 14px 10px 10px 10px;"
         "  font-weight: bold; font-size: 12px; color: %5; }"
         "QGroupBox::title {"
-        "  subcontrol-origin: margin; left: 10px; padding: 0 4px;"
+        "  subcontrol-origin: margin; left: 12px; padding: 0 6px;"
         "  color: %6; }"
         "QLabel { font-size: 11px; font-weight: bold; color: %7; }"
-        "QRadioButton { font-size: 12px; color: %2; spacing: 4px; }"
+        "QRadioButton { font-size: 12px; color: %2; spacing: 6px; padding: 2px 0; }"
         "QRadioButton::indicator {"
-        "  width: 14px; height: 14px; border-radius: 7px;"
+        "  width: 16px; height: 16px; border-radius: 8px;"
         "  border: 2px solid %8; background: %4; }"
         "QRadioButton::indicator:checked {"
         "  background: %6; border-color: %6; }"
         "QRadioButton::indicator:hover { border-color: %6; }"
-        "QCheckBox { font-size: 12px; color: %2; spacing: 6px; padding: 1px 0; }"
+        "QCheckBox { font-size: 12px; color: %2; spacing: 8px; padding: 2px 0; }"
         "QCheckBox::indicator {"
-        "  width: 14px; height: 14px; border-radius: 3px;"
+        "  width: 16px; height: 16px; border-radius: 4px;"
         "  border: 2px solid %8; background: %4; }"
         "QCheckBox::indicator:checked {"
         "  background: %6; border-color: %6; }"
         "QCheckBox::indicator:hover { border-color: %6; }"
-        "QFrame[frameShape=\"4\"] { background: %4; border: none; }"
+        "QFrame[frameShape=\"4\"] { background: %4; border: none; margin: 4px 0; }"
     ).arg(t.base, t.text, t.mantle, t.surface0, t.subtext0, t.blue, t.subtext1, t.surface2));
 }

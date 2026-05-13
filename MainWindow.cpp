@@ -322,8 +322,8 @@ QWidget* MainWindow::createFilePanel() {
     panel->setMaximumHeight(120);
 
     auto* mainLayout = new QVBoxLayout(panel);
-    mainLayout->setContentsMargins(12, 8, 12, 8);
-    mainLayout->setSpacing(6);
+    mainLayout->setContentsMargins(14, 10, 14, 10);
+    mainLayout->setSpacing(8);
 
     // ── 模型文件行 ──
     auto* modelRow = new QHBoxLayout;
@@ -566,7 +566,7 @@ void MainWindow::setupToolBar() {
 
 void MainWindow::setupStatusBar() {
     auto* sb = statusBar();
-    sb->setFixedHeight(26);
+    sb->setFixedHeight(30);
     // 左侧：状态文字
     statusLabel_ = new QLabel("  就绪");
     sb->addWidget(statusLabel_, 1);
@@ -594,74 +594,78 @@ void MainWindow::applyTheme(const Theme& t) {
     sidebar_->setStyleSheet(QString("QWidget { background: %1; }").arg(t.base));
     rightSidebar_->setStyleSheet(QString("QWidget { background: %1; }").arg(t.base));
 
-    // Splitter
+    // Splitter — 更宽的把手，圆角，hover 时柔和高亮
     QString splitterH = QString(
-        "QSplitter::handle { background: %1; width: 3px; }"
+        "QSplitter::handle { background: %1; width: 5px; border-radius: 2px; margin: 2px 0; }"
         "QSplitter::handle:hover { background: %2; }").arg(t.surface0, t.blue);
     QString splitterV = QString(
-        "QSplitter::handle { background: %1; height: 3px; }"
+        "QSplitter::handle { background: %1; height: 5px; border-radius: 2px; margin: 0 2px; }"
         "QSplitter::handle:hover { background: %2; }").arg(t.surface0, t.blue);
     if (auto* hs = findChild<QSplitter*>("hSplitter")) hs->setStyleSheet(splitterH);
     if (auto* vs = findChild<QSplitter*>("vSplitter")) vs->setStyleSheet(splitterV);
 
-    // 工具栏
+    // 工具栏 — 更宽松的间距，checked 状态用底部强调线
     toolbar_->setStyleSheet(QString(
         "QToolBar {"
         "  background: %1; border-bottom: 1px solid %2;"
-        "  padding: 2px 4px; spacing: 2px; }"
+        "  padding: 4px 8px; spacing: 4px; }"
         "QToolButton {"
         "  background: transparent; color: %3;"
-        "  border: 1px solid transparent; border-radius: 4px;"
-        "  padding: 4px 10px; font-size: 12px; }"
+        "  border: 1px solid transparent; border-radius: 5px;"
+        "  padding: 5px 14px; font-size: 12px; margin: 1px 0; }"
         "QToolButton:hover {"
-        "  background: %2; border-color: %4; }"
+        "  background: %2; }"
         "QToolButton:pressed {"
         "  background: %4; }"
         "QToolButton:checked {"
-        "  background: %4; border-color: %5; color: %5; }"
+        "  background: %4; color: %5;"
+        "  border-bottom: 2px solid %5; border-radius: 5px; }"
         "QToolBar::separator {"
-        "  width: 1px; background: %2; margin: 4px 6px; }"
+        "  width: 1px; background: %2; margin: 6px 8px; }"
     ).arg(t.mantle, t.surface0, t.text, t.surface1, t.blue));
 
     // 主题下拉菜单
     themeMenu_->setStyleSheet(QString(
         "QMenu {"
-        "  background: %1; border: 1px solid %2; border-radius: 4px;"
-        "  padding: 4px 0; }"
+        "  background: %1; border: 1px solid %2; border-radius: 6px;"
+        "  padding: 6px 0; }"
         "QMenu::item {"
-        "  color: %3; padding: 6px 20px; font-size: 12px; }"
+        "  color: %3; padding: 8px 24px; font-size: 12px; border-radius: 4px;"
+        "  margin: 2px 6px; }"
         "QMenu::item:selected {"
         "  background: %4; color: %5; }"
+        "QMenu::indicator {"
+        "  width: 14px; height: 14px; margin-left: 8px; }"
     ).arg(t.mantle, t.surface0, t.text, t.surface1, t.blue));
 
-    // 标记当前主题（在菜单项前加勾选标记）
+    // 标记当前主题
     auto actions = themeMenu_->actions();
     for (int i = 0; i < actions.size(); ++i)
         actions[i]->setCheckable(true);
     for (int i = 0; i < actions.size(); ++i)
         actions[i]->setChecked(i == themeIndex_);
 
-    // 状态栏
+    // 状态栏 — 更高、更宽敞
     statusBar()->setStyleSheet(QString(
         "QStatusBar {"
         "  background: %1; border-top: 1px solid %2;"
-        "  font-size: 11px; font-family: monospace; }"
+        "  font-size: 11px; padding: 2px 8px; }"
         "QStatusBar::item { border: none; }"
     ).arg(t.crust, t.surface0));
 
     statusLabel_->setStyleSheet(
-        QString("color: %1; font-weight: bold;").arg(t.green));
+        QString("color: %1; font-weight: bold; font-size: 11px;").arg(t.green));
     progressText_->setStyleSheet(
-        QString("color: %1; font-size: 11px; padding-right: 6px;").arg(t.blue));
+        QString("color: %1; font-size: 11px; padding-right: 8px;").arg(t.blue));
     statusProgress_->setStyleSheet(QString(
         "QProgressBar {"
-        "  border: 1px solid %1; border-radius: 6px;"
+        "  border: 1px solid %1; border-radius: 7px;"
         "  background: %2; text-align: center;"
         "  color: %3; font-size: 10px; }"
         "QProgressBar::chunk {"
         "  background: qlineargradient(x1:0, y1:0, x2:1, y2:0,"
         "    stop:0 %4, stop:1 %5);"
-        "  border-radius: 5px; }"
+        "  border-radius: 6px; }"
     ).arg(t.surface1, t.base, t.text, t.blue, t.teal));
 
     // 底部文件面板
@@ -669,14 +673,14 @@ void MainWindow::applyTheme(const Theme& t) {
         "QWidget { background: %1; color: %2; }"
         "QLabel { font-size: 12px; color: %3; font-weight: bold; }"
         "QLineEdit {"
-        "  background: %4; border: 1px solid %5; border-radius: 4px;"
-        "  padding: 4px 8px; font-size: 12px; color: %2;"
+        "  background: %4; border: 1px solid %5; border-radius: 5px;"
+        "  padding: 5px 10px; font-size: 12px; color: %2;"
         "  selection-background-color: %5; }"
         "QLineEdit:focus { border-color: %3; }"
         "QLineEdit[readOnly=\"true\"] { color: %6; }"
         "QPushButton {"
         "  background: %7; color: %2; border: 1px solid %5;"
-        "  border-radius: 4px; padding: 4px 8px; font-size: 12px; }"
+        "  border-radius: 5px; padding: 5px 12px; font-size: 12px; }"
         "QPushButton:hover { background: %5; border-color: %3; }"
         "QPushButton:pressed { background: %8; }"
     ).arg(t.crust, t.text, t.blue, t.base, t.surface1,
@@ -685,7 +689,7 @@ void MainWindow::applyTheme(const Theme& t) {
     filePanelApplyBtn_->setStyleSheet(QString(
         "QPushButton {"
         "  background: %1; color: %2; border: none;"
-        "  border-radius: 4px; padding: 4px 8px; font-size: 12px; font-weight: bold; }"
+        "  border-radius: 5px; padding: 6px 16px; font-size: 12px; font-weight: bold; }"
         "QPushButton:hover { background: %3; }"
         "QPushButton:pressed { background: %4; }"
     ).arg(t.blue, t.btnText, t.blueHover, t.bluePressed));
