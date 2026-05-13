@@ -97,6 +97,7 @@ set(RENDER_HEADERS
     FEPickResult.h
     FEParser.h
     FEResultMapper.h
+    FEResultRepository.h
     Theme.h
 )
 
@@ -113,6 +114,7 @@ set(RENDER_SOURCES
     FEParser_op2results.cpp
     FEParser_unv.cpp
     FEResultMapper.cpp
+    FEResultRepository.cpp
 )
 
 # Shader 资源文件
@@ -241,6 +243,14 @@ if(BUILD_TESTING)
     target_link_libraries(test_result_mapper PRIVATE FERender)
     add_test(NAME result_mapper
         COMMAND test_result_mapper
+    )
+
+    add_executable(test_result_repository
+        tests/test_result_repository.cpp
+    )
+    target_link_libraries(test_result_repository PRIVATE FERender)
+    add_test(NAME result_repository
+        COMMAND test_result_repository
     )
 
     add_test(NAME ferender_public_headers

@@ -533,7 +533,100 @@ sc.resultTypes.push_back(dispType);
 results.subcases.push_back(sc);
 ```
 
-### 2.8 FEParser — 有限元文件解析器
+### 2.8 FEResultRepository — 结果仓库与帧模型
+
+**头文件**：`FEResultRepository.h`
+
+在 `FEResultData` 的 subcase/type/component 层级基础上，新增 step/frame/time/frequency/mode 帧模型，
+为动画、工况比较和结果曲线打底。
+
+#### FEResultDomain（分析域）
+
+```cpp
+enum class FEResultDomain {
+    Static,       // 静力分析
+    Time,         // 瞬态/时间域
+    Frequency,    // 频率域
+    Mode          // 模态分析
+};
+```
+
+#### FEResultFrameInfo（帧元数据）
+
+```cpp
+struct FEResultFrameInfo {
+    int subcaseId = 0;                              // 原始工况 ID
+    int stepIndex = 0;                              // 步序号
+    int frameIndex = 0;                             // 帧序号
+    double value = 0.0;                             // 轴值（时间/频率/特征值）
+    std::string valueLabel;                         // 轴值标签（如 "t=0.5s"）
+    FEResultDomain domain = FEResultDomain::Static; // 分析域
+};
+```
+
+#### FEResultFrame（结果帧）
+
+```cpp
+struct FEResultFrame {
+    FEResultFrameInfo info;                  // 帧元数据
+    std::vector<FEResultType> resultTypes;   // 该帧包含的结果类型列表
+};
+```
+
+#### FEResultRepository（结果仓库）
+
+```cpp
+class FEResultRepository {
+public:
+    void clear();                                              // 清空
+    void addFrame(const FEResultFrame& frame);                 // 添加帧
+    int frameCount() const;                                    // 帧总数
+    const FEResultFrame* frame(int index) const;               // 按索引取帧（越界返回 nullptr）
+    std::vector<std::string> resultTypeNames(int frameIndex) const;  // 帧内结果类型名称
+    bool empty() const;                                        // 是否为空
+
+    // 从旧 FEResultData 转换（每个 subcase 变为一帧，domain=Static）
+    static FEResultRepository fromResultData(const FEResultData& data);
+};
+```
+
+#### 与 FEResultData 的关系
+
+| 旧结构 | 新结构 | 说明 |
+|--------|--------|------|
+| `FESubcase` | `FEResultFrame` | 一个工况对应一帧，`subcaseId` 保持不变 |
+| `FESubcase::name` | `FEResultFrameInfo::valueLabel` | 帧标签，可含域轴值 |
+| —（缺失） | `FEResultFrameInfo::domain/value` | 新增分析域和轴值 |
+| `FESubcase::resultTypes` | `FEResultFrame::resultTypes` | 结果类型列表不变 |
+
+`FEResultData` 保持不变，旧代码可继续使用。新代码推荐使用 `FEResultRepository`。
+调用 `FEResultRepository::fromResultData()` 可一行完成转换。
+
+#### 使用示例
+
+```cpp
+// 方式 A：从旧 FEResultData 转换
+FEResultData data;
+FEParser::parseNastranOp2Results("model.op2", data);
+FEResultRepository repo = FEResultRepository::fromResultData(data);
+
+// 方式 B：直接解析到 repository（推荐，保留帧域信息）
+FEResultRepository repo;
+FEParser::parseNastranOp2Results("model.op2", repo);
+// 或
+FEParser::parseUnvResults("result.unv", repo);
+
+// 查询
+for (int i = 0; i < repo.frameCount(); ++i) {
+    const FEResultFrame* f = repo.frame(i);
+    qDebug() << "Frame" << i << ":" << f->info.valueLabel.c_str()
+             << "domain=" << static_cast<int>(f->info.domain);
+}
+```
+
+---
+
+### 2.9 FEParser — 有限元文件解析器
 
 **头文件**：`FEParser.h`
 
@@ -559,6 +652,12 @@ public:
 
     /** 解析 UNV 结果数据（Dataset 2414 / 55） */
     static bool parseUnvResults(const QString& filePath, FEResultData& results);
+
+    /** 解析 OP2 结果到 FEResultRepository（兼容包装） */
+    static bool parseNastranOp2Results(const QString& filePath, FEResultRepository& repo);
+
+    /** 解析 UNV 结果到 FEResultRepository（保留帧域信息） */
+    static bool parseUnvResults(const QString& filePath, FEResultRepository& repo);
 };
 ```
 
@@ -1230,6 +1329,7 @@ viewer.fitToModel(model.computeCenter(), model.computeSize());
 | `FEField.h` | `FEScalarField`, `FEVectorField`, `ColorMap`, `ColorMapType` | 结果场与色谱 |
 | `FEResultData.h` | `FEResultData`, `FESubcase`, `FEResultType`, `FEResultComponent` | 多工况结果层级 |
 | `FEResultMapper.h` | `FEResultMapper`, `FEMappedScalars` | 结果场到渲染顶点标量数组的映射 |
+| `FEResultRepository.h` | `FEResultRepository`, `FEResultFrame`, `FEResultFrameInfo`, `FEResultDomain` | 结果仓库与帧模型 |
 | `FEParser.h` | `FEParser` | 有限元文件解析器（INP/BDF/OP2/UNV） |
 | `Geometry.h` | `Mesh`, `Geometry::*` | 网格结构与几何体生成 |
 | `FERenderData.h` | `FERenderData` | 渲染数据包（Mesh + 映射表） |

@@ -4,6 +4,7 @@
  */
 
 #include "FEParser.h"
+#include "FEResultRepository.h"
 
 #include <QFile>
 #include <QDebug>
@@ -462,4 +463,13 @@ bool FEParser::parseNastranOp2Results(const QString& filePath, FEResultData& res
     }
 
     return foundAny;
+}
+
+bool FEParser::parseNastranOp2Results(const QString& filePath, FEResultRepository& repo)
+{
+    FEResultData data;
+    if (!parseNastranOp2Results(filePath, data))
+        return false;
+    repo = FEResultRepository::fromResultData(data);
+    return true;
 }

@@ -48,7 +48,7 @@ void ResultPanel::setupUI()
         cardLayout->addLayout(row);
     };
 
-    addRow("工况", subcaseCombo_);
+    addRow("帧", subcaseCombo_);
     addRow("类型", typeCombo_);
     addRow("分量", componentCombo_);
     // 色谱（暂时隐藏）
@@ -83,7 +83,7 @@ void ResultPanel::setupUI()
 
     // ── 信号连接 ──
     connect(subcaseCombo_, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this, &ResultPanel::onSubcaseChanged);
+            this, &ResultPanel::onFrameChanged);
     connect(typeCombo_, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &ResultPanel::onTypeChanged);
     connect(componentCombo_, QOverload<int>::of(&QComboBox::currentIndexChanged),
@@ -94,31 +94,42 @@ void ResultPanel::setupUI()
 
 void ResultPanel::setResults(const FEResultData& results)
 {
-    results_ = results;
+    repo_ = FEResultRepository::fromResultData(results);
+    populateFrameCombo();
+}
 
+void ResultPanel::setRepository(const FEResultRepository& repo)
+{
+    repo_ = repo;
+    populateFrameCombo();
+}
+
+void ResultPanel::populateFrameCombo()
+{
     subcaseCombo_->blockSignals(true);
     subcaseCombo_->clear();
-    for (const auto& sc : results_.subcases) {
-        subcaseCombo_->addItem(QString::fromStdString(sc.name));
+    for (int i = 0; i < repo_.frameCount(); ++i) {
+        const FEResultFrame* f = repo_.frame(i);
+        subcaseCombo_->addItem(QString::fromStdString(f->info.valueLabel));
     }
     subcaseCombo_->blockSignals(false);
 
-    bool hasData = !results_.subcases.empty();
+    bool hasData = !repo_.empty();
     subcaseCombo_->setEnabled(hasData);
 
     if (hasData) {
         subcaseCombo_->setCurrentIndex(0);
-        onSubcaseChanged(0);
+        onFrameChanged(0);
     }
 
     infoLabel_->setText(hasData
-        ? QString("%1 个工况已加载").arg(results_.subcases.size())
+        ? QString("%1 个帧已加载").arg(repo_.frameCount())
         : "无结果数据");
 }
 
 void ResultPanel::clearResults()
 {
-    results_.clear();
+    repo_.clear();
     subcaseCombo_->clear();
     typeCombo_->clear();
     componentCombo_->clear();
@@ -130,7 +141,7 @@ void ResultPanel::clearResults()
     infoLabel_->setText("");
 }
 
-void ResultPanel::onSubcaseChanged(int index)
+void ResultPanel::onFrameChanged(int index)
 {
     (void)index;
     refreshTypes();
@@ -152,10 +163,10 @@ void ResultPanel::refreshTypes()
     typeCombo_->blockSignals(true);
     typeCombo_->clear();
 
-    int scIdx = subcaseCombo_->currentIndex();
-    if (scIdx >= 0 && scIdx < static_cast<int>(results_.subcases.size())) {
-        const auto& sc = results_.subcases[scIdx];
-        for (const auto& rt : sc.resultTypes) {
+    int frameIdx = subcaseCombo_->currentIndex();
+    const FEResultFrame* f = repo_.frame(frameIdx);
+    if (f) {
+        for (const auto& rt : f->resultTypes) {
             typeCombo_->addItem(QString::fromStdString(rt.name));
         }
     }
@@ -176,11 +187,11 @@ void ResultPanel::refreshComponents()
     componentCombo_->blockSignals(true);
     componentCombo_->clear();
 
-    int scIdx = subcaseCombo_->currentIndex();
+    int frameIdx = subcaseCombo_->currentIndex();
     int rtIdx = typeCombo_->currentIndex();
-    if (scIdx >= 0 && scIdx < static_cast<int>(results_.subcases.size()) &&
-        rtIdx >= 0 && rtIdx < static_cast<int>(results_.subcases[scIdx].resultTypes.size())) {
-        const auto& rt = results_.subcases[scIdx].resultTypes[rtIdx];
+    const FEResultFrame* f = repo_.frame(frameIdx);
+    if (f && rtIdx >= 0 && rtIdx < static_cast<int>(f->resultTypes.size())) {
+        const auto& rt = f->resultTypes[rtIdx];
         for (const auto& comp : rt.components) {
             componentCombo_->addItem(QString::fromStdString(comp.name));
         }
@@ -196,23 +207,23 @@ void ResultPanel::refreshComponents()
 
 void ResultPanel::onApplyClicked()
 {
-    int scIdx = subcaseCombo_->currentIndex();
+    int frameIdx = subcaseCombo_->currentIndex();
     int rtIdx = typeCombo_->currentIndex();
     int cpIdx = componentCombo_->currentIndex();
 
-    if (scIdx < 0 || rtIdx < 0 || cpIdx < 0) return;
-    if (scIdx >= static_cast<int>(results_.subcases.size())) return;
+    if (frameIdx < 0 || rtIdx < 0 || cpIdx < 0) return;
 
-    const auto& sc = results_.subcases[scIdx];
-    if (rtIdx >= static_cast<int>(sc.resultTypes.size())) return;
+    const FEResultFrame* f = repo_.frame(frameIdx);
+    if (!f) return;
+    if (rtIdx >= static_cast<int>(f->resultTypes.size())) return;
 
-    const auto& rt = sc.resultTypes[rtIdx];
+    const auto& rt = f->resultTypes[rtIdx];
     if (cpIdx >= static_cast<int>(rt.components.size())) return;
 
     const auto& comp = rt.components[cpIdx];
 
     QString title = QString("%1 - %2 - %3")
-        .arg(QString::fromStdString(sc.name))
+        .arg(QString::fromStdString(f->info.valueLabel))
         .arg(QString::fromStdString(rt.name))
         .arg(QString::fromStdString(comp.name));
 

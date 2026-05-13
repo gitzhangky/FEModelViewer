@@ -17,6 +17,7 @@
 #include "ferender_export.h"
 #include "FEModel.h"
 #include "FEResultData.h"
+#include "FEResultRepository.h"
 
 class FERENDER_EXPORT FEParser {
 public:
@@ -37,4 +38,10 @@ public:
 
     /** @brief 解析 UNV 结果数据（Dataset 2414/55） */
     static bool parseUnvResults(const QString& filePath, FEResultData& results);
+
+    /** @brief 解析 OP2 结果到 FEResultRepository（兼容包装） */
+    static bool parseNastranOp2Results(const QString& filePath, FEResultRepository& repo);
+
+    /** @brief 解析 UNV 结果到 FEResultRepository（保留帧域信息） */
+    static bool parseUnvResults(const QString& filePath, FEResultRepository& repo);
 };

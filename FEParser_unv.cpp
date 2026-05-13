@@ -4,6 +4,7 @@
  */
 
 #include "FEParser.h"
+#include "FEResultRepository.h"
 
 #include <QFile>
 #include <QTextStream>
@@ -438,4 +439,50 @@ bool FEParser::parseUnvResults(const QString& filePath, FEResultData& results)
     }
 
     return datasetsParsed > 0;
+}
+
+bool FEParser::parseUnvResults(const QString& filePath, FEResultRepository& repo)
+{
+    FEResultData data;
+    if (!parseUnvResults(filePath, data))
+        return false;
+
+    repo.clear();
+    for (const auto& sc : data.subcases) {
+        FEResultFrame frame;
+        frame.info.subcaseId = sc.id;
+        frame.info.stepIndex = 0;
+        frame.info.frameIndex = 0;
+        frame.info.valueLabel = sc.name;
+        frame.resultTypes = sc.resultTypes;
+
+        std::string name = sc.name;
+        if (name.find("Mode ") == 0) {
+            frame.info.domain = FEResultDomain::Mode;
+            auto paren = name.find('(');
+            if (paren != std::string::npos) {
+                auto end = name.find(" Hz", paren);
+                if (end != std::string::npos) {
+                    std::string freqStr = name.substr(paren + 1, end - paren - 1);
+                    try { frame.info.value = std::stod(freqStr); } catch (...) {}
+                }
+            }
+        } else if (name.find("Time Step ") == 0) {
+            frame.info.domain = FEResultDomain::Time;
+            auto eq = name.find("t=");
+            if (eq != std::string::npos) {
+                auto end = name.find(')', eq);
+                if (end != std::string::npos) {
+                    std::string timeStr = name.substr(eq + 2, end - eq - 2);
+                    try { frame.info.value = std::stod(timeStr); } catch (...) {}
+                }
+            }
+        } else {
+            frame.info.domain = FEResultDomain::Static;
+            frame.info.value = 0.0;
+        }
+
+        repo.addFrame(frame);
+    }
+    return true;
 }

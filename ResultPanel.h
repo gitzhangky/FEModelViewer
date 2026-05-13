@@ -14,6 +14,7 @@
 #include <QLabel>
 
 #include "FEResultData.h"
+#include "FEResultRepository.h"
 #include "FEField.h"
 
 struct Theme;
@@ -27,8 +28,11 @@ public:
     /** @brief 应用主题 */
     void applyTheme(const Theme& theme);
 
-    /** @brief 设置结果数据（来自 OP2 解析） */
+    /** @brief 设置结果数据（来自 OP2 解析，兼容旧接口） */
     void setResults(const FEResultData& results);
+
+    /** @brief 设置结果仓库（帧/类型/分量三层选择） */
+    void setRepository(const FEResultRepository& repo);
 
     /** @brief 清空面板 */
     void clearResults();
@@ -41,7 +45,7 @@ signals:
     void clearResult();
 
 private slots:
-    void onSubcaseChanged(int index);
+    void onFrameChanged(int index);
     void onTypeChanged(int index);
     void onComponentChanged(int index);
     void onApplyClicked();
@@ -49,10 +53,11 @@ private slots:
 
 private:
     void setupUI();
+    void populateFrameCombo();
     void refreshTypes();
     void refreshComponents();
 
-    FEResultData results_;
+    FEResultRepository repo_;
 
     QComboBox* subcaseCombo_   = nullptr;
     QComboBox* typeCombo_      = nullptr;
