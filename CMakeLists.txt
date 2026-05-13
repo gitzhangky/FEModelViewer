@@ -251,4 +251,13 @@ if(BUILD_TESTING)
             "-DSOURCE_FILE=${CMAKE_CURRENT_SOURCE_DIR}/main.cpp"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check_parse_mode_layering.cmake"
     )
+
+    add_test(NAME installed_simple_viewer_example
+        COMMAND ${CMAKE_COMMAND}
+            "-DPROJECT_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+            "-DPROJECT_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+            "-DINSTALL_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/example-install"
+            "-DEXAMPLE_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}/examples/simple_viewer"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/build_installed_example.cmake"
+    )
 endif()

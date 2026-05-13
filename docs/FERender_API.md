@@ -71,6 +71,10 @@ target_link_libraries(MyApp PRIVATE FERender::FERender)
 - OpenGL::GL
 - GLM 头文件路径
 
+仓库内的 `examples/simple_viewer` 是完整的外部调用示例：它通过
+`find_package(FERender REQUIRED CONFIG)` 链接安装后的 `FERender::FERender`，
+并用一个简单 Qt 界面演示 `FEModel → FEMeshConverter → GLWidget` 的调用链。
+
 ### 1.2 最小示例
 
 ```cpp
