@@ -12,13 +12,14 @@
  */
 
 #include <QApplication>
+#include <QCoreApplication>
 #include <QSurfaceFormat>
 #include <QFileInfo>
 #include <QDebug>
 #include <cstring>
 
 #include "MainWindow.h"
-#include "FEModelPanel.h"
+#include "FEParser.h"
 #include "FEResultData.h"
 
 /**
@@ -34,25 +35,16 @@ static int runParseMode(const QString& filePath) {
 
     qDebug("file: %s (%lld bytes)", qPrintable(fi.fileName()), fi.size());
 
-    // 创建 FEModelPanel（不会显示，仅借用解析方法）
-    FEModelPanel panel(nullptr);
-
     // 解析几何
     FEModel model;
-    bool geomOk = false;
-    // parseNastranOp2 是 private 方法，无法直接调用
-    // 使用 loadModelFromPath 会触发信号，但我们不连接
-    // 直接通过 loadModelFromPath 加载
-    panel.loadModelFromPath(filePath);
-    const FEModel& m = panel.currentModel();
-    geomOk = !m.nodes.empty();
+    bool geomOk = FEParser::parseNastranOp2(filePath, model);
 
     qDebug("nodes=%d elements=%d parts=%d",
-           (int)m.nodes.size(), (int)m.elements.size(), (int)m.parts.size());
+           (int)model.nodes.size(), (int)model.elements.size(), (int)model.parts.size());
 
     // 解析结果
     FEResultData results;
-    bool resultOk = panel.parseNastranOp2Results(filePath, results);
+    bool resultOk = FEParser::parseNastranOp2Results(filePath, results);
 
     if (resultOk) {
         qDebug("%d subcases loaded", (int)results.subcases.size());
@@ -71,7 +63,7 @@ static int runParseMode(const QString& filePath) {
     // 输出汇总行（供批量脚本解析）
     fprintf(stdout, "RESULT: geom=%s nodes=%d elems=%d parts=%d results=%s subcases=%d\n",
             geomOk ? "OK" : "FAIL",
-            (int)m.nodes.size(), (int)m.elements.size(), (int)m.parts.size(),
+            (int)model.nodes.size(), (int)model.elements.size(), (int)model.parts.size(),
             resultOk ? "OK" : "FAIL",
             (int)results.subcases.size());
 
@@ -91,8 +83,8 @@ int main(int argc, char* argv[]) {
     }
 
     if (parseMode) {
-        // CLI 模式：不需要 OpenGL，但 QApplication 仍需创建（FEModelPanel 是 QWidget）
-        QApplication app(argc, argv);
+        // CLI 模式：只使用解析层，不初始化 GUI 平台插件
+        QCoreApplication app(argc, argv);
         return runParseMode(parseFile);
     }
 

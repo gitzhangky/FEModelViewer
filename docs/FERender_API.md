@@ -1237,6 +1237,7 @@ viewer.fitToModel(model.computeCenter(), model.computeSize());
 | `FERenderData.h` | `FERenderData` | 渲染数据包（Mesh + 映射表） |
 | `FEMeshConverter.h` | `FEMeshConverter` | 网格转换器 |
 | `Camera.h` | `Camera` | 轨道相机 |
+| `Theme.h` | `Theme` | 主题颜色配置（供 `GLWidget::applyTheme()` 使用） |
 | `GLWidget.h` | `GLWidget` | OpenGL 渲染窗口 |
 | `FEPickResult.h` | `PickMode`, `FEPickResult`, `FESelection` | 拾取与选中 |
 | `ferender_export.h` | `FERENDER_EXPORT` 宏 | DLL 导出宏（自动生成） |

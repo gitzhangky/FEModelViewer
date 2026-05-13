@@ -96,6 +96,7 @@ set(RENDER_HEADERS
     FEResultData.h
     FEPickResult.h
     FEParser.h
+    Theme.h
 )
 
 set(RENDER_SOURCES
@@ -226,3 +227,28 @@ configure_package_config_file(
 install(FILES "${CMAKE_CURRENT_BINARY_DIR}/FERenderConfig.cmake"
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/FERender
 )
+
+# ── 测试 ──
+
+include(CTest)
+
+if(BUILD_TESTING)
+    add_test(NAME ferender_public_headers
+        COMMAND ${CMAKE_COMMAND}
+            "-DINSTALLED_HEADERS=${RENDER_HEADERS}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check_public_headers.cmake"
+    )
+
+    add_test(NAME fe_model_viewer_parse_missing_file_is_headless
+        COMMAND ${CMAKE_COMMAND}
+            "-DVIEWER=$<TARGET_FILE:${PROJECT_NAME}>"
+            "-DMISSING_FILE=${CMAKE_CURRENT_BINARY_DIR}/missing.op2"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/run_parse_missing_file_test.cmake"
+    )
+
+    add_test(NAME cli_parse_mode_layering
+        COMMAND ${CMAKE_COMMAND}
+            "-DSOURCE_FILE=${CMAKE_CURRENT_SOURCE_DIR}/main.cpp"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check_parse_mode_layering.cmake"
+    )
+endif()
