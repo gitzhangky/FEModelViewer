@@ -41,6 +41,7 @@ cmake --build build/examples/simple_viewer -j 4
 2. 调用 `FEMeshConverter::toRenderData(model)` 得到 `FERenderData`。
 3. 把 `FERenderData::mesh` 传给 `GLWidget::setMesh()`。
 4. 把拾取映射表传给 `setTriangleToElementMap()`、`setVertexToNodeMap()`、`setTriangleToPartMap()` 和 `setEdgeToPartMap()`。
-5. 调用 `fitToModel()` 自动适配视角。
+5. 调用 `FEResultMapper::mapScalarToVertices()` 把节点标量场映射为 `GLWidget::setVertexScalars()` 所需数组。
+6. 调用 `fitToModel()` 自动适配视角。
 
-关键代码在 `main.cpp` 的 `loadSampleModel()` 中。
+关键代码在 `main.cpp` 的 `loadSampleModel()` 和 `showSampleContour()` 中。

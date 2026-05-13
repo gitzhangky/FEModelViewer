@@ -14,6 +14,7 @@
 #include "FEModel.h"
 #include "FEMeshConverter.h"
 #include "FERenderData.h"
+#include "FEResultMapper.h"
 #include "GLWidget.h"
 #include "Theme.h"
 
@@ -38,10 +39,12 @@ public:
 
         auto* toolbar = addToolBar("Viewer");
         auto* reloadAction = toolbar->addAction("Reload Sample");
+        auto* contourAction = toolbar->addAction("Show Sample Contour");
         auto* fitAction = toolbar->addAction("Fit");
         auto* themeAction = toolbar->addAction("Toggle Theme");
 
         connect(reloadAction, &QAction::triggered, this, [this] { loadSampleModel(); });
+        connect(contourAction, &QAction::triggered, this, [this] { showSampleContour(); });
         connect(fitAction, &QAction::triggered, this, [this] { fitModel(); });
         connect(themeAction, &QAction::triggered, this, [this] { toggleTheme(); });
 
@@ -98,6 +101,10 @@ private:
         connect(fitBtn, &QPushButton::clicked, this, [this] { fitModel(); });
         layout->addWidget(fitBtn);
 
+        auto* contourBtn = new QPushButton("Show Sample Contour", panel);
+        connect(contourBtn, &QPushButton::clicked, this, [this] { showSampleContour(); });
+        layout->addWidget(contourBtn);
+
         auto* reloadBtn = new QPushButton("Reload Sample", panel);
         connect(reloadBtn, &QPushButton::clicked, this, [this] { loadSampleModel(); });
         layout->addWidget(reloadBtn);
@@ -139,6 +146,8 @@ private:
         viewer_->setTriangleToPartMap(renderData_.triangleToPart);
         viewer_->setEdgeToPartMap(renderData_.edgeToPart);
         viewer_->setObjectColor(glm::vec3(0.55f, 0.75f, 0.73f));
+        viewer_->setUseVertexColor(false);
+        viewer_->setColorBarVisible(false);
         fitModel();
 
         statsLabel_->setText(QString(
@@ -149,6 +158,31 @@ private:
             .arg(renderData_.vertexCount())
             .arg(renderData_.triangleCount()));
         selectionLabel_->setText("Element selected: 0");
+    }
+
+    void showSampleContour() {
+        FEScalarField field;
+        field.name = "Sample Temperature";
+        field.unit = "degC";
+        field.location = FieldLocation::Node;
+        field.values = {
+            {1, 15.0f},
+            {2, 25.0f},
+            {3, 35.0f},
+            {4, 45.0f},
+            {5, 55.0f},
+            {6, 65.0f},
+            {7, 75.0f},
+            {8, 85.0f},
+        };
+
+        FEMappedScalars mapped = FEResultMapper::mapScalarToVertices(field, renderData_, model_);
+        viewer_->setVertexScalars(mapped.scalars, mapped.minValue, mapped.maxValue, 9);
+        viewer_->setColorBarVisible(true);
+        viewer_->setColorBarRange(mapped.minValue, mapped.maxValue);
+        viewer_->setColorBarTitle("Sample Temperature [degC]");
+        viewer_->setColorBarIdLabel("Node ID");
+        viewer_->setColorBarExtremes(mapped.minId, mapped.minValue, mapped.maxId, mapped.maxValue);
     }
 
     void fitModel() {

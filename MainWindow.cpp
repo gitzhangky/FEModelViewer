@@ -31,11 +31,10 @@
 #include "FEPickResult.h"
 #include "FEMeshConverter.h"
 #include "FEResultData.h"
+#include "FEResultMapper.h"
 
 #include <glm/glm.hpp>
 #include <vector>
-#include <algorithm>
-#include <unordered_map>
 #include <QHBoxLayout>
 #include <QVBoxLayout>
 #include <QSplitter>
@@ -214,89 +213,20 @@ MainWindow::MainWindow() {
         int vertCount = static_cast<int>(rd.mesh.vertices.size() / 6);
         if (vertCount == 0) return;
 
-        // 获取色谱范围及极值 ID
-        float minVal = 0, maxVal = 1;
-        int minId = -1, maxId = -1;
-        field.computeRangeWithIds(minVal, maxVal, minId, maxId);
-
         const int numBands = 9;
 
         // 构建 per-vertex 标量值数组（传给 GPU，由片段着色器做量化 + 颜色映射）
-        std::vector<float> scalars(vertCount, 0.0f);
-
-        // ── 建立节点值查找表（处理 NID 不匹配的情况） ──
-        int directHits = 0;
-        for (const auto& [nid, node] : model.nodes) {
-            if (field.values.count(nid) > 0) directHits++;
-        }
-        bool useDirect = (directHits > static_cast<int>(model.nodes.size()) / 2);
-
-        std::unordered_map<int, float> nodeValueMap;
-        if (useDirect) {
-            for (const auto& [nid, val] : field.values)
-                nodeValueMap[nid] = val;
-        } else {
-            std::vector<int> modelNids, resultNids;
-            modelNids.reserve(model.nodes.size());
-            for (const auto& [nid, node] : model.nodes) modelNids.push_back(nid);
-            std::sort(modelNids.begin(), modelNids.end());
-            resultNids.reserve(field.values.size());
-            for (const auto& [nid, val] : field.values) resultNids.push_back(nid);
-            std::sort(resultNids.begin(), resultNids.end());
-            int mc = std::min(static_cast<int>(modelNids.size()), static_cast<int>(resultNids.size()));
-            for (int k = 0; k < mc; ++k) {
-                auto it = field.values.find(resultNids[k]);
-                if (it != field.values.end())
-                    nodeValueMap[modelNids[k]] = it->second;
-            }
-            // NID 重映射时，极值 ID 也需要映射为模型节点 ID（否则搜索找不到）
-            auto remapId = [&](int resultId) -> int {
-                auto it = std::lower_bound(resultNids.begin(), resultNids.end(), resultId);
-                if (it != resultNids.end() && *it == resultId) {
-                    int idx = static_cast<int>(std::distance(resultNids.begin(), it));
-                    if (idx < static_cast<int>(modelNids.size()))
-                        return modelNids[idx];
-                }
-                return resultId;
-            };
-            minId = remapId(minId);
-            maxId = remapId(maxId);
-        }
-
-        if (field.location == FieldLocation::Element) {
-            // 单元场：遍历三角形，把每个三角形对应的单元值写入其三个顶点
-            int triCount = static_cast<int>(rd.triangleToElement.size());
-            for (int t = 0; t < triCount; ++t) {
-                int elemId = rd.triangleToElement[t];
-                auto it = field.values.find(elemId);
-                if (it == field.values.end()) continue;
-                for (int k = 0; k < 3; ++k) {
-                    unsigned int vi = rd.mesh.indices[t * 3 + k];
-                    if (static_cast<int>(vi) < vertCount) {
-                        scalars[vi] = it->second;
-                    }
-                }
-            }
-        } else {
-            // 节点场：per-vertex 标量值
-            for (int i = 0; i < vertCount; ++i) {
-                int nodeId = (i < static_cast<int>(rd.vertexToNode.size())) ? rd.vertexToNode[i] : -1;
-                if (nodeId < 0) continue;
-                auto it = nodeValueMap.find(nodeId);
-                if (it == nodeValueMap.end()) continue;
-                scalars[i] = it->second;
-            }
-        }
+        FEMappedScalars mapped = FEResultMapper::mapScalarToVertices(field, rd, model);
 
         // 上传标量值到 GPU，由片段着色器做离散量化 + Jet colormap 映射
-        glWidget_->setVertexScalars(scalars, minVal, maxVal, numBands);
+        glWidget_->setVertexScalars(mapped.scalars, mapped.minValue, mapped.maxValue, numBands);
 
         // 更新色标
         glWidget_->setColorBarVisible(true);
-        glWidget_->setColorBarRange(minVal, maxVal);
+        glWidget_->setColorBarRange(mapped.minValue, mapped.maxValue);
         glWidget_->setColorBarTitle(title);
-        glWidget_->setColorBarIdLabel(field.location == FieldLocation::Element ? "Ele ID" : "Node ID");
-        glWidget_->setColorBarExtremes(minId, minVal, maxId, maxVal);
+        glWidget_->setColorBarIdLabel(mapped.location == FieldLocation::Element ? "Ele ID" : "Node ID");
+        glWidget_->setColorBarExtremes(mapped.minId, mapped.minValue, mapped.maxId, mapped.maxValue);
     });
 
     // 清除云图 → 恢复部件颜色

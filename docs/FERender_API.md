@@ -83,6 +83,7 @@ target_link_libraries(MyApp PRIVATE FERender::FERender)
 #include "GLWidget.h"
 #include "FEModel.h"
 #include "FEMeshConverter.h"
+#include "FEResultMapper.h"
 
 int main(int argc, char* argv[]) {
     // 配置 OpenGL
@@ -1103,12 +1104,9 @@ for (auto& [id, node] : model.nodes) {
     stress.values[id] = /* 从求解器获取 */ ;
 }
 
-// 获取值域及极值 ID
-float sMin, sMax;
-int sMinId, sMaxId;
-stress.computeRangeWithIds(sMin, sMax, sMinId, sMaxId);
-
 // 方式 A：CPU 颜色映射（通过 FEMeshConverter）
+float sMin, sMax;
+stress.computeRange(sMin, sMax);
 ColorMap cmap;
 cmap.type = ColorMapType::Jet;
 cmap.discreteLevels = 12;
@@ -1121,21 +1119,16 @@ FERenderData rd = FEMeshConverter::toRenderData(model);
 viewer.setMesh(rd.mesh);
 viewer.setVertexToNodeMap(rd.vertexToNode);
 
-// 构建 per-vertex 标量数组（按渲染顶点顺序）
-std::vector<float> scalars(rd.vertexCount());
-for (int i = 0; i < rd.vertexCount(); ++i) {
-    int nodeId = rd.vertexToNode[i];
-    auto it = stress.values.find(nodeId);
-    scalars[i] = (it != stress.values.end()) ? it->second : 0.0f;
-}
-viewer.setVertexScalars(scalars, sMin, sMax, 12);
+// 使用 FERender 引擎 API 构建 per-vertex 标量数组
+FEMappedScalars mapped = FEResultMapper::mapScalarToVertices(stress, rd, model);
+viewer.setVertexScalars(mapped.scalars, mapped.minValue, mapped.maxValue, 12);
 
 // 显示色标
 viewer.setColorBarVisible(true);
-viewer.setColorBarRange(sMin, sMax);
+viewer.setColorBarRange(mapped.minValue, mapped.maxValue);
 viewer.setColorBarTitle("Von Mises Stress [MPa]");
-viewer.setColorBarIdLabel("Node ID");                     // 设置 ID 标签类型
-viewer.setColorBarExtremes(sMinId, sMin, sMaxId, sMax);  // 色标下方显示极值 ID
+viewer.setColorBarIdLabel("Node ID");
+viewer.setColorBarExtremes(mapped.minId, mapped.minValue, mapped.maxId, mapped.maxValue);
 ```
 
 ### 6.3 部件可见性控制
@@ -1236,6 +1229,7 @@ viewer.fitToModel(model.computeCenter(), model.computeSize());
 | `FEModel.h` | `FEModel` | 模型顶层容器 |
 | `FEField.h` | `FEScalarField`, `FEVectorField`, `ColorMap`, `ColorMapType` | 结果场与色谱 |
 | `FEResultData.h` | `FEResultData`, `FESubcase`, `FEResultType`, `FEResultComponent` | 多工况结果层级 |
+| `FEResultMapper.h` | `FEResultMapper`, `FEMappedScalars` | 结果场到渲染顶点标量数组的映射 |
 | `FEParser.h` | `FEParser` | 有限元文件解析器（INP/BDF/OP2/UNV） |
 | `Geometry.h` | `Mesh`, `Geometry::*` | 网格结构与几何体生成 |
 | `FERenderData.h` | `FERenderData` | 渲染数据包（Mesh + 映射表） |

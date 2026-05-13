@@ -96,6 +96,7 @@ set(RENDER_HEADERS
     FEResultData.h
     FEPickResult.h
     FEParser.h
+    FEResultMapper.h
     Theme.h
 )
 
@@ -111,6 +112,7 @@ set(RENDER_SOURCES
     FEParser_op2.cpp
     FEParser_op2results.cpp
     FEParser_unv.cpp
+    FEResultMapper.cpp
 )
 
 # Shader 资源文件
@@ -233,6 +235,14 @@ install(FILES "${CMAKE_CURRENT_BINARY_DIR}/FERenderConfig.cmake"
 include(CTest)
 
 if(BUILD_TESTING)
+    add_executable(test_result_mapper
+        tests/test_result_mapper.cpp
+    )
+    target_link_libraries(test_result_mapper PRIVATE FERender)
+    add_test(NAME result_mapper
+        COMMAND test_result_mapper
+    )
+
     add_test(NAME ferender_public_headers
         COMMAND ${CMAKE_COMMAND}
             "-DINSTALLED_HEADERS=${RENDER_HEADERS}"
