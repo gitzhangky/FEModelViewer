@@ -729,8 +729,10 @@ void GLWidget::paintGL() {
     // ── 绘制实体面 ──
     vao_.bind();
     int count = activeIndexCount_;
+    // 等值面激活时跳过实体面，只保留线框，让等值面在体内可见。
+    const bool isoActive = isoIndexCount_ > 0;
 
-    if (count > 0) {
+    if (count > 0 && !isoActive) {
         shader_->setUniformValue("uColor", QVector3D(color_.x, color_.y, color_.z));
         shader_->setUniformValue("uWireframe", false);
         shader_->setUniformValue("uUseVertexColor", useVertexColor_ || !partColors_.empty());
@@ -980,18 +982,15 @@ void GLWidget::paintGL() {
         shader_->setUniformValue("uUseVertexColor", false);
         shader_->setUniformValue("uColor", QVector3D(0.2f, 0.8f, 0.4f));
         shader_->setUniformValue("uContourMode", false);
-        shader_->setUniformValue("uSurfaceAlpha", 0.6f);
+        shader_->setUniformValue("uSurfaceAlpha", 0.75f);
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-        shader_->setUniformValue("uWireAlpha", 0.6f);
-        // 等值面位于模型内部，需关闭深度测试才能透过外壳看到。
-        glDisable(GL_DEPTH_TEST);
-        glDisable(GL_CULL_FACE);
+        glDisable(GL_CULL_FACE);  // 双面可见
+        shader_->setUniformValue("uWireAlpha", 0.75f);
         isoVao_.bind();
         glDrawElements(GL_TRIANGLES, isoIndexCount_, GL_UNSIGNED_INT, nullptr);
         isoVao_.release();
         glEnable(GL_CULL_FACE);
-        glEnable(GL_DEPTH_TEST);
         glDisable(GL_BLEND);
         shader_->setUniformValue("uSurfaceAlpha", 1.0f);
     }
