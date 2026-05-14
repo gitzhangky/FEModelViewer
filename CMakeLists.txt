@@ -298,6 +298,17 @@ if(BUILD_TESTING)
         ENVIRONMENT "FERENDER_TEST_DATA_DIR=${CMAKE_CURRENT_SOURCE_DIR}/examples/data"
     )
 
+    add_executable(test_threshold_row_data
+        tests/test_threshold_row_data.cpp
+    )
+    target_link_libraries(test_threshold_row_data PRIVATE FERender)
+    add_test(NAME threshold_row_data
+        COMMAND test_threshold_row_data
+    )
+    set_tests_properties(threshold_row_data PROPERTIES
+        ENVIRONMENT "FERENDER_TEST_DATA_DIR=${CMAKE_CURRENT_SOURCE_DIR}/examples/data"
+    )
+
     qt5_wrap_cpp(TEST_RESULT_PANEL_MOC_SRCS ResultPanel.h)
     add_executable(test_result_panel
         tests/test_result_panel.cpp
