@@ -62,6 +62,7 @@ private:
     void applySlicePlane(const glm::vec3& origin, const glm::vec3& normal);
     void applyIsoSurface(float isoValue);
     void clearFilters();
+    void updateFilterPlaneBounds();
     const FERenderData& activeRenderData() const;
     const FEModel& activeModel() const;
 

@@ -105,6 +105,15 @@ public:
     /** @brief 清除等值面网格 */
     void clearIsoSurface();
 
+    /** @brief 设置裁剪/切片平面预览（半透明平面） */
+    void setClipPlanePreview(const glm::vec3& bbMin,
+                             const glm::vec3& bbMax,
+                             const glm::vec3& origin,
+                             const glm::vec3& normal);
+
+    /** @brief 清除裁剪/切片平面预览 */
+    void clearClipPlanePreview();
+
     /** @brief 上传 per-vertex 标量值到 GPU，由片段着色器做量化 + 颜色映射 */
     void setVertexScalars(const std::vector<float>& scalars, float minVal, float maxVal, int numBands);
 
@@ -330,6 +339,18 @@ private:
     QOpenGLBuffer* isoIbo_ = nullptr;
     int isoIndexCount_ = 0;
     bool isoNeedsUpload_ = false;
+
+    // ── 裁剪/切片平面预览 ──
+    Mesh clipPreviewMesh_;
+    QOpenGLVertexArrayObject clipPreviewVao_;
+    QOpenGLBuffer clipPreviewVbo_{QOpenGLBuffer::VertexBuffer};
+    QOpenGLBuffer* clipPreviewIbo_ = nullptr;
+    QOpenGLVertexArrayObject clipPreviewEdgeVao_;
+    QOpenGLBuffer clipPreviewEdgeVbo_{QOpenGLBuffer::VertexBuffer};
+    int clipPreviewIndexCount_ = 0;
+    int clipPreviewEdgeVertCount_ = 0;
+    bool clipPreviewVisible_ = false;
+    bool clipPreviewNeedsUpload_ = false;
 
     // ── 坐标轴指示器 ──
     QOpenGLShaderProgram* axesShader_ = nullptr;

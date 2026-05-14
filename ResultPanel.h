@@ -53,6 +53,9 @@ public:
     /** @brief 当前结果帧数 */
     int frameCount() const;
 
+    /** @brief 设置裁剪/切片平面的可用模型范围 */
+    void setPlaneBounds(const glm::vec3& bbMin, const glm::vec3& bbMax);
+
 public slots:
     /** @brief 跳到指定帧并应用云图（动画控制器调用） */
     void applyFrame(int frameIndex);
@@ -100,6 +103,12 @@ signals:
     /** @brief 清除所有过滤 */
     void filterCleared();
 
+    /** @brief 裁剪/切片平面预览参数变化 */
+    void planePreviewChanged(const glm::vec3& origin, const glm::vec3& normal);
+
+    /** @brief 隐藏裁剪/切片平面预览 */
+    void planePreviewCleared();
+
 private slots:
     void onFrameChanged(int index);
     void onTypeChanged(int index);
@@ -116,6 +125,12 @@ private:
     void populateFrameCombo();
     void refreshTypes();
     void refreshComponents();
+    void updatePlaneControlsForAxis(bool resetToCenter);
+    void updatePlaneSliderFromOffset();
+    void updatePlaneOffsetFromSlider(int sliderValue);
+    void emitPlanePreviewIfActive();
+    float planeAxisMin(int axis) const;
+    float planeAxisMax(int axis) const;
 
     FEResultRepository repo_;
 
@@ -153,6 +168,8 @@ private:
     // 裁剪/切片平面
     QComboBox* planeAxisCombo_        = nullptr;
     QDoubleSpinBox* planeOffsetSpin_  = nullptr;
+    QSlider* planeOffsetSlider_       = nullptr;
+    QLabel* planeRangeLabel_          = nullptr;
     QCheckBox* clipSideCheck_         = nullptr;
 
     // 等值面
@@ -166,4 +183,9 @@ private:
     QWidget* clipWidget_    = nullptr;
     QWidget* sliceWidget_   = nullptr;
     QWidget* isoWidget_     = nullptr;
+
+    glm::vec3 planeBbMin_{0.0f};
+    glm::vec3 planeBbMax_{0.0f};
+    bool planeBoundsValid_ = false;
+    bool updatingPlaneControls_ = false;
 };

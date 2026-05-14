@@ -114,6 +114,7 @@ MainWindow::MainWindow() {
         if (size > 0) {
             glWidget_->fitToModel(center, size);
         }
+        updateFilterPlaneBounds();
     });
 
     connect(glWidget_, &GLWidget::selectionChanged,
@@ -264,6 +265,19 @@ MainWindow::MainWindow() {
             this, &MainWindow::applyIsoSurface);
     connect(resultPanel_, &ResultPanel::filterCleared,
             this, &MainWindow::clearFilters);
+    connect(resultPanel_, &ResultPanel::planePreviewChanged,
+            this, [this](const glm::vec3& origin, const glm::vec3& normal) {
+        const FEModel& model = activeModel();
+        if (model.nodes.empty()) {
+            glWidget_->clearClipPlanePreview();
+            return;
+        }
+        glm::vec3 bbMin, bbMax;
+        model.computeBoundingBox(bbMin, bbMax);
+        glWidget_->setClipPlanePreview(bbMin, bbMax, origin, normal);
+    });
+    connect(resultPanel_, &ResultPanel::planePreviewCleared,
+            glWidget_, &GLWidget::clearClipPlanePreview);
 
     // ── 初始主题（默认深色）──
     currentTheme_ = Theme::dark();
@@ -710,6 +724,20 @@ const FEModel& MainWindow::activeModel() const
     return deformActive_ ? deformedModel_ : feModelPanel_->currentModel();
 }
 
+void MainWindow::updateFilterPlaneBounds()
+{
+    const FEModel& model = activeModel();
+    if (model.nodes.empty()) {
+        resultPanel_->setPlaneBounds(glm::vec3(0.0f), glm::vec3(0.0f));
+        glWidget_->clearClipPlanePreview();
+        return;
+    }
+
+    glm::vec3 bbMin, bbMax;
+    model.computeBoundingBox(bbMin, bbMax);
+    resultPanel_->setPlaneBounds(bbMin, bbMax);
+}
+
 void MainWindow::applyDeformation(float scale, bool overlayUndeformed)
 {
     const FEModel& model = feModelPanel_->currentModel();
@@ -744,6 +772,7 @@ void MainWindow::applyDeformation(float scale, bool overlayUndeformed)
     float size = deformedModel_.computeSize();
     if (size > 0.0f)
         glWidget_->fitToModel(deformedModel_.computeCenter(), size);
+    updateFilterPlaneBounds();
 }
 
 void MainWindow::clearDeformation()
@@ -762,6 +791,7 @@ void MainWindow::clearDeformation()
     float size = model.computeSize();
     if (size > 0.0f)
         glWidget_->fitToModel(model.computeCenter(), size);
+    updateFilterPlaneBounds();
 }
 
 void MainWindow::applyContour(const FEScalarField& field, const QString& title)
@@ -894,6 +924,7 @@ void MainWindow::clearFilters()
     filterActive_ = false;
     glWidget_->clearSliceLines();
     glWidget_->clearIsoSurface();
+    glWidget_->clearClipPlanePreview();
 
     const FERenderData& rd = activeRenderData();
     applyFilteredRD(glWidget_, rd, {});

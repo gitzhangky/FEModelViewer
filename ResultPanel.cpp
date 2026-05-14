@@ -11,6 +11,10 @@
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QGroupBox>
+#include <QSignalBlocker>
+
+#include <algorithm>
+#include <cmath>
 
 ResultPanel::ResultPanel(QWidget* parent)
     : QWidget(parent)
@@ -154,7 +158,8 @@ void ResultPanel::setupUI()
         auto* typeRow = new QHBoxLayout;
         typeRow->addWidget(new QLabel("类型:"));
         filterTypeCombo_ = new QComboBox;
-        filterTypeCombo_->addItems({"阈值", "裁剪平面", "切片平面", "等值面"});
+        filterTypeCombo_->setObjectName("filterTypeCombo");
+        filterTypeCombo_->addItems({"阈值", "裁剪平面（隐藏一侧）", "切片线（不隐藏）", "等值面"});
         typeRow->addWidget(filterTypeCombo_);
         filterLayout->addLayout(typeRow);
     }
@@ -190,16 +195,31 @@ void ResultPanel::setupUI()
         cl->setContentsMargins(0, 0, 0, 0);
         cl->setSpacing(4);
         auto* r1 = new QHBoxLayout;
-        r1->addWidget(new QLabel("轴:"));
+        r1->addWidget(new QLabel("平面:"));
         planeAxisCombo_ = new QComboBox;
-        planeAxisCombo_->addItems({"X", "Y", "Z"});
+        planeAxisCombo_->setObjectName("planeAxisCombo");
+        planeAxisCombo_->addItems({"X 平面", "Y 平面", "Z 平面"});
+        planeAxisCombo_->setMinimumWidth(88);
         r1->addWidget(planeAxisCombo_);
-        r1->addWidget(new QLabel("偏移:"));
+        r1->addWidget(new QLabel("位置:"));
         planeOffsetSpin_ = new QDoubleSpinBox;
+        planeOffsetSpin_->setObjectName("planeOffsetSpin");
         planeOffsetSpin_->setRange(-1e6, 1e6);
         planeOffsetSpin_->setDecimals(3);
         r1->addWidget(planeOffsetSpin_);
         cl->addLayout(r1);
+
+        planeOffsetSlider_ = new QSlider(Qt::Horizontal);
+        planeOffsetSlider_->setObjectName("planeOffsetSlider");
+        planeOffsetSlider_->setRange(0, 1000);
+        planeOffsetSlider_->setSingleStep(10);
+        planeOffsetSlider_->setPageStep(50);
+        cl->addWidget(planeOffsetSlider_);
+
+        planeRangeLabel_ = new QLabel("范围: -");
+        planeRangeLabel_->setObjectName("planeRangeLabel");
+        cl->addWidget(planeRangeLabel_);
+
         clipSideCheck_ = new QCheckBox("保留正方向");
         clipSideCheck_->setChecked(true);
         cl->addWidget(clipSideCheck_);
@@ -212,7 +232,7 @@ void ResultPanel::setupUI()
     {
         auto* sl = new QVBoxLayout(sliceWidget_);
         sl->setContentsMargins(0, 0, 0, 0);
-        sl->addWidget(new QLabel("(使用裁剪平面的轴和偏移参数)"));
+        sl->addWidget(new QLabel("只显示交线，不隐藏单元"));
     }
     filterLayout->addWidget(sliceWidget_);
     sliceWidget_->setVisible(false);
@@ -274,9 +294,27 @@ void ResultPanel::setupUI()
         clipSideCheck_->setVisible(idx == 1);
         sliceWidget_->setVisible(idx == 2);
         isoWidget_->setVisible(idx == 3);
+        if (usesPlane)
+            emitPlanePreviewIfActive();
+        else
+            emit planePreviewCleared();
+    });
+    connect(planeAxisCombo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int) {
+        updatePlaneControlsForAxis(true);
+        emitPlanePreviewIfActive();
+    });
+    connect(planeOffsetSpin_, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, [this](double) {
+        updatePlaneSliderFromOffset();
+        emitPlanePreviewIfActive();
+    });
+    connect(planeOffsetSlider_, &QSlider::valueChanged, this, [this](int value) {
+        updatePlaneOffsetFromSlider(value);
+        emitPlanePreviewIfActive();
     });
     connect(filterApplyBtn_, &QPushButton::clicked, this, &ResultPanel::onFilterApplyClicked);
     connect(filterClearBtn_, &QPushButton::clicked, this, &ResultPanel::onFilterClearClicked);
+
+    updatePlaneControlsForAxis(true);
 }
 
 void ResultPanel::setResults(const FEResultData& results)
@@ -483,6 +521,111 @@ bool ResultPanel::currentScalarField(FEScalarField& field, QString& title) const
 int ResultPanel::frameCount() const
 {
     return repo_.frameCount();
+}
+
+void ResultPanel::setPlaneBounds(const glm::vec3& bbMin, const glm::vec3& bbMax)
+{
+    planeBbMin_ = bbMin;
+    planeBbMax_ = bbMax;
+    planeBoundsValid_ = true;
+    updatePlaneControlsForAxis(true);
+    emitPlanePreviewIfActive();
+}
+
+float ResultPanel::planeAxisMin(int axis) const
+{
+    if (!planeBoundsValid_ || axis < 0 || axis > 2) return -1.0f;
+    return planeBbMin_[axis];
+}
+
+float ResultPanel::planeAxisMax(int axis) const
+{
+    if (!planeBoundsValid_ || axis < 0 || axis > 2) return 1.0f;
+    return planeBbMax_[axis];
+}
+
+void ResultPanel::updatePlaneControlsForAxis(bool resetToCenter)
+{
+    if (!planeAxisCombo_ || !planeOffsetSpin_ || !planeOffsetSlider_ || !planeRangeLabel_)
+        return;
+
+    const int axis = planeAxisCombo_->currentIndex();
+    float mn = planeAxisMin(axis);
+    float mx = planeAxisMax(axis);
+    if (mx < mn) std::swap(mx, mn);
+    if (std::abs(mx - mn) < 1.0e-6f) {
+        mn -= 1.0f;
+        mx += 1.0f;
+    }
+
+    updatingPlaneControls_ = true;
+    {
+        QSignalBlocker spinBlocker(planeOffsetSpin_);
+        QSignalBlocker sliderBlocker(planeOffsetSlider_);
+        planeOffsetSpin_->setRange(static_cast<double>(mn), static_cast<double>(mx));
+        planeOffsetSpin_->setSingleStep(static_cast<double>((mx - mn) / 100.0f));
+
+        if (resetToCenter) {
+            planeOffsetSpin_->setValue(static_cast<double>((mn + mx) * 0.5f));
+            planeOffsetSlider_->setValue(500);
+        } else {
+            double clamped = std::max(static_cast<double>(mn),
+                                      std::min(static_cast<double>(mx), planeOffsetSpin_->value()));
+            planeOffsetSpin_->setValue(clamped);
+            const double ratio = (clamped - mn) / (mx - mn);
+            planeOffsetSlider_->setValue(static_cast<int>(std::round(ratio * 1000.0)));
+        }
+    }
+    planeRangeLabel_->setText(QString("范围: %1 ~ %2")
+        .arg(static_cast<double>(mn), 0, 'g', 6)
+        .arg(static_cast<double>(mx), 0, 'g', 6));
+    updatingPlaneControls_ = false;
+}
+
+void ResultPanel::updatePlaneSliderFromOffset()
+{
+    if (updatingPlaneControls_ || !planeOffsetSpin_ || !planeOffsetSlider_) return;
+
+    const int axis = planeAxisCombo_->currentIndex();
+    const float mn = planeAxisMin(axis);
+    const float mx = planeAxisMax(axis);
+    const float span = mx - mn;
+    if (std::abs(span) < 1.0e-6f) return;
+
+    const double ratio = (planeOffsetSpin_->value() - mn) / span;
+    const int sliderValue = static_cast<int>(std::round(std::max(0.0, std::min(1.0, ratio)) * 1000.0));
+    QSignalBlocker blocker(planeOffsetSlider_);
+    planeOffsetSlider_->setValue(sliderValue);
+}
+
+void ResultPanel::updatePlaneOffsetFromSlider(int sliderValue)
+{
+    if (updatingPlaneControls_ || !planeOffsetSpin_) return;
+
+    const int axis = planeAxisCombo_->currentIndex();
+    const float mn = planeAxisMin(axis);
+    const float mx = planeAxisMax(axis);
+    const double ratio = std::max(0, std::min(1000, sliderValue)) / 1000.0;
+    const double value = static_cast<double>(mn) + (static_cast<double>(mx) - mn) * ratio;
+
+    QSignalBlocker blocker(planeOffsetSpin_);
+    planeOffsetSpin_->setValue(value);
+}
+
+void ResultPanel::emitPlanePreviewIfActive()
+{
+    if (!filterTypeCombo_ || !planeAxisCombo_ || !planeOffsetSpin_) return;
+
+    const int filterType = filterTypeCombo_->currentIndex();
+    if (filterType != 1 && filterType != 2) return;
+
+    glm::vec3 normal(0.0f);
+    const int axis = planeAxisCombo_->currentIndex();
+    if (axis < 0 || axis > 2) return;
+    normal[axis] = 1.0f;
+
+    const float offset = static_cast<float>(planeOffsetSpin_->value());
+    emit planePreviewChanged(normal * offset, normal);
 }
 
 void ResultPanel::selectFrame(int frameIndex)

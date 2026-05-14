@@ -287,6 +287,18 @@ if(BUILD_TESTING)
         COMMAND test_post_filter
     )
 
+    qt5_wrap_cpp(TEST_RESULT_PANEL_MOC_SRCS ResultPanel.h)
+    add_executable(test_result_panel
+        tests/test_result_panel.cpp
+        ResultPanel.cpp
+        ${TEST_RESULT_PANEL_MOC_SRCS}
+    )
+    set_target_properties(test_result_panel PROPERTIES AUTOMOC OFF)
+    target_link_libraries(test_result_panel PRIVATE FERender Qt5::Core Qt5::Gui Qt5::Widgets)
+    add_test(NAME result_panel
+        COMMAND test_result_panel
+    )
+
     add_test(NAME ferender_public_headers
         COMMAND ${CMAKE_COMMAND}
             "-DINSTALLED_HEADERS=${RENDER_HEADERS}"

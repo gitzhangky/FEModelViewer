@@ -7,6 +7,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <cmath>
+#include <algorithm>
 
 static constexpr float kPlaneEps = 1e-7f;
 
@@ -31,6 +32,150 @@ static void appendSliceLine(FESliceResult& result, const glm::vec3& a, const glm
     result.lineVertices.push_back(b.y);
     result.lineVertices.push_back(b.z);
     result.lineCount++;
+}
+
+struct ClipVertex {
+    float data[6] = {};
+    int nodeId = -1;
+};
+
+static glm::vec3 clipVertexPos(const ClipVertex& v) {
+    return glm::vec3(v.data[0], v.data[1], v.data[2]);
+}
+
+static bool sameClipVertexPosition(const ClipVertex& a, const ClipVertex& b) {
+    return samePoint(clipVertexPos(a), clipVertexPos(b));
+}
+
+static bool isDegenerateTriangle(const ClipVertex& a, const ClipVertex& b, const ClipVertex& c) {
+    glm::vec3 ab = clipVertexPos(b) - clipVertexPos(a);
+    glm::vec3 ac = clipVertexPos(c) - clipVertexPos(a);
+    return glm::length(glm::cross(ab, ac)) <= 1.0e-8f;
+}
+
+static ClipVertex interpolateClipVertex(const ClipVertex& a, const ClipVertex& b, float t) {
+    ClipVertex out;
+    for (int i = 0; i < 6; ++i)
+        out.data[i] = a.data[i] + (b.data[i] - a.data[i]) * t;
+
+    glm::vec3 n(out.data[3], out.data[4], out.data[5]);
+    float len = glm::length(n);
+    if (len > 1.0e-8f) {
+        n /= len;
+        out.data[3] = n.x;
+        out.data[4] = n.y;
+        out.data[5] = n.z;
+    }
+    out.nodeId = -1;
+    return out;
+}
+
+static float signedDistanceForClip(const ClipVertex& v, const FEPlane& plane) {
+    return glm::dot(clipVertexPos(v) - plane.origin, plane.normal);
+}
+
+static bool keepDistance(float distance, bool keepPositiveSide) {
+    return keepPositiveSide ? (distance >= -kPlaneEps) : (distance <= kPlaneEps);
+}
+
+static std::vector<ClipVertex> clipPolygonByPlane(const ClipVertex tri[3],
+                                                   const FEPlane& plane,
+                                                   bool keepPositiveSide) {
+    std::vector<ClipVertex> input{tri[0], tri[1], tri[2]};
+    std::vector<ClipVertex> output;
+    output.reserve(4);
+
+    for (int i = 0; i < 3; ++i) {
+        const ClipVertex& current = input[i];
+        const ClipVertex& next = input[(i + 1) % 3];
+        float currentDist = signedDistanceForClip(current, plane);
+        float nextDist = signedDistanceForClip(next, plane);
+        bool currentInside = keepDistance(currentDist, keepPositiveSide);
+        bool nextInside = keepDistance(nextDist, keepPositiveSide);
+
+        if (currentInside && nextInside) {
+            output.push_back(next);
+        } else if (currentInside && !nextInside) {
+            float t = currentDist / (currentDist - nextDist);
+            output.push_back(interpolateClipVertex(current, next, t));
+        } else if (!currentInside && nextInside) {
+            float t = currentDist / (currentDist - nextDist);
+            output.push_back(interpolateClipVertex(current, next, t));
+            output.push_back(next);
+        }
+    }
+
+    std::vector<ClipVertex> compact;
+    compact.reserve(output.size());
+    for (const ClipVertex& v : output) {
+        if (compact.empty() || !sameClipVertexPosition(compact.back(), v))
+            compact.push_back(v);
+    }
+    if (compact.size() > 1 && sameClipVertexPosition(compact.front(), compact.back()))
+        compact.pop_back();
+
+    return compact;
+}
+
+static unsigned int appendClipVertex(FERenderData& result, const ClipVertex& v) {
+    unsigned int newIndex = static_cast<unsigned int>(result.mesh.vertices.size() / 6);
+    for (float value : v.data)
+        result.mesh.vertices.push_back(value);
+    result.vertexToNode.push_back(v.nodeId);
+    return newIndex;
+}
+
+static void rebuildTriangleEdges(FERenderData& result) {
+    result.mesh.edgeVertices.clear();
+    result.mesh.edgeIndices.clear();
+    result.edgeToPart.clear();
+
+    struct EdgeKey {
+        unsigned int a;
+        unsigned int b;
+        bool operator==(const EdgeKey& other) const {
+            return a == other.a && b == other.b;
+        }
+    };
+    struct EdgeHash {
+        size_t operator()(const EdgeKey& edge) const {
+            size_t h = std::hash<unsigned int>{}(edge.a);
+            h ^= std::hash<unsigned int>{}(edge.b) + 0x9e3779b9 + (h << 6) + (h >> 2);
+            return h;
+        }
+    };
+
+    std::unordered_set<EdgeKey, EdgeHash> seen;
+    int triCount = result.triangleCount();
+    for (int ti = 0; ti < triCount; ++ti) {
+        unsigned int tri[3] = {
+            result.mesh.indices[ti * 3],
+            result.mesh.indices[ti * 3 + 1],
+            result.mesh.indices[ti * 3 + 2],
+        };
+        for (int e = 0; e < 3; ++e) {
+            unsigned int va = tri[e];
+            unsigned int vb = tri[(e + 1) % 3];
+            EdgeKey key{std::min(va, vb), std::max(va, vb)};
+            if (seen.find(key) != seen.end()) continue;
+            seen.insert(key);
+
+            unsigned int edgeIndex = static_cast<unsigned int>(result.mesh.edgeVertices.size() / 3);
+            for (unsigned int v : {va, vb}) {
+                int base = static_cast<int>(v) * 6;
+                result.mesh.edgeVertices.push_back(result.mesh.vertices[base]);
+                result.mesh.edgeVertices.push_back(result.mesh.vertices[base + 1]);
+                result.mesh.edgeVertices.push_back(result.mesh.vertices[base + 2]);
+            }
+            result.mesh.edgeIndices.push_back(edgeIndex);
+            result.mesh.edgeIndices.push_back(edgeIndex + 1);
+
+            if (ti < static_cast<int>(result.triangleToPart.size()))
+                result.edgeToPart.push_back(result.triangleToPart[ti]);
+            else
+                result.edgeToPart.push_back(-1);
+        }
+    }
 }
 
 // 过滤边线数据：保留中点在平面正/负侧的边
@@ -224,69 +369,55 @@ FERenderData FEPostFilter::clipByPlane(const FERenderData& input,
     int triCount = input.triangleCount();
     if (triCount == 0) return result;
 
-    std::unordered_map<unsigned int, unsigned int> vertexRemap;
     int vertexStride = 6;
 
     for (int ti = 0; ti < triCount; ++ti) {
-        // 计算三角形质心
-        glm::vec3 centroid{0.0f};
-        unsigned int oldIdx[3];
+        ClipVertex tri[3];
         for (int k = 0; k < 3; ++k) {
-            oldIdx[k] = input.mesh.indices[ti * 3 + k];
-            int base = oldIdx[k] * vertexStride;
-            centroid.x += input.mesh.vertices[base + 0];
-            centroid.y += input.mesh.vertices[base + 1];
-            centroid.z += input.mesh.vertices[base + 2];
+            unsigned int oldIdx = input.mesh.indices[ti * 3 + k];
+            int base = static_cast<int>(oldIdx) * vertexStride;
+            for (int j = 0; j < vertexStride; ++j)
+                tri[k].data[j] = input.mesh.vertices[base + j];
+            if (oldIdx < input.vertexToNode.size())
+                tri[k].nodeId = input.vertexToNode[oldIdx];
         }
-        centroid /= 3.0f;
 
-        float dist = glm::dot(centroid - plane.origin, plane.normal);
-        bool onPositiveSide = (dist >= 0.0f);
-        if (onPositiveSide != keepPositiveSide) continue;
+        std::vector<ClipVertex> clipped = clipPolygonByPlane(tri, plane, keepPositiveSide);
+        if (clipped.size() < 3) continue;
 
-        // 保留此三角形
-        unsigned int newIdx[3];
-        for (int k = 0; k < 3; ++k) {
-            auto vit = vertexRemap.find(oldIdx[k]);
-            if (vit != vertexRemap.end()) {
-                newIdx[k] = vit->second;
-            } else {
-                unsigned int newVi = static_cast<unsigned int>(result.mesh.vertices.size() / vertexStride);
-                int base = oldIdx[k] * vertexStride;
-                for (int j = 0; j < vertexStride; ++j)
-                    result.mesh.vertices.push_back(input.mesh.vertices[base + j]);
+        int elemId = (ti < static_cast<int>(input.triangleToElement.size()))
+            ? input.triangleToElement[ti]
+            : -1;
+        int faceId = (ti < static_cast<int>(input.triangleToFace.size()))
+            ? input.triangleToFace[ti]
+            : 0;
+        int partId = (ti < static_cast<int>(input.triangleToPart.size()))
+            ? input.triangleToPart[ti]
+            : -1;
 
-                if (oldIdx[k] < input.vertexToNode.size())
-                    result.vertexToNode.push_back(input.vertexToNode[oldIdx[k]]);
-                else
-                    result.vertexToNode.push_back(-1);
+        unsigned int root = 0;
+        bool rootCreated = false;
+        for (std::size_t i = 1; i + 1 < clipped.size(); ++i) {
+            if (isDegenerateTriangle(clipped[0], clipped[i], clipped[i + 1]))
+                continue;
 
-                vertexRemap[oldIdx[k]] = newVi;
-                newIdx[k] = newVi;
+            if (!rootCreated) {
+                root = appendClipVertex(result, clipped[0]);
+                rootCreated = true;
             }
+            unsigned int b = appendClipVertex(result, clipped[i]);
+            unsigned int c = appendClipVertex(result, clipped[i + 1]);
+
+            result.mesh.indices.push_back(root);
+            result.mesh.indices.push_back(b);
+            result.mesh.indices.push_back(c);
+            result.triangleToElement.push_back(elemId);
+            result.triangleToFace.push_back(faceId);
+            result.triangleToPart.push_back(partId);
         }
-
-        result.mesh.indices.push_back(newIdx[0]);
-        result.mesh.indices.push_back(newIdx[1]);
-        result.mesh.indices.push_back(newIdx[2]);
-
-        if (ti < static_cast<int>(input.triangleToElement.size()))
-            result.triangleToElement.push_back(input.triangleToElement[ti]);
-        else
-            result.triangleToElement.push_back(-1);
-
-        if (ti < static_cast<int>(input.triangleToFace.size()))
-            result.triangleToFace.push_back(input.triangleToFace[ti]);
-        else
-            result.triangleToFace.push_back(0);
-
-        if (ti < static_cast<int>(input.triangleToPart.size()))
-            result.triangleToPart.push_back(input.triangleToPart[ti]);
-        else
-            result.triangleToPart.push_back(-1);
     }
 
-    filterEdgesByPlane(input, result, plane, keepPositiveSide);
+    rebuildTriangleEdges(result);
     filterElemEdges(input, result);
 
     return result;

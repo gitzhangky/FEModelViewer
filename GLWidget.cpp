@@ -12,6 +12,7 @@
 #include <QFontMetrics>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
+#include <algorithm>
 #include <map>
 
 // ============================================================
@@ -156,6 +157,62 @@ static const glm::vec3 kPartPalette[] = {
 };
 static const int kPartPaletteSize = static_cast<int>(sizeof(kPartPalette) / sizeof(kPartPalette[0]));
 
+static Mesh makeClipPlanePreviewMesh(const glm::vec3& bbMin,
+                                     const glm::vec3& bbMax,
+                                     const glm::vec3& origin,
+                                     const glm::vec3& normal) {
+    Mesh mesh;
+
+    glm::vec3 span = bbMax - bbMin;
+    float maxSpan = std::max({std::abs(span.x), std::abs(span.y), std::abs(span.z), 1.0f});
+    glm::vec3 mn = bbMin - glm::vec3(maxSpan * 0.03f);
+    glm::vec3 mx = bbMax + glm::vec3(maxSpan * 0.03f);
+
+    int axis = 0;
+    float ax = std::abs(normal.x);
+    float ay = std::abs(normal.y);
+    float az = std::abs(normal.z);
+    if (ay > ax && ay >= az) axis = 1;
+    else if (az > ax && az > ay) axis = 2;
+
+    glm::vec3 p0, p1, p2, p3;
+    if (axis == 0) {
+        float x = origin.x;
+        p0 = {x, mn.y, mn.z};
+        p1 = {x, mx.y, mn.z};
+        p2 = {x, mx.y, mx.z};
+        p3 = {x, mn.y, mx.z};
+    } else if (axis == 1) {
+        float y = origin.y;
+        p0 = {mn.x, y, mn.z};
+        p1 = {mx.x, y, mn.z};
+        p2 = {mx.x, y, mx.z};
+        p3 = {mn.x, y, mx.z};
+    } else {
+        float z = origin.z;
+        p0 = {mn.x, mn.y, z};
+        p1 = {mx.x, mn.y, z};
+        p2 = {mx.x, mx.y, z};
+        p3 = {mn.x, mx.y, z};
+    }
+
+    mesh.addFlatQuad(p0, p1, p2, p3);
+    auto pushLine = [&](const glm::vec3& a, const glm::vec3& b) {
+        mesh.edgeVertices.push_back(a.x);
+        mesh.edgeVertices.push_back(a.y);
+        mesh.edgeVertices.push_back(a.z);
+        mesh.edgeVertices.push_back(b.x);
+        mesh.edgeVertices.push_back(b.y);
+        mesh.edgeVertices.push_back(b.z);
+    };
+    pushLine(p0, p1);
+    pushLine(p1, p2);
+    pushLine(p2, p3);
+    pushLine(p3, p0);
+
+    return mesh;
+}
+
 // ============================================================
 // 构造函数 & 公有方法
 // ============================================================
@@ -238,6 +295,29 @@ void GLWidget::clearIsoSurface() {
     isoMesh_.vertices.clear();
     isoMesh_.indices.clear();
     isoIndexCount_ = 0;
+    update();
+}
+
+void GLWidget::setClipPlanePreview(const glm::vec3& bbMin,
+                                   const glm::vec3& bbMax,
+                                   const glm::vec3& origin,
+                                   const glm::vec3& normal) {
+    clipPreviewMesh_ = makeClipPlanePreviewMesh(bbMin, bbMax, origin, normal);
+    clipPreviewIndexCount_ = static_cast<int>(clipPreviewMesh_.indices.size());
+    clipPreviewEdgeVertCount_ = static_cast<int>(clipPreviewMesh_.edgeVertices.size() / 3);
+    clipPreviewVisible_ = clipPreviewIndexCount_ > 0;
+    clipPreviewNeedsUpload_ = true;
+    update();
+}
+
+void GLWidget::clearClipPlanePreview() {
+    clipPreviewMesh_.vertices.clear();
+    clipPreviewMesh_.indices.clear();
+    clipPreviewMesh_.edgeVertices.clear();
+    clipPreviewIndexCount_ = 0;
+    clipPreviewEdgeVertCount_ = 0;
+    clipPreviewVisible_ = false;
+    clipPreviewNeedsUpload_ = false;
     update();
 }
 
@@ -639,6 +719,7 @@ void GLWidget::paintGL() {
     shader_->setUniformValue("uScalarMin", scalarMin_);
     shader_->setUniformValue("uScalarMax", scalarMax_);
     shader_->setUniformValue("uNumBands", numBands_);
+    shader_->setUniformValue("uSurfaceAlpha", 1.0f);
 
     // 绑定 triToPart texture buffer 到纹理单元 0
     glActiveTexture(GL_TEXTURE0);
@@ -799,6 +880,64 @@ void GLWidget::paintGL() {
         glDisable(GL_BLEND);
     }
 
+    // ── 绘制裁剪/切片平面预览 ──
+    if (clipPreviewVisible_ && clipPreviewIndexCount_ > 0) {
+        if (clipPreviewNeedsUpload_) {
+            clipPreviewNeedsUpload_ = false;
+            if (!clipPreviewVao_.isCreated()) clipPreviewVao_.create();
+            if (!clipPreviewVbo_.isCreated()) clipPreviewVbo_.create();
+            if (!clipPreviewIbo_) {
+                clipPreviewIbo_ = new QOpenGLBuffer(QOpenGLBuffer::IndexBuffer);
+                clipPreviewIbo_->create();
+            }
+            if (!clipPreviewEdgeVao_.isCreated()) clipPreviewEdgeVao_.create();
+            if (!clipPreviewEdgeVbo_.isCreated()) clipPreviewEdgeVbo_.create();
+
+            clipPreviewVao_.bind();
+            clipPreviewVbo_.bind();
+            clipPreviewVbo_.allocate(clipPreviewMesh_.vertices.data(),
+                                     static_cast<int>(clipPreviewMesh_.vertices.size() * sizeof(float)));
+            shader_->enableAttributeArray(0);
+            shader_->setAttributeBuffer(0, GL_FLOAT, 0, 3, 6 * sizeof(float));
+            shader_->enableAttributeArray(1);
+            shader_->setAttributeBuffer(1, GL_FLOAT, 3 * sizeof(float), 3, 6 * sizeof(float));
+            clipPreviewIbo_->bind();
+            clipPreviewIbo_->allocate(clipPreviewMesh_.indices.data(),
+                                      static_cast<int>(clipPreviewMesh_.indices.size() * sizeof(unsigned int)));
+            clipPreviewVao_.release();
+
+            clipPreviewEdgeVao_.bind();
+            clipPreviewEdgeVbo_.bind();
+            clipPreviewEdgeVbo_.allocate(clipPreviewMesh_.edgeVertices.data(),
+                                         static_cast<int>(clipPreviewMesh_.edgeVertices.size() * sizeof(float)));
+            shader_->enableAttributeArray(0);
+            shader_->setAttributeBuffer(0, GL_FLOAT, 0, 3, 3 * sizeof(float));
+            glDisableVertexAttribArray(1);
+            clipPreviewEdgeVbo_.release();
+            clipPreviewEdgeVao_.release();
+        }
+
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glEnable(GL_DEPTH_TEST);
+        glDepthMask(GL_FALSE);
+
+        shader_->setUniformValue("uContourMode", false);
+        shader_->setUniformValue("uUseVertexColor", false);
+        shader_->setUniformValue("uColor", QVector3D(0.95f, 0.58f, 0.20f));
+        shader_->setUniformValue("uWireframe", true);
+        shader_->setUniformValue("uWireAlpha", 0.8f);
+        clipPreviewEdgeVao_.bind();
+        glLineWidth(2.0f);
+        glDrawArrays(GL_LINES, 0, clipPreviewEdgeVertCount_);
+        glLineWidth(1.0f);
+        clipPreviewEdgeVao_.release();
+        glDepthMask(GL_TRUE);
+        glEnable(GL_DEPTH_TEST);
+        glDisable(GL_BLEND);
+        shader_->setUniformValue("uSurfaceAlpha", 1.0f);
+    }
+
     // ── 绘制切片交线 ──
     if (sliceVertCount_ > 0) {
         shader_->setUniformValue("uWireframe", true);
@@ -840,6 +979,8 @@ void GLWidget::paintGL() {
         shader_->setUniformValue("uWireframe", false);
         shader_->setUniformValue("uUseVertexColor", false);
         shader_->setUniformValue("uColor", QVector3D(0.2f, 0.8f, 0.4f));
+        shader_->setUniformValue("uContourMode", false);
+        shader_->setUniformValue("uSurfaceAlpha", 0.6f);
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
         shader_->setUniformValue("uWireAlpha", 0.6f);
@@ -847,6 +988,7 @@ void GLWidget::paintGL() {
         glDrawElements(GL_TRIANGLES, isoIndexCount_, GL_UNSIGNED_INT, nullptr);
         isoVao_.release();
         glDisable(GL_BLEND);
+        shader_->setUniformValue("uSurfaceAlpha", 1.0f);
     }
 
     if (selEdgeVertCount_ > 0 && selection_.hasSelection()) {

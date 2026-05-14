@@ -1025,6 +1025,17 @@ explicit GLWidget(QWidget* parent = nullptr);
 
 用于变形显示时叠加原始形状，以便对比观察变形量。叠加网格以半透明灰色线框绘制。
 
+#### 过滤预览与后处理叠加
+
+| 方法 | 说明 |
+|------|------|
+| `void setClipPlanePreview(const glm::vec3& bbMin, const glm::vec3& bbMax, const glm::vec3& origin, const glm::vec3& normal)` | 显示裁剪/切片平面的半透明预览，预览范围由模型包围盒决定 |
+| `void clearClipPlanePreview()` | 清除裁剪/切片平面预览 |
+| `void setSliceLines(const std::vector<float>& lineVertices)` | 设置切片交线（GL_LINES） |
+| `void clearSliceLines()` | 清除切片交线 |
+| `void setIsoSurfaceMesh(const Mesh& mesh)` | 设置等值面半透明叠加网格 |
+| `void clearIsoSurface()` | 清除等值面 |
+
 #### 拾取映射表
 
 在设置 Mesh 后，需传入映射表以启用拾取功能：
@@ -1399,7 +1410,7 @@ public:
                                                 const FEScalarField& field,
                                                 float minValue, float maxValue);
 
-    // 按裁剪平面过滤（质心判断）
+    // 按裁剪平面过滤（三角形半空间几何裁剪）
     static FERenderData clipByPlane(const FERenderData& input,
                                     const FEPlane& plane,
                                     bool keepPositiveSide);
@@ -1411,6 +1422,8 @@ public:
 ```
 
 `sliceByPlane()` 会对交点去重：平面只接触三角形单个顶点时不生成零长度线段；三角形整体落在切片平面上时返回该三角形轮廓线。
+
+`clipByPlane()` 会对跨越平面的三角形做几何裁切，而不是按质心整片保留，因此裁剪边界不会留下跨过平面的尖三角。
 
 **使用示例**：
 

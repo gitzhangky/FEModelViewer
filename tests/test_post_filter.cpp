@@ -62,6 +62,27 @@ static FERenderData buildSingleTriangleData() {
     return rd;
 }
 
+static FERenderData buildCrossingTriangleData() {
+    FERenderData rd;
+
+    float verts[] = {
+        -1,0,0, 0,0,1,
+         1,0,0, 0,0,1,
+         1,1,0, 0,0,1,
+    };
+    rd.mesh.vertices.assign(verts, verts + sizeof(verts)/sizeof(float));
+
+    unsigned int idx[] = {0, 1, 2};
+    rd.mesh.indices.assign(idx, idx + 3);
+
+    rd.triangleToElement = {10};
+    rd.triangleToFace = {0};
+    rd.vertexToNode = {1, 2, 3};
+    rd.triangleToPart = {0};
+
+    return rd;
+}
+
 static void testThresholdKeepsTargetElement() {
     auto rd = buildTwoQuadData();
 
@@ -132,6 +153,31 @@ static void testClipNegativeSide() {
     assert(filtered.triangleCount() == 2);
     assert(filtered.triangleToElement[0] == 10);
     printf("  PASS: clip keeps negative side\n");
+}
+
+static void testClipCutsTriangleAtPlane() {
+    auto rd = buildCrossingTriangleData();
+
+    FEPlane plane;
+    plane.origin = glm::vec3(0.0f, 0.0f, 0.0f);
+    plane.normal = glm::vec3(1.0f, 0.0f, 0.0f);
+
+    auto filtered = FEPostFilter::clipByPlane(rd, plane, true);
+    assert(filtered.triangleCount() >= 1);
+
+    for (int vi = 0; vi < filtered.vertexCount(); ++vi) {
+        float x = filtered.mesh.vertices[vi * 6];
+        assert(x >= -1.0e-5f);
+    }
+
+    bool hasCutVertex = false;
+    for (int vi = 0; vi < filtered.vertexCount(); ++vi) {
+        float x = filtered.mesh.vertices[vi * 6];
+        if (std::abs(x) < 1.0e-5f)
+            hasCutVertex = true;
+    }
+    assert(hasCutVertex);
+    printf("  PASS: clip cuts triangle at plane\n");
 }
 
 static void testSliceByPlane() {
@@ -269,6 +315,7 @@ int main() {
     testThresholdPreservesMapping();
     testClipByPlane();
     testClipNegativeSide();
+    testClipCutsTriangleAtPlane();
     testSliceByPlane();
     testSliceIgnoresSingleVertexTouch();
     testEmptyInput();

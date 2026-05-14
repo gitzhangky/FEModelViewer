@@ -9,6 +9,7 @@ uniform vec3 uViewPos;
 uniform vec3 uColor;
 uniform bool uWireframe;
 uniform float uWireAlpha;
+uniform float uSurfaceAlpha;
 uniform bool uUseVertexColor;
 uniform bool uContourMode;
 uniform float uScalarMin;
@@ -103,5 +104,5 @@ void main() {
     vec3 color = surfaceColor * (ambient + diffuse) * sideFactor + vec3(spec * sideFactor);
     // 防止过曝
     color = min(color, vec3(1.0));
-    outColor = vec4(color, 1.0);
+    outColor = vec4(color, uSurfaceAlpha);
 }
