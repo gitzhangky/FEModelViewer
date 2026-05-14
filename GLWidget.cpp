@@ -112,8 +112,17 @@ protected:
             QString maxLine = QString("Max: %1 (%2: %3)").arg(formatValue(maxVal_)).arg(idLabel_).arg(maxId_);
             QString minLine = QString("Min: %1 (%2: %3)").arg(formatValue(minVal_)).arg(idLabel_).arg(minId_);
 
-            painter.drawText(margin, infoY, 200, 16, Qt::AlignLeft | Qt::AlignVCenter, maxLine);
-            painter.drawText(margin, infoY + 18, 200, 16, Qt::AlignLeft | Qt::AlignVCenter, minLine);
+            // 按实际文本宽度计算 rect，避免 5 位以上节点 ID 被截断
+            QFontMetrics infoFm(infoFont);
+#if QT_VERSION >= QT_VERSION_CHECK(5, 11, 0)
+            int textW = std::max(infoFm.horizontalAdvance(maxLine),
+                                  infoFm.horizontalAdvance(minLine));
+#else
+            int textW = std::max(infoFm.width(maxLine), infoFm.width(minLine));
+#endif
+            textW += 4;  // 留点余量
+            painter.drawText(margin, infoY, textW, 16, Qt::AlignLeft | Qt::AlignVCenter, maxLine);
+            painter.drawText(margin, infoY + 18, textW, 16, Qt::AlignLeft | Qt::AlignVCenter, minLine);
         }
 
         painter.end();
