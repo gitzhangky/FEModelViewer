@@ -34,12 +34,19 @@
   - [5.1 PickMode — 拾取模式](#51-pickmode--拾取模式)
   - [5.2 FEPickResult — 拾取结果](#52-fpickresult--拾取结果)
   - [5.3 FESelection — 选中状态](#53-feselection--选中状态)
-- [6. 完整使用示例](#6-完整使用示例)
-  - [6.1 加载模型并渲染](#61-加载模型并渲染)
-  - [6.2 显示标量云图](#62-显示标量云图)
-  - [6.3 部件可见性控制](#63-部件可见性控制)
-  - [6.4 拾取交互](#64-拾取交互)
-  - [6.5 变形显示](#65-变形显示)
+- [6. 变形与动画 API](#6-变形与动画-api)
+  - [6.1 FEDeformation — 变形显示工具类](#61-fedeformation--变形显示工具类)
+  - [6.2 FEAnimationController — 帧动画控制器](#62-feanimationcontroller--帧动画控制器)
+- [7. 探针与导出 API](#7-探针与导出-api)
+  - [7.1 FEProbe — 结果探针](#71-feprobe--结果探针)
+- [8. 完整使用示例](#8-完整使用示例)
+  - [8.1 加载模型并渲染](#81-加载模型并渲染)
+  - [8.2 显示标量云图](#82-显示标量云图)
+  - [8.3 部件可见性控制](#83-部件可见性控制)
+  - [8.4 拾取交互](#84-拾取交互)
+  - [8.5 变形显示](#85-变形显示)
+  - [8.6 变形动画](#86-变形动画)
+  - [8.7 探针查值与热点导出](#87-探针查值与热点导出)
 - [附录 A：头文件清单](#附录-a头文件清单)
 - [附录 B：单元类型速查表](#附录-b单元类型速查表)
 
@@ -73,7 +80,8 @@ target_link_libraries(MyApp PRIVATE FERender::FERender)
 
 仓库内的 `examples/simple_viewer` 是完整的外部调用示例：它通过
 `find_package(FERender REQUIRED CONFIG)` 链接安装后的 `FERender::FERender`，
-并用一个简单 Qt 界面演示 `FEModel → FEMeshConverter → GLWidget` 的调用链。
+并用一个简单 Qt 界面演示 `FEModel → FEMeshConverter → GLWidget` 的调用链，
+包含云图显示（`FEResultMapper`）和变形显示（`FEDeformation` + overlay）两个演示按钮。
 
 ### 1.2 最小示例
 
@@ -1004,6 +1012,15 @@ explicit GLWidget(QWidget* parent = nullptr);
 | `void setColorBarExtremes(int minId, float minVal, int maxId, float maxVal)` | 设置色标极值信息（最大/最小值及对应 ID，显示在色标下方） |
 | `void setColorBarIdLabel(const QString& label)` | 设置色标极值 ID 的标签前缀（如 `"Node ID"` 或 `"Ele ID"`） |
 
+#### 叠加网格（未变形线框）
+
+| 方法 | 说明 |
+|------|------|
+| `void setOverlayMesh(const Mesh& mesh)` | 设置未变形叠加网格（半透明线框） |
+| `void setOverlayVisible(bool visible)` | 控制叠加网格显隐 |
+
+用于变形显示时叠加原始形状，以便对比观察变形量。叠加网格以半透明灰色线框绘制。
+
 #### 拾取映射表
 
 在设置 Mesh 后，需传入映射表以启用拾取功能：
@@ -1136,9 +1153,215 @@ struct FESelection {
 
 ---
 
-## 6. 完整使用示例
+## 6. 变形与动画 API
 
-### 6.1 加载模型并渲染
+### 6.1 FEDeformation — 变形显示工具类
+
+**头文件**：`FEDeformation.h`
+
+无状态静态工具类，将位移矢量场叠加到 FEModel 坐标，生成变形后的模型副本。
+
+#### FEDeformationOptions（变形选项）
+
+```cpp
+struct FEDeformationOptions {
+    float scale = 1.0f;           // 变形缩放比例
+    bool overlayUndeformed = false; // 是否叠加显示原始模型
+};
+```
+
+#### FEDeformation
+
+```cpp
+class FEDeformation {
+public:
+    // 生成变形后的 FEModel（新坐标 = 原始坐标 + displacement × scale）
+    // 缺失位移的节点保持原坐标不变，原始模型不被修改
+    static FEModel apply(const FEModel& model,
+                         const FEVectorField& displacement,
+                         const FEDeformationOptions& options);
+
+    // 计算自动缩放比例，使最大变形约为模型尺寸的 targetRatio 倍
+    // 若位移为零返回 1.0
+    static float autoScale(const FEModel& model,
+                           const FEVectorField& displacement,
+                           float targetRatio = 0.1f);
+};
+```
+
+#### 使用示例
+
+```cpp
+FEVectorField disp;
+disp.values[1] = {0.001f, 0.0f, 0.0f};
+disp.values[2] = {0.002f, 0.0f, -0.001f};
+
+// 自动计算比例（微小变形放大到可视范围）
+float scale = FEDeformation::autoScale(model, disp);
+
+// 生成变形模型
+FEDeformationOptions opts;
+opts.scale = scale;
+opts.overlayUndeformed = true;
+FEModel deformed = FEDeformation::apply(model, disp, opts);
+
+// 转换渲染并显示
+FERenderData rd = FEMeshConverter::toRenderData(deformed);
+viewer.setMesh(rd.mesh);
+
+// 叠加原始模型线框
+if (opts.overlayUndeformed) {
+    FERenderData origRd = FEMeshConverter::toRenderData(model);
+    viewer.setOverlayMesh(origRd.mesh);
+    viewer.setOverlayVisible(true);
+}
+```
+
+---
+
+### 6.2 FEAnimationController — 帧动画控制器
+
+**头文件**：`FEAnimationController.h`
+
+基于 QTimer 驱动帧索引循环播放，不直接操作渲染或结果数据。
+外部通过 `frameChanged` 信号获取当前帧索引，自行更新模型和渲染。
+
+```cpp
+class FEAnimationController : public QObject {
+    Q_OBJECT
+public:
+    explicit FEAnimationController(QObject* parent = nullptr);
+
+    void setFrameCount(int count);        // 设置总帧数
+    int frameCount() const;
+
+    void setFps(double fps);              // 设置播放帧率
+    double fps() const;
+
+    int currentFrame() const;             // 当前帧索引
+    bool isPlaying() const;               // 是否正在播放
+
+public slots:
+    void play();                          // 开始播放
+    void pause();                         // 暂停
+    void stop();                          // 停止并回到第 0 帧
+    void setCurrentFrame(int frame);      // 跳转到指定帧
+
+signals:
+    void frameChanged(int frameIndex);    // 帧索引变化
+    void playStateChanged(bool playing);  // 播放状态变化
+};
+```
+
+#### 使用示例
+
+```cpp
+FEAnimationController anim;
+anim.setFrameCount(repo.frameCount());
+anim.setFps(12.0);
+
+// 监听帧变化，更新渲染
+connect(&anim, &FEAnimationController::frameChanged, [&](int frame) {
+    const FEResultFrame* f = repo.frame(frame);
+    // 根据帧数据更新变形/云图...
+});
+
+anim.play();    // 开始循环播放
+anim.pause();   // 暂停
+anim.stop();    // 回到第 0 帧
+```
+
+---
+
+## 7. 探针与导出 API
+
+### 7.1 FEProbe — 结果探针
+
+**头文件**：`FEProbe.h`
+
+无状态静态工具类，提供结果场的点值查询、热点排序、路径采样和 CSV 导出。
+
+#### FEProbeValue（探针值）
+
+```cpp
+struct FEProbeValue {
+    bool valid = false;                        // 是否有效
+    int entityId = -1;                         // 节点/单元 ID
+    FieldLocation location = FieldLocation::Node;  // 数据位置
+    float value = 0.0f;                        // 标量值
+};
+```
+
+#### FEPathSample（路径采样点）
+
+```cpp
+struct FEPathSample {
+    float distance = 0.0f;    // 沿路径的累计弧长
+    glm::vec3 position{0.0f}; // 三维坐标
+    FEProbeValue value;        // 该点的探针值
+};
+```
+
+#### FEProbe
+
+```cpp
+class FEProbe {
+public:
+    // 查询指定 ID 处的标量值（未找到时 valid=false）
+    static FEProbeValue valueAtEntity(const FEScalarField& field, int entityId);
+
+    // 返回最大（descending=true）或最小的 N 个热点
+    static std::vector<FEProbeValue> topHotspots(const FEScalarField& field,
+                                                  int count,
+                                                  bool descending = true);
+
+    // 沿节点路径采样标量值和累计弧长
+    // 不存在的节点 ID 被跳过，距离单调递增
+    static std::vector<FEPathSample> sampleNodePath(const FEModel& model,
+                                                     const FEScalarField& field,
+                                                     const std::vector<int>& nodeIds);
+
+    // 路径采样数据导出 CSV（Distance,X,Y,Z,NodeID,Value,Valid）
+    static bool writePathSamplesCsv(const std::string& filePath,
+                                     const std::vector<FEPathSample>& samples);
+
+    // 标量场导出 CSV（NodeID/ElementID,Value），按 ID 升序
+    static bool writeScalarFieldCsv(const std::string& filePath,
+                                     const FEScalarField& field);
+};
+```
+
+#### 使用示例
+
+```cpp
+#include "FEProbe.h"
+
+// 1. 点值查询
+auto pv = FEProbe::valueAtEntity(stressField, 42);
+if (pv.valid)
+    qDebug() << "Node 42 stress:" << pv.value;
+
+// 2. 热点排序（前 5 大）
+auto hotspots = FEProbe::topHotspots(stressField, 5, true);
+for (const auto& h : hotspots)
+    qDebug() << "ID:" << h.entityId << "Value:" << h.value;
+
+// 3. 路径采样
+std::vector<int> pathNodes = {1, 5, 10, 15, 20};
+auto samples = FEProbe::sampleNodePath(model, stressField, pathNodes);
+for (const auto& s : samples)
+    qDebug() << "dist:" << s.distance << "val:" << s.value.value;
+
+// 4. 导出 CSV
+FEProbe::writePathSamplesCsv("path_data.csv", samples);
+FEProbe::writeScalarFieldCsv("stress_field.csv", stressField);
+```
+
+---
+
+## 8. 完整使用示例
+
+### 8.1 加载模型并渲染
 
 ```cpp
 #include <QApplication>
@@ -1189,7 +1412,7 @@ int main(int argc, char* argv[]) {
 }
 ```
 
-### 6.2 显示标量云图
+### 8.2 显示标量云图
 
 ```cpp
 // 假设已有 model 和 viewer
@@ -1230,7 +1453,7 @@ viewer.setColorBarIdLabel("Node ID");
 viewer.setColorBarExtremes(mapped.minId, mapped.minValue, mapped.maxId, mapped.maxValue);
 ```
 
-### 6.3 部件可见性控制
+### 8.3 部件可见性控制
 
 ```cpp
 // 假设模型有 3 个部件
@@ -1258,7 +1481,7 @@ const auto& colors = viewer.partColors();
 // colors[2] → Bearing 的 RGB
 ```
 
-### 6.4 拾取交互
+### 8.4 拾取交互
 
 ```cpp
 // 设置拾取模式
@@ -1296,7 +1519,7 @@ if (sel.hasSelection()) {
 }
 ```
 
-### 6.5 变形显示
+### 8.5 变形显示
 
 ```cpp
 // 假设有位移矢量场
@@ -1316,6 +1539,75 @@ viewer.setMesh(deformed);
 viewer.fitToModel(model.computeCenter(), model.computeSize());
 ```
 
+### 8.6 变形动画
+
+```cpp
+#include "FEDeformation.h"
+#include "FEAnimationController.h"
+#include "FEResultRepository.h"
+
+// 假设已有 model, viewer, repo（多帧结果仓库）
+
+FEAnimationController anim;
+anim.setFrameCount(repo.frameCount());
+anim.setFps(12.0);
+
+// 帧变化时更新变形显示
+QObject::connect(&anim, &FEAnimationController::frameChanged, [&](int frame) {
+    const FEResultFrame* f = repo.frame(frame);
+    if (!f) return;
+
+    // 查找位移结果类型
+    for (const auto& rt : f->resultTypes) {
+        if (rt.hasVector && rt.name == "Displacement") {
+            float scale = FEDeformation::autoScale(model, rt.vectorField);
+            FEDeformationOptions opts;
+            opts.scale = scale;
+            FEModel deformed = FEDeformation::apply(model, rt.vectorField, opts);
+
+            FERenderData rd = FEMeshConverter::toRenderData(deformed);
+            viewer.setMesh(rd.mesh);
+            break;
+        }
+    }
+});
+
+anim.play();
+```
+
+---
+
+### 8.7 探针查值与热点导出
+
+```cpp
+#include "FEProbe.h"
+#include "FEResultMapper.h"
+
+// 假设已有 model, stressField（标量场）
+
+// 拾取回调中查询结果值
+connect(&viewer, &GLWidget::selectionChanged,
+    [&](PickMode mode, int count, const std::vector<int>& ids) {
+        if (count == 1 && mode == PickMode::Node) {
+            auto pv = FEProbe::valueAtEntity(stressField, ids[0]);
+            if (pv.valid)
+                qDebug() << "Node" << ids[0] << "=" << pv.value << "MPa";
+        }
+    });
+
+// 列出前 10 个热点
+auto hotspots = FEProbe::topHotspots(stressField, 10);
+for (const auto& h : hotspots)
+    qDebug() << "Hotspot:" << h.entityId << h.value;
+
+// 沿一组节点采样
+auto samples = FEProbe::sampleNodePath(model, stressField, {1, 5, 10, 20});
+
+// 导出 CSV
+FEProbe::writePathSamplesCsv("path.csv", samples);
+FEProbe::writeScalarFieldCsv("field.csv", stressField);
+```
+
 ---
 
 ## 附录 A：头文件清单
@@ -1330,6 +1622,9 @@ viewer.fitToModel(model.computeCenter(), model.computeSize());
 | `FEResultData.h` | `FEResultData`, `FESubcase`, `FEResultType`, `FEResultComponent` | 多工况结果层级 |
 | `FEResultMapper.h` | `FEResultMapper`, `FEMappedScalars` | 结果场到渲染顶点标量数组的映射 |
 | `FEResultRepository.h` | `FEResultRepository`, `FEResultFrame`, `FEResultFrameInfo`, `FEResultDomain` | 结果仓库与帧模型 |
+| `FEDeformation.h` | `FEDeformation`, `FEDeformationOptions` | 变形显示工具类 |
+| `FEAnimationController.h` | `FEAnimationController` | 帧动画控制器（QTimer 驱动） |
+| `FEProbe.h` | `FEProbe`, `FEProbeValue`, `FEPathSample` | 结果探针：点值查询、热点、路径采样、CSV 导出 |
 | `FEParser.h` | `FEParser` | 有限元文件解析器（INP/BDF/OP2/UNV） |
 | `Geometry.h` | `Mesh`, `Geometry::*` | 网格结构与几何体生成 |
 | `FERenderData.h` | `FERenderData` | 渲染数据包（Mesh + 映射表） |

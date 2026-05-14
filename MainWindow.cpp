@@ -2,20 +2,19 @@
  * @file MainWindow.cpp
  * @brief 主窗口实现
  *
- * 基于 QDockWidget 的可停靠面板布局：
- *   ┌──────────────────────────────────────────────────────────┐
+ * HyperView 风格布局：
+ *   ┌─────────┬──────────────────────────────────┬─────────────┐
  *   │  工具栏: [清空] | [节点][单元][部件] | [主题]            │
- *   ├──────────┬────────────────────────────────┬─────────────┤
- *   │ [模型树] │                                │ [结果显示]  │
- *   │──────────│      GLWidget (中央部件)       │             │
- *   │ [模型信息│                                │             │
- *   │  |监控]  │                                │             │
- *   ├──────────┴────────────────────────────────┴─────────────┤
- *   │ [文件导入]                                               │
- *   ├──────────────────────────────────────────────────────────┤
+ *   ├─────────┼──────────────────────────────────┼─────────────┤
+ *   │         │                                  │             │
+ *   │  部件   │        GLWidget (中央视口)        │  模型信息   │
+ *   │ (左停靠)│                                  │  (右停靠)   │
+ *   │         ├──────────────────────────────────┤             │
+ *   │         │  [文件导入][结果显示][监控]       │             │
+ *   │         │  当前面板内容                     │             │
+ *   ├─────────┴──────────────────────────────────┴─────────────┤
  *   │  状态栏                                                  │
- *   └──────────────────────────────────────────────────────────┘
- *   所有 [面板] 均为 QDockWidget，可拖拽、浮动、合并标签页
+ *   └─────────────────────────────────────────────────────────┘
  */
 
 #include "MainWindow.h"
@@ -29,12 +28,14 @@
 #include "FEMeshConverter.h"
 #include "FEResultData.h"
 #include "FEResultMapper.h"
+#include "FEAnimationController.h"
+#include "FEDeformation.h"
 
 #include <glm/glm.hpp>
 #include <vector>
-#include <QDockWidget>
 #include <QHBoxLayout>
 #include <QVBoxLayout>
+#include <QSplitter>
 #include <QToolBar>
 #include <QAction>
 #include <QActionGroup>
@@ -52,14 +53,12 @@
 MainWindow::MainWindow() {
     setWindowTitle("FEModelViewer");
     resize(1100, 800);
-    setDockNestingEnabled(true);
 
     // ── 工具栏 ──
     setupToolBar();
 
-    // ── GL 视口（中央部件）──
+    // ── GL 视口 ──
     glWidget_ = new GLWidget;
-    setCentralWidget(glWidget_);
 
     // ── 创建面板 ──
     partsPanel_ = new PartsPanel;
@@ -68,32 +67,34 @@ MainWindow::MainWindow() {
     resultPanel_ = new ResultPanel;
     filePanel_ = createFilePanel();
 
-    // ── 停靠面板 ──
-    auto makeDock = [this](const QString& title, QWidget* widget) {
-        auto* dock = new QDockWidget(title, this);
-        dock->setWidget(widget);
-        dock->setFeatures(QDockWidget::DockWidgetMovable |
-                          QDockWidget::DockWidgetFloatable);
-        return dock;
-    };
+    // ── 底部标签页（文件导入 / 结果显示 / 监控）──
+    bottomTabs_ = new QTabWidget;
+    bottomTabs_->setTabPosition(QTabWidget::North);
+    bottomTabs_->addTab(filePanel_,    "文件导入");
+    bottomTabs_->addTab(resultPanel_,  "结果显示");
+    bottomTabs_->addTab(monitorPanel_, "监控");
 
-    auto* partsDock   = makeDock("模型树",   partsPanel_);
-    auto* modelDock   = makeDock("模型信息", feModelPanel_);
-    auto* monitorDock = makeDock("监控",     monitorPanel_);
-    auto* resultDock  = makeDock("结果显示", resultPanel_);
-    auto* fileDock    = makeDock("文件导入", filePanel_);
+    // ── 中央区域：垂直 Splitter（GL 视口 + 底部标签页）──
+    auto* splitter = new QSplitter(Qt::Vertical);
+    splitter->addWidget(glWidget_);
+    splitter->addWidget(bottomTabs_);
+    splitter->setStretchFactor(0, 1);
+    splitter->setStretchFactor(1, 0);
+    splitter->setSizes({600, 180});
+    splitter->setChildrenCollapsible(false);
+    setCentralWidget(splitter);
 
-    // 默认布局：左侧 模型树 + (模型信息|监控)tab，右侧 结果显示，底部 文件导入
-    addDockWidget(Qt::LeftDockWidgetArea, partsDock);
-    splitDockWidget(partsDock, modelDock, Qt::Vertical);
-    tabifyDockWidget(modelDock, monitorDock);
-    modelDock->raise();
+    // ── 左侧停靠：部件面板 ──
+    partsDock_ = new QDockWidget("部件", this);
+    partsDock_->setWidget(partsPanel_);
+    partsDock_->setFeatures(QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetFloatable);
+    addDockWidget(Qt::LeftDockWidgetArea, partsDock_);
 
-    addDockWidget(Qt::RightDockWidgetArea, resultDock);
-    addDockWidget(Qt::BottomDockWidgetArea, fileDock);
-
-    resizeDocks({partsDock}, {220}, Qt::Horizontal);
-    resizeDocks({resultDock}, {200}, Qt::Horizontal);
+    // ── 右侧停靠：模型信息面板 ──
+    modelInfoDock_ = new QDockWidget("模型信息", this);
+    modelInfoDock_->setWidget(feModelPanel_);
+    modelInfoDock_->setFeatures(QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetFloatable);
+    addDockWidget(Qt::RightDockWidgetArea, modelInfoDock_);
 
     // ── 状态栏 ──
     setupStatusBar();
@@ -181,27 +182,8 @@ MainWindow::MainWindow() {
     // 应用云图
     connect(resultPanel_, &ResultPanel::applyResult,
             this, [this](const FEScalarField& field, const QString& title) {
-        const FEModel& model = feModelPanel_->currentModel();
-        if (model.nodes.empty()) return;
-
-        const FERenderData& rd = feModelPanel_->currentRenderData();
-        int vertCount = static_cast<int>(rd.mesh.vertices.size() / 6);
-        if (vertCount == 0) return;
-
-        const int numBands = 9;
-
-        // 构建 per-vertex 标量值数组（传给 GPU，由片段着色器做量化 + 颜色映射）
-        FEMappedScalars mapped = FEResultMapper::mapScalarToVertices(field, rd, model);
-
-        // 上传标量值到 GPU，由片段着色器做离散量化 + Jet colormap 映射
-        glWidget_->setVertexScalars(mapped.scalars, mapped.minValue, mapped.maxValue, numBands);
-
-        // 更新色标
-        glWidget_->setColorBarVisible(true);
-        glWidget_->setColorBarRange(mapped.minValue, mapped.maxValue);
-        glWidget_->setColorBarTitle(title);
-        glWidget_->setColorBarIdLabel(mapped.location == FieldLocation::Element ? "Ele ID" : "Node ID");
-        glWidget_->setColorBarExtremes(mapped.minId, mapped.minValue, mapped.maxId, mapped.maxValue);
+        applyContour(field, title);
+        feModelPanel_->setActiveScalarField(field);
     });
 
     // 清除云图 → 恢复部件颜色
@@ -210,6 +192,60 @@ MainWindow::MainWindow() {
         glWidget_->setUseVertexColor(false);
         glWidget_->setColorBarVisible(false);
         glWidget_->update();
+        feModelPanel_->clearActiveScalarField();
+    });
+
+    // ── 动画控制器 ──
+    animController_ = new FEAnimationController(this);
+
+    connect(resultPanel_, &ResultPanel::animationPlay,
+            animController_, &FEAnimationController::play);
+    connect(resultPanel_, &ResultPanel::animationPause,
+            animController_, &FEAnimationController::pause);
+    connect(resultPanel_, &ResultPanel::animationStop,
+            animController_, &FEAnimationController::stop);
+
+    // 动画切帧：切帧 → 变形（如果开启）→ 云图
+    connect(animController_, &FEAnimationController::frameChanged,
+            this, [this](int frameIndex) {
+        resultPanel_->selectFrame(frameIndex);
+
+        if (deformActive_)
+            applyDeformation(deformScale_, deformOverlay_);
+
+        FEScalarField field;
+        QString title;
+        if (resultPanel_->currentScalarField(field, title))
+            applyContour(field, title);
+    });
+
+    // 结果加载后设置帧数
+    connect(feModelPanel_, &FEModelPanel::resultsLoaded,
+            this, [this](const FEResultData&) {
+        animController_->setFrameCount(resultPanel_->frameCount());
+    });
+
+    // ── 变形显示 ──
+    connect(resultPanel_, &ResultPanel::deformationRequested,
+            this, [this](float scale, bool overlayUndeformed) {
+        applyDeformation(scale, overlayUndeformed);
+    });
+
+    connect(resultPanel_, &ResultPanel::deformationCleared,
+            this, [this]() {
+        clearDeformation();
+    });
+
+    connect(resultPanel_, &ResultPanel::autoScaleRequested,
+            this, [this]() {
+        const FEModel& model = feModelPanel_->currentModel();
+        if (model.nodes.empty()) return;
+
+        FEVectorField disp = resultPanel_->currentDisplacement();
+        if (disp.values.empty()) return;
+
+        float scale = FEDeformation::autoScale(model, disp);
+        resultPanel_->setDeformScale(scale);
     });
 
     // ── 初始主题（默认深色）──
@@ -223,7 +259,6 @@ MainWindow::MainWindow() {
 
 QWidget* MainWindow::createFilePanel() {
     auto* panel = new QWidget;
-    panel->setMaximumHeight(100);
 
     auto* mainLayout = new QVBoxLayout(panel);
     mainLayout->setContentsMargins(14, 10, 14, 10);
@@ -494,40 +529,50 @@ void MainWindow::applyTheme(const Theme& t) {
     // 主题按钮文字更新
     themeAction_->setText(t.name);
 
-    // 主窗口背景 + 分隔线 + 标签页
+    // 主窗口背景
     setStyleSheet(QString(
         "QMainWindow { background: %1; }"
-        "QMainWindow::separator {"
-        "  background: %2; width: 3px; height: 3px; }"
-        "QMainWindow::separator:hover {"
-        "  background: %3; }"
+    ).arg(t.mantle));
+
+    // 底部标签页
+    bottomTabs_->setStyleSheet(QString(
+        "QTabWidget { background: %1; }"
+        "QTabWidget::pane {"
+        "  background: %1; border: none;"
+        "  border-top: 1px solid %2; }"
         "QTabBar {"
-        "  background: %1; }"
+        "  background: %3; }"
         "QTabBar::tab {"
-        "  background: %4; color: %5;"
+        "  background: %3; color: %4;"
         "  border-top-left-radius: 4px; border-top-right-radius: 4px;"
-        "  padding: 5px 12px; font-size: 11px; margin-right: 1px; }"
+        "  padding: 6px 16px; font-size: 12px; margin-right: 1px; }"
         "QTabBar::tab:selected {"
-        "  background: %6; color: %3; }"
+        "  background: %1; color: %5; font-weight: bold; }"
         "QTabBar::tab:hover:!selected {"
         "  background: %2; }"
-        "QTabWidget::pane {"
-        "  background: %1; border: none; }"
-    ).arg(t.mantle, t.surface0, t.blue, t.crust, t.subtext0, t.base));
+    ).arg(t.base, t.surface0, t.mantle, t.subtext0, t.blue));
 
-    // 停靠面板标题栏
+    // 侧边栏停靠面板
     QString dockStyle = QString(
         "QDockWidget {"
-        "  color: %1; font-size: 11px; font-weight: bold;"
-        "  background: %2; }"
+        "  color: %1; font-size: 12px; font-weight: bold;"
+        "  titlebar-close-icon: none; }"
         "QDockWidget::title {"
-        "  background: %3; border-bottom: 1px solid %4;"
+        "  background: %2; border-bottom: 1px solid %3;"
         "  padding: 6px 10px; }"
-        "QDockWidget::float-button:hover {"
-        "  background: %4; border-radius: 3px; }"
-    ).arg(t.subtext0, t.base, t.mantle, t.surface0);
-    for (auto* dock : findChildren<QDockWidget*>())
-        dock->setStyleSheet(dockStyle);
+    ).arg(t.blue, t.mantle, t.surface0);
+    partsDock_->setStyleSheet(dockStyle);
+    modelInfoDock_->setStyleSheet(dockStyle);
+
+    // Splitter 手柄
+    if (auto* sp = findChild<QSplitter*>()) {
+        sp->setStyleSheet(QString(
+            "QSplitter::handle {"
+            "  background: %1; height: 4px; }"
+            "QSplitter::handle:hover {"
+            "  background: %2; }"
+        ).arg(t.surface0, t.blue));
+    }
 
     // 工具栏 — 更宽松的间距，checked 状态用底部强调线
     toolbar_->setStyleSheet(QString(
@@ -632,4 +677,93 @@ void MainWindow::closeEvent(QCloseEvent* event) {
     settings.setValue("lastModelPath", modelPathEdit_->text());
     settings.setValue("lastResultPath", resultPathEdit_->text());
     QMainWindow::closeEvent(event);
+}
+
+// ════════════════════════════════════════════════════════════
+// 变形 / 云图辅助
+// ════════════════════════════════════════════════════════════
+
+const FERenderData& MainWindow::activeRenderData() const
+{
+    return deformActive_ ? deformedRD_ : feModelPanel_->currentRenderData();
+}
+
+const FEModel& MainWindow::activeModel() const
+{
+    return deformActive_ ? deformedModel_ : feModelPanel_->currentModel();
+}
+
+void MainWindow::applyDeformation(float scale, bool overlayUndeformed)
+{
+    const FEModel& model = feModelPanel_->currentModel();
+    if (model.nodes.empty()) return;
+
+    FEVectorField disp = resultPanel_->currentDisplacement();
+    if (disp.values.empty()) return;
+
+    FEDeformationOptions opts;
+    opts.scale = scale;
+    opts.overlayUndeformed = overlayUndeformed;
+
+    deformedModel_ = FEDeformation::apply(model, disp, opts);
+    deformedRD_ = FEMeshConverter::toRenderData(deformedModel_);
+    deformActive_ = true;
+    deformScale_ = scale;
+    deformOverlay_ = overlayUndeformed;
+
+    if (overlayUndeformed) {
+        glWidget_->setOverlayMesh(feModelPanel_->currentRenderData().mesh);
+        glWidget_->setOverlayVisible(true);
+    } else {
+        glWidget_->setOverlayVisible(false);
+    }
+
+    glWidget_->setMesh(deformedRD_.mesh);
+    glWidget_->setTriangleToElementMap(deformedRD_.triangleToElement);
+    glWidget_->setVertexToNodeMap(deformedRD_.vertexToNode);
+    glWidget_->setTriangleToPartMap(deformedRD_.triangleToPart);
+    glWidget_->setEdgeToPartMap(deformedRD_.edgeToPart);
+
+    float size = deformedModel_.computeSize();
+    if (size > 0.0f)
+        glWidget_->fitToModel(deformedModel_.computeCenter(), size);
+}
+
+void MainWindow::clearDeformation()
+{
+    deformActive_ = false;
+
+    const FERenderData& rd = feModelPanel_->currentRenderData();
+    glWidget_->setOverlayVisible(false);
+    glWidget_->setMesh(rd.mesh);
+    glWidget_->setTriangleToElementMap(rd.triangleToElement);
+    glWidget_->setVertexToNodeMap(rd.vertexToNode);
+    glWidget_->setTriangleToPartMap(rd.triangleToPart);
+    glWidget_->setEdgeToPartMap(rd.edgeToPart);
+
+    const FEModel& model = feModelPanel_->currentModel();
+    float size = model.computeSize();
+    if (size > 0.0f)
+        glWidget_->fitToModel(model.computeCenter(), size);
+}
+
+void MainWindow::applyContour(const FEScalarField& field, const QString& title)
+{
+    const FEModel& model = activeModel();
+    if (model.nodes.empty()) return;
+
+    const FERenderData& rd = activeRenderData();
+    int vertCount = static_cast<int>(rd.mesh.vertices.size() / 6);
+    if (vertCount == 0) return;
+
+    const int numBands = 9;
+
+    FEMappedScalars mapped = FEResultMapper::mapScalarToVertices(field, rd, model);
+
+    glWidget_->setVertexScalars(mapped.scalars, mapped.minValue, mapped.maxValue, numBands);
+    glWidget_->setColorBarVisible(true);
+    glWidget_->setColorBarRange(mapped.minValue, mapped.maxValue);
+    glWidget_->setColorBarTitle(title);
+    glWidget_->setColorBarIdLabel(mapped.location == FieldLocation::Element ? "Ele ID" : "Node ID");
+    glWidget_->setColorBarExtremes(mapped.minId, mapped.minValue, mapped.maxId, mapped.maxValue);
 }

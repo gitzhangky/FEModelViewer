@@ -20,25 +20,23 @@ ResultPanel::ResultPanel(QWidget* parent)
 
 void ResultPanel::setupUI()
 {
-    setMinimumWidth(140);
-
-    auto* layout = new QVBoxLayout(this);
+    auto* layout = new QHBoxLayout(this);
     layout->setContentsMargins(8, 6, 8, 6);
-    layout->setSpacing(6);
+    layout->setSpacing(10);
 
-    // ── 卡片：结果显示 ──
+    // ── 左列：结果显示 ──
     resultGroup_ = new QGroupBox("结果显示");
+    resultGroup_->setMaximumWidth(360);
     auto* cardLayout = new QVBoxLayout(resultGroup_);
     cardLayout->setContentsMargins(8, 8, 8, 8);
     cardLayout->setSpacing(6);
 
-    // 左右结构行
     auto addRow = [&](const QString& text, QComboBox*& combo, bool enabled = false) {
         auto* row = new QHBoxLayout;
         row->setSpacing(8);
         auto* label = new QLabel(text);
         rowLabels_.push_back(label);
-        label->setFixedWidth(50);
+        label->setFixedWidth(36);
         label->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         row->addWidget(label);
         combo = new QComboBox;
@@ -51,32 +49,100 @@ void ResultPanel::setupUI()
     addRow("帧", subcaseCombo_);
     addRow("类型", typeCombo_);
     addRow("分量", componentCombo_);
-    // 色谱（暂时隐藏）
+
     colormapCombo_ = new QComboBox;
     colormapCombo_->addItem("Jet");
     colormapCombo_->setCurrentIndex(0);
     colormapCombo_->hide();
 
-    // ── 按钮行 ──
     auto* btnRow = new QHBoxLayout;
     btnRow->setSpacing(6);
-
     applyBtn_ = new QPushButton("应用");
     applyBtn_->setEnabled(false);
     btnRow->addWidget(applyBtn_);
-
     clearBtn_ = new QPushButton("清除");
     clearBtn_->setEnabled(false);
     btnRow->addWidget(clearBtn_);
-
     cardLayout->addLayout(btnRow);
 
-    // ── 信息标签 ──
     infoLabel_ = new QLabel;
     infoLabel_->setWordWrap(true);
     cardLayout->addWidget(infoLabel_);
+    cardLayout->addStretch(1);
 
     layout->addWidget(resultGroup_);
+
+    // ── 中列：变形显示 ──
+    deformGroup_ = new QGroupBox("变形显示");
+    deformGroup_->setMaximumWidth(320);
+    auto* deformLayout = new QVBoxLayout(deformGroup_);
+    deformLayout->setContentsMargins(8, 8, 8, 8);
+    deformLayout->setSpacing(6);
+
+    {
+        auto* row = new QHBoxLayout;
+        row->setSpacing(8);
+        auto* label = new QLabel("比例");
+        rowLabels_.push_back(label);
+        label->setFixedWidth(36);
+        label->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        row->addWidget(label);
+
+        scaleSpinBox_ = new QDoubleSpinBox;
+        scaleSpinBox_->setRange(0.0, 1e9);
+        scaleSpinBox_->setDecimals(2);
+        scaleSpinBox_->setValue(1.0);
+        scaleSpinBox_->setSingleStep(0.1);
+        scaleSpinBox_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        row->addWidget(scaleSpinBox_);
+
+        autoScaleBtn_ = new QPushButton("自动");
+        autoScaleBtn_->setFixedWidth(48);
+        row->addWidget(autoScaleBtn_);
+
+        deformLayout->addLayout(row);
+    }
+
+    overlayCheck_ = new QCheckBox("叠加原始模型");
+    deformLayout->addWidget(overlayCheck_);
+
+    {
+        auto* btnRow2 = new QHBoxLayout;
+        btnRow2->setSpacing(6);
+        deformApplyBtn_ = new QPushButton("应用变形");
+        btnRow2->addWidget(deformApplyBtn_);
+        deformClearBtn_ = new QPushButton("清除变形");
+        deformClearBtn_->setEnabled(false);
+        btnRow2->addWidget(deformClearBtn_);
+        deformLayout->addLayout(btnRow2);
+    }
+
+    // 动画控制行
+    {
+        auto* animRow = new QHBoxLayout;
+        animRow->setSpacing(4);
+
+        playBtn_ = new QPushButton("▶");
+        pauseBtn_ = new QPushButton("⏸");
+        stopBtn_ = new QPushButton("■");
+        playBtn_->setFixedSize(32, 28);
+        pauseBtn_->setFixedSize(32, 28);
+        stopBtn_->setFixedSize(32, 28);
+        playBtn_->setToolTip("播放动画");
+        pauseBtn_->setToolTip("暂停动画");
+        stopBtn_->setToolTip("停止动画");
+
+        animRow->addStretch(1);
+        animRow->addWidget(playBtn_);
+        animRow->addWidget(pauseBtn_);
+        animRow->addWidget(stopBtn_);
+        animRow->addStretch(1);
+
+        deformLayout->addLayout(animRow);
+    }
+    deformLayout->addStretch(1);
+
+    layout->addWidget(deformGroup_);
     layout->addStretch(1);
 
     // 默认主题在 MainWindow 中统一调用 applyTheme() 设置
@@ -90,6 +156,14 @@ void ResultPanel::setupUI()
             this, &ResultPanel::onComponentChanged);
     connect(applyBtn_, &QPushButton::clicked, this, &ResultPanel::onApplyClicked);
     connect(clearBtn_, &QPushButton::clicked, this, &ResultPanel::onClearClicked);
+
+    // 变形控制
+    connect(deformApplyBtn_, &QPushButton::clicked, this, &ResultPanel::onDeformApplyClicked);
+    connect(deformClearBtn_, &QPushButton::clicked, this, &ResultPanel::onDeformClearClicked);
+    connect(autoScaleBtn_, &QPushButton::clicked, this, &ResultPanel::autoScaleRequested);
+    connect(playBtn_, &QPushButton::clicked, this, &ResultPanel::animationPlay);
+    connect(pauseBtn_, &QPushButton::clicked, this, &ResultPanel::animationPause);
+    connect(stopBtn_, &QPushButton::clicked, this, &ResultPanel::animationStop);
 }
 
 void ResultPanel::setResults(const FEResultData& results)
@@ -237,6 +311,88 @@ void ResultPanel::onClearClicked()
     emit clearResult();
 }
 
+void ResultPanel::setDeformScale(float scale)
+{
+    scaleSpinBox_->setValue(static_cast<double>(scale));
+}
+
+void ResultPanel::onDeformApplyClicked()
+{
+    deformClearBtn_->setEnabled(true);
+    emit deformationRequested(
+        static_cast<float>(scaleSpinBox_->value()),
+        overlayCheck_->isChecked());
+}
+
+void ResultPanel::onDeformClearClicked()
+{
+    deformClearBtn_->setEnabled(false);
+    emit deformationCleared();
+}
+
+FEVectorField ResultPanel::currentDisplacement() const
+{
+    int frameIdx = subcaseCombo_->currentIndex();
+    const FEResultFrame* f = repo_.frame(frameIdx);
+    if (!f) return {};
+
+    for (const auto& rt : f->resultTypes) {
+        if (rt.hasVector)
+            return rt.vectorField;
+    }
+    return {};
+}
+
+bool ResultPanel::currentScalarField(FEScalarField& field, QString& title) const
+{
+    int frameIdx = subcaseCombo_->currentIndex();
+    int rtIdx = typeCombo_->currentIndex();
+    int cpIdx = componentCombo_->currentIndex();
+
+    if (frameIdx < 0 || rtIdx < 0 || cpIdx < 0) return false;
+
+    const FEResultFrame* f = repo_.frame(frameIdx);
+    if (!f) return false;
+    if (rtIdx >= static_cast<int>(f->resultTypes.size())) return false;
+
+    const auto& rt = f->resultTypes[rtIdx];
+    if (cpIdx >= static_cast<int>(rt.components.size())) return false;
+
+    const auto& comp = rt.components[cpIdx];
+    field = comp.field;
+    title = QString("%1 - %2 - %3")
+        .arg(QString::fromStdString(f->info.valueLabel))
+        .arg(QString::fromStdString(rt.name))
+        .arg(QString::fromStdString(comp.name));
+    return true;
+}
+
+int ResultPanel::frameCount() const
+{
+    return repo_.frameCount();
+}
+
+void ResultPanel::selectFrame(int frameIndex)
+{
+    if (frameIndex < 0 || frameIndex >= subcaseCombo_->count()) return;
+
+    int typeIdx = typeCombo_->currentIndex();
+    int compIdx = componentCombo_->currentIndex();
+
+    subcaseCombo_->setCurrentIndex(frameIndex);
+
+    if (typeIdx >= 0 && typeIdx < typeCombo_->count())
+        typeCombo_->setCurrentIndex(typeIdx);
+    if (compIdx >= 0 && compIdx < componentCombo_->count())
+        componentCombo_->setCurrentIndex(compIdx);
+}
+
+void ResultPanel::applyFrame(int frameIndex)
+{
+    selectFrame(frameIndex);
+    onApplyClicked();
+}
+
 void ResultPanel::applyTheme(const Theme& t) {
     // 按钮单独设样式
     applyBtn_->setStyleSheet(QString(
@@ -248,14 +404,43 @@ void ResultPanel::applyTheme(const Theme& t) {
         "QPushButton:disabled { background: %5; color: %6; }"
     ).arg(t.blue, t.btnText, t.blueHover, t.bluePressed, t.surface1, t.overlay0));
 
-    clearBtn_->setStyleSheet(QString(
+    QString secondaryBtnStyle = QString(
         "QPushButton {"
         "  background: %1; color: %2; border: 1px solid %3;"
         "  border-radius: 5px; padding: 7px 16px; font-size: 12px; }"
         "QPushButton:hover { background: %3; border-color: %4; color: %4; }"
         "QPushButton:pressed { background: %5; }"
         "QPushButton:disabled { background: %6; color: %3; border-color: %1; }"
-    ).arg(t.surface0, t.text, t.surface1, t.blue, t.surface2, t.base));
+    ).arg(t.surface0, t.text, t.surface1, t.blue, t.surface2, t.base);
+
+    clearBtn_->setStyleSheet(secondaryBtnStyle);
+    deformClearBtn_->setStyleSheet(secondaryBtnStyle);
+
+    deformApplyBtn_->setStyleSheet(QString(
+        "QPushButton {"
+        "  background: %1; color: %2; border: none;"
+        "  border-radius: 5px; padding: 7px 16px; font-size: 12px; font-weight: bold; }"
+        "QPushButton:hover { background: %3; }"
+        "QPushButton:pressed { background: %4; }"
+        "QPushButton:disabled { background: %5; color: %6; }"
+    ).arg(t.blue, t.btnText, t.blueHover, t.bluePressed, t.surface1, t.overlay0));
+
+    autoScaleBtn_->setStyleSheet(QString(
+        "QPushButton {"
+        "  background: %1; color: %2; border: 1px solid %3;"
+        "  border-radius: 5px; padding: 5px 8px; font-size: 11px; }"
+        "QPushButton:hover { background: %3; color: %4; }"
+    ).arg(t.surface0, t.text, t.surface1, t.blue));
+
+    QString animBtnStyle = QString(
+        "QPushButton {"
+        "  background: %1; color: %2; border: 1px solid %3;"
+        "  border-radius: 5px; padding: 4px; font-size: 14px; }"
+        "QPushButton:hover { background: %3; color: %4; }"
+    ).arg(t.surface0, t.text, t.surface1, t.blue);
+    playBtn_->setStyleSheet(animBtnStyle);
+    pauseBtn_->setStyleSheet(animBtnStyle);
+    stopBtn_->setStyleSheet(animBtnStyle);
 
     // 卡片 + ComboBox 统一主题
     setStyleSheet(QString(
@@ -283,5 +468,24 @@ void ResultPanel::applyTheme(const Theme& t) {
         "  background: %3; border: 1px solid %8; border-radius: 4px;"
         "  padding: 4px; selection-background-color: %8; color: %2;"
         "  outline: none; }"
+        "QDoubleSpinBox {"
+        "  background: %4; border: 1px solid %8; border-radius: 5px;"
+        "  padding: 5px 10px; font-size: 12px; color: %2;"
+        "  min-height: 24px; }"
+        "QDoubleSpinBox:hover { border-color: %6; }"
+        "QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {"
+        "  width: 18px; border: none; background: %4; }"
+        "QDoubleSpinBox::up-arrow { border-left: 4px solid transparent;"
+        "  border-right: 4px solid transparent;"
+        "  border-bottom: 5px solid %6; }"
+        "QDoubleSpinBox::down-arrow { border-left: 4px solid transparent;"
+        "  border-right: 4px solid transparent;"
+        "  border-top: 5px solid %6; }"
+        "QCheckBox { font-size: 11px; color: %7; spacing: 6px; }"
+        "QCheckBox::indicator {"
+        "  width: 16px; height: 16px; border-radius: 3px;"
+        "  border: 1px solid %8; background: %4; }"
+        "QCheckBox::indicator:checked {"
+        "  background: %6; border-color: %6; }"
     ).arg(t.base, t.text, t.mantle, t.surface0, t.subtext0, t.blue, t.subtext1, t.surface1));
 }

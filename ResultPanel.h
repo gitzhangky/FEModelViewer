@@ -12,6 +12,8 @@
 #include <QGroupBox>
 #include <QPushButton>
 #include <QLabel>
+#include <QDoubleSpinBox>
+#include <QCheckBox>
 
 #include "FEResultData.h"
 #include "FEResultRepository.h"
@@ -37,6 +39,25 @@ public:
     /** @brief 清空面板 */
     void clearResults();
 
+    /** @brief 设置变形比例（供 MainWindow 自动比例回填） */
+    void setDeformScale(float scale);
+
+    /** @brief 获取当前帧的位移矢量场（无位移数据时返回空） */
+    FEVectorField currentDisplacement() const;
+
+    /** @brief 获取当前选中的标量场和标题（未选中时 field 为空） */
+    bool currentScalarField(FEScalarField& field, QString& title) const;
+
+    /** @brief 当前结果帧数 */
+    int frameCount() const;
+
+public slots:
+    /** @brief 跳到指定帧并应用云图（动画控制器调用） */
+    void applyFrame(int frameIndex);
+
+    /** @brief 只切换帧选择（不触发信号，供 MainWindow 控制顺序） */
+    void selectFrame(int frameIndex);
+
 signals:
     /** @brief 用户点击应用，发射标量场和标题 */
     void applyResult(const FEScalarField& field, const QString& title);
@@ -44,12 +65,32 @@ signals:
     /** @brief 用户点击清除 */
     void clearResult();
 
+    /** @brief 用户请求应用变形 */
+    void deformationRequested(float scale, bool overlayUndeformed);
+
+    /** @brief 用户请求清除变形 */
+    void deformationCleared();
+
+    /** @brief 用户请求自动计算变形比例 */
+    void autoScaleRequested();
+
+    /** @brief 动画播放 */
+    void animationPlay();
+
+    /** @brief 动画暂停 */
+    void animationPause();
+
+    /** @brief 动画停止 */
+    void animationStop();
+
 private slots:
     void onFrameChanged(int index);
     void onTypeChanged(int index);
     void onComponentChanged(int index);
     void onApplyClicked();
     void onClearClicked();
+    void onDeformApplyClicked();
+    void onDeformClearClicked();
 
 private:
     void setupUI();
@@ -68,4 +109,17 @@ private:
     QGroupBox* resultGroup_    = nullptr;
     QLabel* infoLabel_         = nullptr;
     std::vector<QLabel*> rowLabels_;
+
+    // ── 变形控制 ──
+    QGroupBox* deformGroup_       = nullptr;
+    QDoubleSpinBox* scaleSpinBox_ = nullptr;
+    QPushButton* autoScaleBtn_    = nullptr;
+    QCheckBox* overlayCheck_      = nullptr;
+    QPushButton* deformApplyBtn_  = nullptr;
+    QPushButton* deformClearBtn_  = nullptr;
+
+    // ── 动画控制 ──
+    QPushButton* playBtn_  = nullptr;
+    QPushButton* pauseBtn_ = nullptr;
+    QPushButton* stopBtn_  = nullptr;
 };

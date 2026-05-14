@@ -84,6 +84,12 @@ public:
     /** @brief 按 ID 列表选中节点或单元（供搜索框调用） */
     void selectByIds(PickMode mode, const std::vector<int>& ids);
 
+    /** @brief 设置未变形叠加网格（半透明线框显示原始形状） */
+    void setOverlayMesh(const Mesh& mesh);
+
+    /** @brief 控制叠加网格显隐 */
+    void setOverlayVisible(bool visible);
+
     /** @brief 设置是否使用顶点颜色（云图模式） */
     void setUseVertexColor(bool use);
 
@@ -290,6 +296,14 @@ private:
     bool deselectRectPending_ = false;  // 框选取消待处理
     QRect pendingDeselectRect_;         // 框选取消矩形
     glm::vec3 color_{0.55f, 0.75f, 0.73f};
+
+    // ── 叠加网格（未变形线框） ──
+    Mesh overlayMesh_;
+    QOpenGLVertexArrayObject overlayVao_;
+    QOpenGLBuffer overlayVbo_{QOpenGLBuffer::VertexBuffer};
+    int overlayVertCount_ = 0;
+    bool overlayVisible_ = false;
+    bool overlayNeedsUpload_ = false;
 
     // ── 坐标轴指示器 ──
     QOpenGLShaderProgram* axesShader_ = nullptr;

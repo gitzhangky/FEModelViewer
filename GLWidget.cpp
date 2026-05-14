@@ -198,6 +198,17 @@ void GLWidget::setVertexScalars(const std::vector<float>& scalars, float minVal,
     update();
 }
 
+void GLWidget::setOverlayMesh(const Mesh& mesh) {
+    overlayMesh_ = mesh;
+    overlayNeedsUpload_ = true;
+    update();
+}
+
+void GLWidget::setOverlayVisible(bool visible) {
+    overlayVisible_ = visible;
+    update();
+}
+
 void GLWidget::setUseVertexColor(bool use) {
     useVertexColor_ = use;
     if (!use) {
@@ -714,6 +725,35 @@ void GLWidget::paintGL() {
         // 仅视角变化：从缓存快速刷新轮廓边
         updateSilhouetteFromCache();
         silhouetteDirty_ = false;
+    }
+
+    // ── 绘制叠加网格（未变形线框） ──
+    if (overlayVisible_ && !overlayMesh_.edgeVertices.empty()) {
+        if (overlayNeedsUpload_) {
+            overlayNeedsUpload_ = false;
+            if (!overlayVao_.isCreated()) overlayVao_.create();
+            if (!overlayVbo_.isCreated()) overlayVbo_.create();
+            overlayVao_.bind();
+            overlayVbo_.bind();
+            overlayVbo_.allocate(overlayMesh_.edgeVertices.data(),
+                                static_cast<int>(overlayMesh_.edgeVertices.size() * sizeof(float)));
+            shader_->enableAttributeArray(0);
+            shader_->setAttributeBuffer(0, GL_FLOAT, 0, 3, 3 * sizeof(float));
+            overlayVbo_.release();
+            overlayVao_.release();
+            overlayVertCount_ = static_cast<int>(overlayMesh_.edgeVertices.size() / 3);
+        }
+        shader_->setUniformValue("uWireframe", true);
+        shader_->setUniformValue("uUseVertexColor", false);
+        shader_->setUniformValue("uColor", QVector3D(0.5f, 0.5f, 0.5f));
+        shader_->setUniformValue("uWireAlpha", 0.3f);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        overlayVao_.bind();
+        glLineWidth(1.0f);
+        glDrawArrays(GL_LINES, 0, overlayVertCount_);
+        overlayVao_.release();
+        glDisable(GL_BLEND);
     }
 
     if (selEdgeVertCount_ > 0 && selection_.hasSelection()) {
@@ -1799,20 +1839,38 @@ void GLWidget::selectByIds(PickMode mode, const std::vector<int>& ids) {
     selection_.clear();
 
     if (mode == PickMode::Node) {
-        for (int id : ids) selection_.selectedNodes.insert(id);
+        // 过滤：只保留网格中实际存在的节点 ID
+        std::unordered_set<int> validNodes(vertexToNode_.begin(), vertexToNode_.end());
+        for (int id : ids) {
+            if (validNodes.count(id))
+                selection_.selectedNodes.insert(id);
+        }
     } else if (mode == PickMode::Part) {
         for (int pi : ids) selectPart(pi);
     } else {
-        for (int id : ids) selection_.selectedElements.insert(id);
+        // 过滤：只保留渲染网格中存在的单元 ID（含三角面和 1D 边线）
+        std::unordered_set<int> validElems(triToElem_.begin(), triToElem_.end());
+        for (int eid : mesh_.elemEdgeToElement)
+            validElems.insert(eid);
+        for (int id : ids) {
+            if (validElems.count(id))
+                selection_.selectedElements.insert(id);
+        }
     }
 
     selectionDirty_ = true;
-    showLabels_ = true;
 
-    // 发射选中变更信号
-    std::vector<int> sortedIds(ids.begin(), ids.end());
-    std::sort(sortedIds.begin(), sortedIds.end());
-    emit selectionChanged(mode, static_cast<int>(sortedIds.size()), sortedIds);
+    // 发射选中变更信号（只包含实际匹配的 ID）
+    std::vector<int> matchedIds;
+    if (mode == PickMode::Node) {
+        matchedIds.assign(selection_.selectedNodes.begin(), selection_.selectedNodes.end());
+    } else if (mode == PickMode::Part) {
+        matchedIds.assign(ids.begin(), ids.end());
+    } else {
+        matchedIds.assign(selection_.selectedElements.begin(), selection_.selectedElements.end());
+    }
+    std::sort(matchedIds.begin(), matchedIds.end());
+    emit selectionChanged(mode, static_cast<int>(matchedIds.size()), matchedIds);
 
     if (mode == PickMode::Part) {
         std::vector<int> pickedParts;

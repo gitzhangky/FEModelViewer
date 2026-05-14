@@ -8,6 +8,7 @@
 #include "FEModelPanel.h"
 #include "FEParser.h"
 #include "FEMeshConverter.h"
+#include "FEProbe.h"
 #include "Theme.h"
 
 #include <QVBoxLayout>
@@ -350,9 +351,13 @@ QGroupBox* FEModelPanel::createSelectionGroup() {
     labelCheck_->setChecked(false);
     connect(labelCheck_, &QCheckBox::toggled, this, &FEModelPanel::labelVisibilityChanged);
 
+    probeValueLabel_ = new QLabel("结果值: -");
+    probeValueLabel_->setWordWrap(true);
+
     layout->addWidget(selModeLabel_);
     layout->addWidget(selCountLabel_);
     layout->addWidget(selIdsLabel_);
+    layout->addWidget(probeValueLabel_);
     layout->addWidget(labelCheck_);
 
     return group;
@@ -452,15 +457,99 @@ void FEModelPanel::updateSelectionInfo(PickMode mode, int count, const std::vect
 
     if (ids.empty()) {
         selIdsLabel_->setText("ID: -");
-    } else {
-        QStringList idStrs;
-        int limit = qMin(static_cast<int>(ids.size()), 20);
-        for (int i = 0; i < limit; ++i)
-            idStrs.append(QString::number(ids[i]));
-        QString text = "ID: " + idStrs.join(", ");
-        if (static_cast<int>(ids.size()) > 20)
-            text += QString(" ... (+%1)").arg(ids.size() - 20);
-        selIdsLabel_->setText(text);
+        probeValueLabel_->setText("结果值: -");
+        return;
     }
+
+    QStringList idStrs;
+    int limit = qMin(static_cast<int>(ids.size()), 20);
+    for (int i = 0; i < limit; ++i)
+        idStrs.append(QString::number(ids[i]));
+    QString text = "ID: " + idStrs.join(", ");
+    if (static_cast<int>(ids.size()) > 20)
+        text += QString(" ... (+%1)").arg(ids.size() - 20);
+    selIdsLabel_->setText(text);
+
+    if (!hasActiveField_ || mode == PickMode::Part) {
+        probeValueLabel_->setText("结果值: -");
+        return;
+    }
+
+    // 收集所有选中实体的探针值
+    std::vector<float> probeValues;
+    bool locationMatch =
+        (mode == PickMode::Node    && activeField_.location == FieldLocation::Node) ||
+        (mode == PickMode::Element && activeField_.location == FieldLocation::Element);
+
+    if (locationMatch) {
+        for (int id : ids) {
+            auto pv = FEProbe::valueAtEntity(activeField_, id);
+            if (pv.valid) probeValues.push_back(pv.value);
+        }
+    } else if (mode == PickMode::Element && activeField_.location == FieldLocation::Node) {
+        // 拾取单元，场在节点上 → 取该单元所有节点值的平均
+        for (int eid : ids) {
+            auto eit = currentModel_.elements.find(eid);
+            if (eit == currentModel_.elements.end()) continue;
+            float sum = 0.0f;
+            int n = 0;
+            for (int nid : eit->second.nodeIds) {
+                auto pv = FEProbe::valueAtEntity(activeField_, nid);
+                if (pv.valid) { sum += pv.value; ++n; }
+            }
+            if (n > 0) probeValues.push_back(sum / n);
+        }
+    } else if (mode == PickMode::Node && activeField_.location == FieldLocation::Element) {
+        // 拾取节点，场在单元上 → 查找包含该节点的单元，取平均
+        for (int nid : ids) {
+            float sum = 0.0f;
+            int n = 0;
+            for (const auto& [eid, elem] : currentModel_.elements) {
+                bool contains = false;
+                for (int enid : elem.nodeIds) {
+                    if (enid == nid) { contains = true; break; }
+                }
+                if (!contains) continue;
+                auto pv = FEProbe::valueAtEntity(activeField_, eid);
+                if (pv.valid) { sum += pv.value; ++n; }
+            }
+            if (n > 0) probeValues.push_back(sum / n);
+        }
+    }
+
+    if (probeValues.empty()) {
+        probeValueLabel_->setText("结果值: (无数据)");
+    } else if (probeValues.size() == 1) {
+        QString valText = QString("结果值: %1").arg(probeValues[0], 0, 'g', 6);
+        if (!activeField_.unit.empty())
+            valText += QString(" %1").arg(QString::fromStdString(activeField_.unit));
+        probeValueLabel_->setText(valText);
+    } else {
+        float minV = probeValues[0], maxV = probeValues[0], sum = 0.0f;
+        for (float v : probeValues) {
+            if (v < minV) minV = v;
+            if (v > maxV) maxV = v;
+            sum += v;
+        }
+        float avg = sum / static_cast<float>(probeValues.size());
+        QString unitStr;
+        if (!activeField_.unit.empty())
+            unitStr = " " + QString::fromStdString(activeField_.unit);
+        probeValueLabel_->setText(
+            QString("最小: %1 | 最大: %2 | 均值: %3%4")
+                .arg(minV, 0, 'g', 5).arg(maxV, 0, 'g', 5)
+                .arg(avg, 0, 'g', 5).arg(unitStr));
+    }
+}
+
+void FEModelPanel::setActiveScalarField(const FEScalarField& field) {
+    activeField_ = field;
+    hasActiveField_ = true;
+}
+
+void FEModelPanel::clearActiveScalarField() {
+    activeField_ = FEScalarField{};
+    hasActiveField_ = false;
+    probeValueLabel_->setText("结果值: -");
 }
 

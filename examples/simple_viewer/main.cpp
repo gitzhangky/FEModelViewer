@@ -11,6 +11,7 @@
 
 #include <glm/glm.hpp>
 
+#include "FEDeformation.h"
 #include "FEModel.h"
 #include "FEMeshConverter.h"
 #include "FERenderData.h"
@@ -40,11 +41,13 @@ public:
         auto* toolbar = addToolBar("Viewer");
         auto* reloadAction = toolbar->addAction("Reload Sample");
         auto* contourAction = toolbar->addAction("Show Sample Contour");
+        auto* deformAction = toolbar->addAction("Show Deformed");
         auto* fitAction = toolbar->addAction("Fit");
         auto* themeAction = toolbar->addAction("Toggle Theme");
 
         connect(reloadAction, &QAction::triggered, this, [this] { loadSampleModel(); });
         connect(contourAction, &QAction::triggered, this, [this] { showSampleContour(); });
+        connect(deformAction, &QAction::triggered, this, [this] { showDeformed(); });
         connect(fitAction, &QAction::triggered, this, [this] { fitModel(); });
         connect(themeAction, &QAction::triggered, this, [this] { toggleTheme(); });
 
@@ -104,6 +107,10 @@ private:
         auto* contourBtn = new QPushButton("Show Sample Contour", panel);
         connect(contourBtn, &QPushButton::clicked, this, [this] { showSampleContour(); });
         layout->addWidget(contourBtn);
+
+        auto* deformBtn = new QPushButton("Show Deformed", panel);
+        connect(deformBtn, &QPushButton::clicked, this, [this] { showDeformed(); });
+        layout->addWidget(deformBtn);
 
         auto* reloadBtn = new QPushButton("Reload Sample", panel);
         connect(reloadBtn, &QPushButton::clicked, this, [this] { loadSampleModel(); });
@@ -183,6 +190,47 @@ private:
         viewer_->setColorBarTitle("Sample Temperature [degC]");
         viewer_->setColorBarIdLabel("Node ID");
         viewer_->setColorBarExtremes(mapped.minId, mapped.minValue, mapped.maxId, mapped.maxValue);
+    }
+
+    void showDeformed() {
+        FEVectorField disp;
+        disp.name = "Sample Displacement";
+        disp.unit = "mm";
+        // 顶部四个节点向上拉伸，底部不动
+        disp.values = {
+            {1, {0.0f, 0.0f, 0.0f}},
+            {2, {0.0f, 0.0f, 0.0f}},
+            {3, {0.0f, 0.0f, 0.0f}},
+            {4, {0.0f, 0.0f, 0.0f}},
+            {5, {0.1f, 0.0f, 0.3f}},
+            {6, {-0.1f, 0.0f, 0.3f}},
+            {7, {-0.1f, 0.0f, 0.3f}},
+            {8, {0.1f, 0.0f, 0.3f}},
+        };
+
+        FEDeformationOptions opts;
+        opts.scale = FEDeformation::autoScale(model_, disp);
+        opts.overlayUndeformed = true;
+
+        FEModel deformed = FEDeformation::apply(model_, disp, opts);
+        FERenderData defRD = FEMeshConverter::toRenderData(deformed);
+
+        viewer_->setOverlayMesh(renderData_.mesh);
+        viewer_->setOverlayVisible(true);
+
+        viewer_->setMesh(defRD.mesh);
+        viewer_->setTriangleToElementMap(defRD.triangleToElement);
+        viewer_->setVertexToNodeMap(defRD.vertexToNode);
+        viewer_->setTriangleToPartMap(defRD.triangleToPart);
+        viewer_->setEdgeToPartMap(defRD.edgeToPart);
+        viewer_->setObjectColor(glm::vec3(0.55f, 0.75f, 0.73f));
+        fitModel();
+
+        statsLabel_->setText(QString(
+            "Deformed (scale: %1)\nNodes: %2\nElements: %3")
+            .arg(static_cast<double>(opts.scale), 0, 'f', 2)
+            .arg(deformed.nodeCount())
+            .arg(deformed.elementCount()));
     }
 
     void fitModel() {

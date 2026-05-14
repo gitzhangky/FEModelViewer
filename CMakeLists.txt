@@ -98,6 +98,9 @@ set(RENDER_HEADERS
     FEParser.h
     FEResultMapper.h
     FEResultRepository.h
+    FEDeformation.h
+    FEAnimationController.h
+    FEProbe.h
     Theme.h
 )
 
@@ -115,6 +118,9 @@ set(RENDER_SOURCES
     FEParser_unv.cpp
     FEResultMapper.cpp
     FEResultRepository.cpp
+    FEDeformation.cpp
+    FEAnimationController.cpp
+    FEProbe.cpp
 )
 
 # Shader 资源文件
@@ -251,6 +257,22 @@ if(BUILD_TESTING)
     target_link_libraries(test_result_repository PRIVATE FERender)
     add_test(NAME result_repository
         COMMAND test_result_repository
+    )
+
+    add_executable(test_deformation
+        tests/test_deformation.cpp
+    )
+    target_link_libraries(test_deformation PRIVATE FERender)
+    add_test(NAME deformation
+        COMMAND test_deformation
+    )
+
+    add_executable(test_probe
+        tests/test_probe.cpp
+    )
+    target_link_libraries(test_probe PRIVATE FERender)
+    add_test(NAME probe
+        COMMAND test_probe
     )
 
     add_test(NAME ferender_public_headers

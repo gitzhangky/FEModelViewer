@@ -7,6 +7,8 @@
 
 #include <algorithm>
 #include <unordered_map>
+#include <unordered_set>
+#include <limits>
 
 FEMappedScalars FEResultMapper::mapScalarToVertices(const FEScalarField& field,
                                                      const FERenderData& renderData,
@@ -21,9 +23,28 @@ FEMappedScalars FEResultMapper::mapScalarToVertices(const FEScalarField& field,
         return mapped;
     }
 
-    field.computeRangeWithIds(mapped.minValue, mapped.maxValue, mapped.minId, mapped.maxId);
-
     if (field.location == FieldLocation::Element) {
+        // 只在已渲染单元中计算极值（排除无几何的弹簧/连接单元）
+        std::unordered_set<int> renderedElems(renderData.triangleToElement.begin(),
+                                               renderData.triangleToElement.end());
+        // 也包含只有边线的 1D 单元
+        for (int eid : renderData.mesh.elemEdgeToElement)
+            renderedElems.insert(eid);
+
+        mapped.minValue =  std::numeric_limits<float>::max();
+        mapped.maxValue = -std::numeric_limits<float>::max();
+        mapped.minId = -1;
+        mapped.maxId = -1;
+        for (const auto& [id, val] : field.values) {
+            if (!renderedElems.count(id)) continue;
+            if (val < mapped.minValue) { mapped.minValue = val; mapped.minId = id; }
+            if (val > mapped.maxValue) { mapped.maxValue = val; mapped.maxId = id; }
+        }
+        if (mapped.minId == -1) {
+            mapped.minValue = 0.0f;
+            mapped.maxValue = 0.0f;
+        }
+
         const int triCount = static_cast<int>(renderData.triangleToElement.size());
         for (int t = 0; t < triCount; ++t) {
             int elemId = renderData.triangleToElement[t];
@@ -46,6 +67,8 @@ FEMappedScalars FEResultMapper::mapScalarToVertices(const FEScalarField& field,
         }
         return mapped;
     }
+
+    field.computeRangeWithIds(mapped.minValue, mapped.maxValue, mapped.minId, mapped.maxId);
 
     int directHits = 0;
     for (const auto& [nodeId, node] : model.nodes) {

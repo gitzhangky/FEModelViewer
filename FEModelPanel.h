@@ -24,6 +24,7 @@
 #include "FEPickResult.h"
 #include "FEGroup.h"
 #include "FEResultData.h"
+#include "FEField.h"
 
 struct Theme;
 
@@ -50,6 +51,12 @@ public:
 
     /** @brief 应用主题 */
     void applyTheme(const Theme& theme);
+
+    /** @brief 设置当前激活的标量场（探针显示用） */
+    void setActiveScalarField(const FEScalarField& field);
+
+    /** @brief 清除激活的标量场 */
+    void clearActiveScalarField();
 
     /** @brief 获取当前模型 */
     const FEModel& currentModel() const { return currentModel_; }
@@ -108,6 +115,11 @@ private:
     QLabel* selCountLabel_  = nullptr;
     QLabel* selIdsLabel_    = nullptr;
     QCheckBox* labelCheck_  = nullptr;
+    QLabel* probeValueLabel_ = nullptr;
+
+    // ── 探针 ──
+    FEScalarField activeField_;
+    bool hasActiveField_ = false;
 
     // ── 搜索 ──
     QComboBox* searchTypeCombo_ = nullptr;
