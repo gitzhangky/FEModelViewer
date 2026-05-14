@@ -984,9 +984,14 @@ void GLWidget::paintGL() {
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
         shader_->setUniformValue("uWireAlpha", 0.6f);
+        // 等值面位于模型内部，需关闭深度测试才能透过外壳看到。
+        glDisable(GL_DEPTH_TEST);
+        glDisable(GL_CULL_FACE);
         isoVao_.bind();
         glDrawElements(GL_TRIANGLES, isoIndexCount_, GL_UNSIGNED_INT, nullptr);
         isoVao_.release();
+        glEnable(GL_CULL_FACE);
+        glEnable(GL_DEPTH_TEST);
         glDisable(GL_BLEND);
         shader_->setUniformValue("uSurfaceAlpha", 1.0f);
     }
