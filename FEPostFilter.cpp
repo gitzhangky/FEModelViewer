@@ -125,65 +125,15 @@ static unsigned int appendClipVertex(FERenderData& result, const ClipVertex& v) 
     return newIndex;
 }
 
-static void rebuildTriangleEdges(FERenderData& result) {
-    result.mesh.edgeVertices.clear();
-    result.mesh.edgeIndices.clear();
-    result.edgeToPart.clear();
-
-    struct EdgeKey {
-        unsigned int a;
-        unsigned int b;
-        bool operator==(const EdgeKey& other) const {
-            return a == other.a && b == other.b;
-        }
-    };
-    struct EdgeHash {
-        size_t operator()(const EdgeKey& edge) const {
-            size_t h = std::hash<unsigned int>{}(edge.a);
-            h ^= std::hash<unsigned int>{}(edge.b) + 0x9e3779b9 + (h << 6) + (h >> 2);
-            return h;
-        }
-    };
-
-    std::unordered_set<EdgeKey, EdgeHash> seen;
-    int triCount = result.triangleCount();
-    for (int ti = 0; ti < triCount; ++ti) {
-        unsigned int tri[3] = {
-            result.mesh.indices[ti * 3],
-            result.mesh.indices[ti * 3 + 1],
-            result.mesh.indices[ti * 3 + 2],
-        };
-        for (int e = 0; e < 3; ++e) {
-            unsigned int va = tri[e];
-            unsigned int vb = tri[(e + 1) % 3];
-            EdgeKey key{std::min(va, vb), std::max(va, vb)};
-            if (seen.find(key) != seen.end()) continue;
-            seen.insert(key);
-
-            unsigned int edgeIndex = static_cast<unsigned int>(result.mesh.edgeVertices.size() / 3);
-            for (unsigned int v : {va, vb}) {
-                int base = static_cast<int>(v) * 6;
-                result.mesh.edgeVertices.push_back(result.mesh.vertices[base]);
-                result.mesh.edgeVertices.push_back(result.mesh.vertices[base + 1]);
-                result.mesh.edgeVertices.push_back(result.mesh.vertices[base + 2]);
-            }
-            result.mesh.edgeIndices.push_back(edgeIndex);
-            result.mesh.edgeIndices.push_back(edgeIndex + 1);
-
-            if (ti < static_cast<int>(result.triangleToPart.size()))
-                result.edgeToPart.push_back(result.triangleToPart[ti]);
-            else
-                result.edgeToPart.push_back(-1);
-        }
-    }
-}
-
-// 过滤边线数据：保留中点在平面正/负侧的边
-static void filterEdgesByPlane(const FERenderData& input, FERenderData& result,
-                               const FEPlane& plane, bool keepPositiveSide) {
+// 对输入网格的 FE 单元/面边线按平面做线段裁剪：
+// - 两端均在保留侧 → 整段保留
+// - 一端在外侧 → 在平面交点截断，保留内侧那一段
+// - 两端均在外侧 → 丢弃
+// 这样保留的是真正的 FE 元素边界（与原始网格线框一致），
+// 而不是把所有内部三角剖分对角线都画出来。
+static void clipEdgesByPlane(const FERenderData& input, FERenderData& result,
+                             const FEPlane& plane, bool keepPositiveSide) {
     int edgeCount = static_cast<int>(input.mesh.edgeIndices.size() / 2);
-    std::unordered_map<unsigned int, unsigned int> edgeVertRemap;
-
     for (int ei = 0; ei < edgeCount; ++ei) {
         unsigned int oldV0 = input.mesh.edgeIndices[ei * 2];
         unsigned int oldV1 = input.mesh.edgeIndices[ei * 2 + 1];
@@ -193,25 +143,38 @@ static void filterEdgesByPlane(const FERenderData& input, FERenderData& result,
         glm::vec3 p1(input.mesh.edgeVertices[oldV1 * 3],
                      input.mesh.edgeVertices[oldV1 * 3 + 1],
                      input.mesh.edgeVertices[oldV1 * 3 + 2]);
-        glm::vec3 mid = (p0 + p1) * 0.5f;
 
-        float dist = glm::dot(mid - plane.origin, plane.normal);
-        if ((dist >= 0.0f) != keepPositiveSide) continue;
+        float d0 = glm::dot(p0 - plane.origin, plane.normal);
+        float d1 = glm::dot(p1 - plane.origin, plane.normal);
+        bool keep0 = keepDistance(d0, keepPositiveSide);
+        bool keep1 = keepDistance(d1, keepPositiveSide);
 
-        for (int k = 0; k < 2; ++k) {
-            unsigned int oldV = input.mesh.edgeIndices[ei * 2 + k];
-            auto it = edgeVertRemap.find(oldV);
-            if (it != edgeVertRemap.end()) {
-                result.mesh.edgeIndices.push_back(it->second);
-            } else {
-                unsigned int newV = static_cast<unsigned int>(result.mesh.edgeVertices.size() / 3);
-                int base = oldV * 3;
-                for (int j = 0; j < 3; ++j)
-                    result.mesh.edgeVertices.push_back(input.mesh.edgeVertices[base + j]);
-                edgeVertRemap[oldV] = newV;
-                result.mesh.edgeIndices.push_back(newV);
-            }
+        glm::vec3 a, b;
+        if (keep0 && keep1) {
+            a = p0; b = p1;
+        } else if (!keep0 && !keep1) {
+            continue;
+        } else {
+            float denom = d0 - d1;
+            if (std::abs(denom) <= kPlaneEps) continue;
+            float t = d0 / denom;
+            glm::vec3 cut = p0 + t * (p1 - p0);
+            if (keep0) { a = p0; b = cut; }
+            else       { a = cut; b = p1; }
         }
+
+        if (samePoint(a, b)) continue;
+
+        unsigned int newIdx = static_cast<unsigned int>(result.mesh.edgeVertices.size() / 3);
+        result.mesh.edgeVertices.push_back(a.x);
+        result.mesh.edgeVertices.push_back(a.y);
+        result.mesh.edgeVertices.push_back(a.z);
+        result.mesh.edgeVertices.push_back(b.x);
+        result.mesh.edgeVertices.push_back(b.y);
+        result.mesh.edgeVertices.push_back(b.z);
+        result.mesh.edgeIndices.push_back(newIdx);
+        result.mesh.edgeIndices.push_back(newIdx + 1);
+
         if (ei < static_cast<int>(input.edgeToPart.size()))
             result.edgeToPart.push_back(input.edgeToPart[ei]);
         else
@@ -417,7 +380,7 @@ FERenderData FEPostFilter::clipByPlane(const FERenderData& input,
         }
     }
 
-    rebuildTriangleEdges(result);
+    clipEdgesByPlane(input, result, plane, keepPositiveSide);
     filterElemEdges(input, result);
 
     return result;
