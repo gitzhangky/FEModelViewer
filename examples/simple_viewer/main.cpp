@@ -12,6 +12,7 @@
 #include <glm/glm.hpp>
 
 #include "FEDeformation.h"
+#include "FEIsoSurface.h"
 #include "FEModel.h"
 #include "FEMeshConverter.h"
 #include "FEPostFilter.h"
@@ -120,6 +121,10 @@ private:
         auto* clipBtn = new QPushButton("Clip Half", panel);
         connect(clipBtn, &QPushButton::clicked, this, [this] { showClipHalf(); });
         layout->addWidget(clipBtn);
+
+        auto* isoBtn = new QPushButton("Iso-Surface (T=50)", panel);
+        connect(isoBtn, &QPushButton::clicked, this, [this] { showIsoSurface(); });
+        layout->addWidget(isoBtn);
 
         auto* reloadBtn = new QPushButton("Reload Sample", panel);
         connect(reloadBtn, &QPushButton::clicked, this, [this] { loadSampleModel(); });
@@ -257,6 +262,25 @@ private:
         viewer_->setTriangleToPartMap(filtered.triangleToPart);
 
         statsLabel_->setText("Threshold: [40, 60]");
+    }
+
+    void showIsoSurface() {
+        // 节点温度场：底面 15-45，顶面 55-85，iso=50 应切出立方体中部一张曲面
+        FEScalarField field;
+        field.name = "Sample Temperature";
+        field.location = FieldLocation::Node;
+        field.values = {
+            {1, 15.0f}, {2, 25.0f}, {3, 35.0f}, {4, 45.0f},
+            {5, 55.0f}, {6, 65.0f}, {7, 75.0f}, {8, 85.0f},
+        };
+
+        Mesh iso = FEIsoSurface::extract(model_, field, 50.0f);
+        viewer_->setIsoSurfaceMesh(iso);
+        viewer_->setOverlayMesh(renderData_.mesh);
+        viewer_->setOverlayVisible(true);
+
+        statsLabel_->setText(QString("Iso-surface T=50 (%1 triangles)\nOriginal cube shown as wireframe")
+                             .arg(static_cast<int>(iso.indices.size() / 3)));
     }
 
     void showClipHalf() {

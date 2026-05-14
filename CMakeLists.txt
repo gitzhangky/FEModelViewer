@@ -287,6 +287,17 @@ if(BUILD_TESTING)
         COMMAND test_post_filter
     )
 
+    add_executable(test_iso_cube_data
+        tests/test_iso_cube_data.cpp
+    )
+    target_link_libraries(test_iso_cube_data PRIVATE FERender)
+    add_test(NAME iso_cube_data
+        COMMAND test_iso_cube_data
+    )
+    set_tests_properties(iso_cube_data PROPERTIES
+        ENVIRONMENT "FERENDER_TEST_DATA_DIR=${CMAKE_CURRENT_SOURCE_DIR}/examples/data"
+    )
+
     qt5_wrap_cpp(TEST_RESULT_PANEL_MOC_SRCS ResultPanel.h)
     add_executable(test_result_panel
         tests/test_result_panel.cpp
