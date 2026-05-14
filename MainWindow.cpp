@@ -34,6 +34,7 @@
 #include "FEIsoSurface.h"
 
 #include <glm/glm.hpp>
+#include <set>
 #include <vector>
 #include <QHBoxLayout>
 #include <QVBoxLayout>
@@ -865,6 +866,22 @@ void MainWindow::applyThreshold(float minVal, float maxVal)
 
     if (contourActive_)
         applyContour(activeContourField_, activeContourTitle_);
+
+    int total = rd.triangleCount();
+    int kept = filteredRD_.triangleCount();
+    int totalElems = static_cast<int>(elemField.values.size());
+    int keptElems = 0;
+    {
+        std::set<int> seen;
+        for (int eid : filteredRD_.triangleToElement) seen.insert(eid);
+        keptElems = static_cast<int>(seen.size());
+    }
+    statusBar()->showMessage(
+        QString("阈值 [%1, %2]: 保留 %3/%4 单元，%5/%6 三角面")
+            .arg(minVal, 0, 'f', 4).arg(maxVal, 0, 'f', 4)
+            .arg(keptElems).arg(totalElems)
+            .arg(kept).arg(total),
+        8000);
 }
 
 void MainWindow::applyClipPlane(const glm::vec3& origin, const glm::vec3& normal, bool keepPositive)
