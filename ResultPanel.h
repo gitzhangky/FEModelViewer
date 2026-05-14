@@ -14,7 +14,9 @@
 #include <QLabel>
 #include <QDoubleSpinBox>
 #include <QCheckBox>
+#include <QSlider>
 
+#include <glm/glm.hpp>
 #include "FEResultData.h"
 #include "FEResultRepository.h"
 #include "FEField.h"
@@ -83,6 +85,21 @@ signals:
     /** @brief 动画停止 */
     void animationStop();
 
+    /** @brief 阈值过滤请求 */
+    void thresholdRequested(float minVal, float maxVal);
+
+    /** @brief 裁剪平面请求 */
+    void clipPlaneRequested(const glm::vec3& origin, const glm::vec3& normal, bool keepPositive);
+
+    /** @brief 切片平面请求 */
+    void slicePlaneRequested(const glm::vec3& origin, const glm::vec3& normal);
+
+    /** @brief 等值面请求 */
+    void isoSurfaceRequested(float isoValue);
+
+    /** @brief 清除所有过滤 */
+    void filterCleared();
+
 private slots:
     void onFrameChanged(int index);
     void onTypeChanged(int index);
@@ -91,6 +108,8 @@ private slots:
     void onClearClicked();
     void onDeformApplyClicked();
     void onDeformClearClicked();
+    void onFilterApplyClicked();
+    void onFilterClearClicked();
 
 private:
     void setupUI();
@@ -122,4 +141,29 @@ private:
     QPushButton* playBtn_  = nullptr;
     QPushButton* pauseBtn_ = nullptr;
     QPushButton* stopBtn_  = nullptr;
+
+    // ── 过滤控制 ──
+    QGroupBox* filterGroup_           = nullptr;
+    QComboBox* filterTypeCombo_       = nullptr;
+
+    // 阈值
+    QDoubleSpinBox* threshMinSpin_    = nullptr;
+    QDoubleSpinBox* threshMaxSpin_    = nullptr;
+
+    // 裁剪/切片平面
+    QComboBox* planeAxisCombo_        = nullptr;
+    QDoubleSpinBox* planeOffsetSpin_  = nullptr;
+    QCheckBox* clipSideCheck_         = nullptr;
+
+    // 等值面
+    QDoubleSpinBox* isoValueSpin_     = nullptr;
+
+    QPushButton* filterApplyBtn_      = nullptr;
+    QPushButton* filterClearBtn_      = nullptr;
+
+    // 过滤分组中的 widget 容器，按过滤类型显隐
+    QWidget* threshWidget_  = nullptr;
+    QWidget* clipWidget_    = nullptr;
+    QWidget* sliceWidget_   = nullptr;
+    QWidget* isoWidget_     = nullptr;
 };

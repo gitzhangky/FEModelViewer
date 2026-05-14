@@ -14,6 +14,7 @@
 #include "FEDeformation.h"
 #include "FEModel.h"
 #include "FEMeshConverter.h"
+#include "FEPostFilter.h"
 #include "FERenderData.h"
 #include "FEResultMapper.h"
 #include "GLWidget.h"
@@ -111,6 +112,14 @@ private:
         auto* deformBtn = new QPushButton("Show Deformed", panel);
         connect(deformBtn, &QPushButton::clicked, this, [this] { showDeformed(); });
         layout->addWidget(deformBtn);
+
+        auto* threshBtn = new QPushButton("Threshold High Values", panel);
+        connect(threshBtn, &QPushButton::clicked, this, [this] { showThreshold(); });
+        layout->addWidget(threshBtn);
+
+        auto* clipBtn = new QPushButton("Clip Half", panel);
+        connect(clipBtn, &QPushButton::clicked, this, [this] { showClipHalf(); });
+        layout->addWidget(clipBtn);
 
         auto* reloadBtn = new QPushButton("Reload Sample", panel);
         connect(reloadBtn, &QPushButton::clicked, this, [this] { loadSampleModel(); });
@@ -231,6 +240,37 @@ private:
             .arg(static_cast<double>(opts.scale), 0, 'f', 2)
             .arg(deformed.nodeCount())
             .arg(deformed.elementCount()));
+    }
+
+    void showThreshold() {
+        // 构建节点温度场，映射到单元平均值，然后阈值过滤高温区
+        FEScalarField field;
+        field.name = "Sample Temperature";
+        field.location = FieldLocation::Element;
+        // 单元 1001 的平均温度 = (15+25+35+45+55+65+75+85)/8 = 50
+        field.values[1001] = 50.0f;
+
+        auto filtered = FEPostFilter::thresholdByElementValue(renderData_, field, 40.0f, 60.0f);
+        viewer_->setMesh(filtered.mesh);
+        viewer_->setTriangleToElementMap(filtered.triangleToElement);
+        viewer_->setVertexToNodeMap(filtered.vertexToNode);
+        viewer_->setTriangleToPartMap(filtered.triangleToPart);
+
+        statsLabel_->setText("Threshold: [40, 60]");
+    }
+
+    void showClipHalf() {
+        FEPlane plane;
+        plane.origin = glm::vec3(0.0f);
+        plane.normal = glm::vec3(1.0f, 0.0f, 0.0f);
+
+        auto clipped = FEPostFilter::clipByPlane(renderData_, plane, true);
+        viewer_->setMesh(clipped.mesh);
+        viewer_->setTriangleToElementMap(clipped.triangleToElement);
+        viewer_->setVertexToNodeMap(clipped.vertexToNode);
+        viewer_->setTriangleToPartMap(clipped.triangleToPart);
+
+        statsLabel_->setText("Clipped: +X half");
     }
 
     void fitModel() {

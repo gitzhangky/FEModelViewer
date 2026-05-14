@@ -93,6 +93,18 @@ public:
     /** @brief 设置是否使用顶点颜色（云图模式） */
     void setUseVertexColor(bool use);
 
+    /** @brief 设置切片交线（GL_LINES 显示） */
+    void setSliceLines(const std::vector<float>& lineVertices);
+
+    /** @brief 清除切片交线 */
+    void clearSliceLines();
+
+    /** @brief 设置等值面网格（半透明叠加显示） */
+    void setIsoSurfaceMesh(const Mesh& mesh);
+
+    /** @brief 清除等值面网格 */
+    void clearIsoSurface();
+
     /** @brief 上传 per-vertex 标量值到 GPU，由片段着色器做量化 + 颜色映射 */
     void setVertexScalars(const std::vector<float>& scalars, float minVal, float maxVal, int numBands);
 
@@ -304,6 +316,20 @@ private:
     int overlayVertCount_ = 0;
     bool overlayVisible_ = false;
     bool overlayNeedsUpload_ = false;
+
+    // ── 切片交线 ──
+    QOpenGLVertexArrayObject sliceVao_;
+    QOpenGLBuffer sliceVbo_{QOpenGLBuffer::VertexBuffer};
+    int sliceVertCount_ = 0;
+    bool sliceNeedsUpload_ = false;
+
+    // ── 等值面 ──
+    Mesh isoMesh_;
+    QOpenGLVertexArrayObject isoVao_;
+    QOpenGLBuffer isoVbo_{QOpenGLBuffer::VertexBuffer};
+    QOpenGLBuffer* isoIbo_ = nullptr;
+    int isoIndexCount_ = 0;
+    bool isoNeedsUpload_ = false;
 
     // ── 坐标轴指示器 ──
     QOpenGLShaderProgram* axesShader_ = nullptr;

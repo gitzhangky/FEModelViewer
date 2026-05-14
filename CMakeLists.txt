@@ -101,6 +101,8 @@ set(RENDER_HEADERS
     FEDeformation.h
     FEAnimationController.h
     FEProbe.h
+    FEPostFilter.h
+    FEIsoSurface.h
     Theme.h
 )
 
@@ -121,6 +123,8 @@ set(RENDER_SOURCES
     FEDeformation.cpp
     FEAnimationController.cpp
     FEProbe.cpp
+    FEPostFilter.cpp
+    FEIsoSurface.cpp
 )
 
 # Shader 资源文件
@@ -273,6 +277,14 @@ if(BUILD_TESTING)
     target_link_libraries(test_probe PRIVATE FERender)
     add_test(NAME probe
         COMMAND test_probe
+    )
+
+    add_executable(test_post_filter
+        tests/test_post_filter.cpp
+    )
+    target_link_libraries(test_post_filter PRIVATE FERender)
+    add_test(NAME post_filter
+        COMMAND test_post_filter
     )
 
     add_test(NAME ferender_public_headers

@@ -26,6 +26,7 @@
 #include "Theme.h"
 #include "FERenderData.h"
 #include "FEModel.h"
+#include "FEField.h"
 
 class GLWidget;
 class MonitorPanel;
@@ -56,6 +57,11 @@ private:
     void applyDeformation(float scale, bool overlayUndeformed);
     void clearDeformation();
     void applyContour(const FEScalarField& field, const QString& title);
+    void applyThreshold(float minVal, float maxVal);
+    void applyClipPlane(const glm::vec3& origin, const glm::vec3& normal, bool keepPositive);
+    void applySlicePlane(const glm::vec3& origin, const glm::vec3& normal);
+    void applyIsoSurface(float isoValue);
+    void clearFilters();
     const FERenderData& activeRenderData() const;
     const FEModel& activeModel() const;
 
@@ -89,6 +95,13 @@ private:
     bool           deformOverlay_  = false;
     FERenderData   deformedRD_;
     FEModel        deformedModel_;
+
+    // 过滤状态
+    bool           filterActive_   = false;
+    FERenderData   filteredRD_;
+    FEScalarField  activeContourField_;
+    QString        activeContourTitle_;
+    bool           contourActive_  = false;
 
     // 主题相关
     Theme          currentTheme_;

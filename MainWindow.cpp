@@ -30,6 +30,8 @@
 #include "FEResultMapper.h"
 #include "FEAnimationController.h"
 #include "FEDeformation.h"
+#include "FEPostFilter.h"
+#include "FEIsoSurface.h"
 
 #include <glm/glm.hpp>
 #include <vector>
@@ -189,6 +191,9 @@ MainWindow::MainWindow() {
     // 清除云图 → 恢复部件颜色
     connect(resultPanel_, &ResultPanel::clearResult,
             this, [this]() {
+        contourActive_ = false;
+        activeContourField_ = FEScalarField{};
+        activeContourTitle_.clear();
         glWidget_->setUseVertexColor(false);
         glWidget_->setColorBarVisible(false);
         glWidget_->update();
@@ -247,6 +252,18 @@ MainWindow::MainWindow() {
         float scale = FEDeformation::autoScale(model, disp);
         resultPanel_->setDeformScale(scale);
     });
+
+    // ── 过滤 ──
+    connect(resultPanel_, &ResultPanel::thresholdRequested,
+            this, &MainWindow::applyThreshold);
+    connect(resultPanel_, &ResultPanel::clipPlaneRequested,
+            this, &MainWindow::applyClipPlane);
+    connect(resultPanel_, &ResultPanel::slicePlaneRequested,
+            this, &MainWindow::applySlicePlane);
+    connect(resultPanel_, &ResultPanel::isoSurfaceRequested,
+            this, &MainWindow::applyIsoSurface);
+    connect(resultPanel_, &ResultPanel::filterCleared,
+            this, &MainWindow::clearFilters);
 
     // ── 初始主题（默认深色）──
     currentTheme_ = Theme::dark();
@@ -749,10 +766,14 @@ void MainWindow::clearDeformation()
 
 void MainWindow::applyContour(const FEScalarField& field, const QString& title)
 {
+    activeContourField_ = field;
+    activeContourTitle_ = title;
+    contourActive_ = true;
+
     const FEModel& model = activeModel();
     if (model.nodes.empty()) return;
 
-    const FERenderData& rd = activeRenderData();
+    const FERenderData& rd = filterActive_ ? filteredRD_ : activeRenderData();
     int vertCount = static_cast<int>(rd.mesh.vertices.size() / 6);
     if (vertCount == 0) return;
 
@@ -766,4 +787,117 @@ void MainWindow::applyContour(const FEScalarField& field, const QString& title)
     glWidget_->setColorBarTitle(title);
     glWidget_->setColorBarIdLabel(mapped.location == FieldLocation::Element ? "Ele ID" : "Node ID");
     glWidget_->setColorBarExtremes(mapped.minId, mapped.minValue, mapped.maxId, mapped.maxValue);
+}
+
+// ── 过滤方法 ──
+
+static void applyFilteredRD(GLWidget* gl, const FERenderData& rd,
+                             const std::vector<FEPart>& parts) {
+    gl->setMesh(rd.mesh);
+    gl->setTriangleToElementMap(rd.triangleToElement);
+    gl->setVertexToNodeMap(rd.vertexToNode);
+    gl->setTriangleToPartMap(rd.triangleToPart);
+    gl->setEdgeToPartMap(rd.edgeToPart);
+}
+
+void MainWindow::applyThreshold(float minVal, float maxVal)
+{
+    const FERenderData& rd = activeRenderData();
+    if (rd.triangleCount() == 0) return;
+
+    FEScalarField field;
+    QString title;
+    if (!resultPanel_->currentScalarField(field, title)) return;
+
+    // 对于节点场的阈值，需要先把节点值映射到单元上（取平均）
+    FEScalarField elemField = field;
+    if (field.location == FieldLocation::Node) {
+        elemField.values.clear();
+        elemField.location = FieldLocation::Element;
+        const FEModel& model = activeModel();
+        for (const auto& [eid, elem] : model.elements) {
+            float sum = 0.0f;
+            int n = 0;
+            for (int nid : elem.nodeIds) {
+                auto it = field.values.find(nid);
+                if (it != field.values.end()) { sum += it->second; ++n; }
+            }
+            if (n > 0) elemField.values[eid] = sum / n;
+        }
+    }
+
+    filteredRD_ = FEPostFilter::thresholdByElementValue(rd, elemField, minVal, maxVal);
+    filterActive_ = true;
+
+    glWidget_->clearSliceLines();
+    glWidget_->clearIsoSurface();
+    applyFilteredRD(glWidget_, filteredRD_, {});
+
+    if (contourActive_)
+        applyContour(activeContourField_, activeContourTitle_);
+}
+
+void MainWindow::applyClipPlane(const glm::vec3& origin, const glm::vec3& normal, bool keepPositive)
+{
+    const FERenderData& rd = activeRenderData();
+    if (rd.triangleCount() == 0) return;
+
+    FEPlane plane;
+    plane.origin = origin;
+    plane.normal = normal;
+
+    filteredRD_ = FEPostFilter::clipByPlane(rd, plane, keepPositive);
+    filterActive_ = true;
+
+    glWidget_->clearSliceLines();
+    glWidget_->clearIsoSurface();
+    applyFilteredRD(glWidget_, filteredRD_, {});
+
+    if (contourActive_)
+        applyContour(activeContourField_, activeContourTitle_);
+}
+
+void MainWindow::applySlicePlane(const glm::vec3& origin, const glm::vec3& normal)
+{
+    glWidget_->clearSliceLines();
+    glWidget_->clearIsoSurface();
+
+    const FERenderData& rd = filterActive_ ? filteredRD_ : activeRenderData();
+    if (rd.triangleCount() == 0) return;
+
+    FEPlane plane;
+    plane.origin = origin;
+    plane.normal = normal;
+
+    FESliceResult slice = FEPostFilter::sliceByPlane(rd, plane);
+    glWidget_->setSliceLines(slice.lineVertices);
+}
+
+void MainWindow::applyIsoSurface(float isoValue)
+{
+    glWidget_->clearSliceLines();
+    glWidget_->clearIsoSurface();
+
+    const FEModel& model = activeModel();
+    if (model.nodes.empty()) return;
+
+    FEScalarField field;
+    QString title;
+    if (!resultPanel_->currentScalarField(field, title)) return;
+
+    Mesh iso = FEIsoSurface::extract(model, field, isoValue);
+    glWidget_->setIsoSurfaceMesh(iso);
+}
+
+void MainWindow::clearFilters()
+{
+    filterActive_ = false;
+    glWidget_->clearSliceLines();
+    glWidget_->clearIsoSurface();
+
+    const FERenderData& rd = activeRenderData();
+    applyFilteredRD(glWidget_, rd, {});
+
+    if (contourActive_)
+        applyContour(activeContourField_, activeContourTitle_);
 }

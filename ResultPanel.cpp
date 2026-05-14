@@ -143,6 +143,107 @@ void ResultPanel::setupUI()
     deformLayout->addStretch(1);
 
     layout->addWidget(deformGroup_);
+
+    // ── 过滤控制分组 ──
+    filterGroup_ = new QGroupBox("过滤");
+    auto* filterLayout = new QVBoxLayout(filterGroup_);
+    filterLayout->setContentsMargins(8, 12, 8, 8);
+    filterLayout->setSpacing(6);
+
+    {
+        auto* typeRow = new QHBoxLayout;
+        typeRow->addWidget(new QLabel("类型:"));
+        filterTypeCombo_ = new QComboBox;
+        filterTypeCombo_->addItems({"阈值", "裁剪平面", "切片平面", "等值面"});
+        typeRow->addWidget(filterTypeCombo_);
+        filterLayout->addLayout(typeRow);
+    }
+
+    // 阈值控件
+    threshWidget_ = new QWidget;
+    {
+        auto* tl = new QVBoxLayout(threshWidget_);
+        tl->setContentsMargins(0, 0, 0, 0);
+        tl->setSpacing(4);
+        auto* r1 = new QHBoxLayout;
+        r1->addWidget(new QLabel("最小值:"));
+        threshMinSpin_ = new QDoubleSpinBox;
+        threshMinSpin_->setRange(-1e12, 1e12);
+        threshMinSpin_->setDecimals(4);
+        r1->addWidget(threshMinSpin_);
+        tl->addLayout(r1);
+        auto* r2 = new QHBoxLayout;
+        r2->addWidget(new QLabel("最大值:"));
+        threshMaxSpin_ = new QDoubleSpinBox;
+        threshMaxSpin_->setRange(-1e12, 1e12);
+        threshMaxSpin_->setDecimals(4);
+        threshMaxSpin_->setValue(1000.0);
+        r2->addWidget(threshMaxSpin_);
+        tl->addLayout(r2);
+    }
+    filterLayout->addWidget(threshWidget_);
+
+    // 裁剪平面控件
+    clipWidget_ = new QWidget;
+    {
+        auto* cl = new QVBoxLayout(clipWidget_);
+        cl->setContentsMargins(0, 0, 0, 0);
+        cl->setSpacing(4);
+        auto* r1 = new QHBoxLayout;
+        r1->addWidget(new QLabel("轴:"));
+        planeAxisCombo_ = new QComboBox;
+        planeAxisCombo_->addItems({"X", "Y", "Z"});
+        r1->addWidget(planeAxisCombo_);
+        r1->addWidget(new QLabel("偏移:"));
+        planeOffsetSpin_ = new QDoubleSpinBox;
+        planeOffsetSpin_->setRange(-1e6, 1e6);
+        planeOffsetSpin_->setDecimals(3);
+        r1->addWidget(planeOffsetSpin_);
+        cl->addLayout(r1);
+        clipSideCheck_ = new QCheckBox("保留正方向");
+        clipSideCheck_->setChecked(true);
+        cl->addWidget(clipSideCheck_);
+    }
+    filterLayout->addWidget(clipWidget_);
+    clipWidget_->setVisible(false);
+
+    // 切片平面控件（复用裁剪的轴/偏移参数）
+    sliceWidget_ = new QWidget;
+    {
+        auto* sl = new QVBoxLayout(sliceWidget_);
+        sl->setContentsMargins(0, 0, 0, 0);
+        sl->addWidget(new QLabel("(使用裁剪平面的轴和偏移参数)"));
+    }
+    filterLayout->addWidget(sliceWidget_);
+    sliceWidget_->setVisible(false);
+
+    // 等值面控件
+    isoWidget_ = new QWidget;
+    {
+        auto* il = new QVBoxLayout(isoWidget_);
+        il->setContentsMargins(0, 0, 0, 0);
+        auto* r1 = new QHBoxLayout;
+        r1->addWidget(new QLabel("等值:"));
+        isoValueSpin_ = new QDoubleSpinBox;
+        isoValueSpin_->setRange(-1e12, 1e12);
+        isoValueSpin_->setDecimals(4);
+        r1->addWidget(isoValueSpin_);
+        il->addLayout(r1);
+    }
+    filterLayout->addWidget(isoWidget_);
+    isoWidget_->setVisible(false);
+
+    {
+        auto* btnRow = new QHBoxLayout;
+        filterApplyBtn_ = new QPushButton("应用过滤");
+        filterClearBtn_ = new QPushButton("清除过滤");
+        filterClearBtn_->setEnabled(false);
+        btnRow->addWidget(filterApplyBtn_);
+        btnRow->addWidget(filterClearBtn_);
+        filterLayout->addLayout(btnRow);
+    }
+
+    layout->addWidget(filterGroup_);
     layout->addStretch(1);
 
     // 默认主题在 MainWindow 中统一调用 applyTheme() 设置
@@ -164,6 +265,18 @@ void ResultPanel::setupUI()
     connect(playBtn_, &QPushButton::clicked, this, &ResultPanel::animationPlay);
     connect(pauseBtn_, &QPushButton::clicked, this, &ResultPanel::animationPause);
     connect(stopBtn_, &QPushButton::clicked, this, &ResultPanel::animationStop);
+
+    // 过滤控制
+    connect(filterTypeCombo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int idx) {
+        const bool usesPlane = (idx == 1 || idx == 2);
+        threshWidget_->setVisible(idx == 0);
+        clipWidget_->setVisible(usesPlane);
+        clipSideCheck_->setVisible(idx == 1);
+        sliceWidget_->setVisible(idx == 2);
+        isoWidget_->setVisible(idx == 3);
+    });
+    connect(filterApplyBtn_, &QPushButton::clicked, this, &ResultPanel::onFilterApplyClicked);
+    connect(filterClearBtn_, &QPushButton::clicked, this, &ResultPanel::onFilterClearClicked);
 }
 
 void ResultPanel::setResults(const FEResultData& results)
@@ -415,8 +528,18 @@ void ResultPanel::applyTheme(const Theme& t) {
 
     clearBtn_->setStyleSheet(secondaryBtnStyle);
     deformClearBtn_->setStyleSheet(secondaryBtnStyle);
+    filterClearBtn_->setStyleSheet(secondaryBtnStyle);
 
     deformApplyBtn_->setStyleSheet(QString(
+        "QPushButton {"
+        "  background: %1; color: %2; border: none;"
+        "  border-radius: 5px; padding: 7px 16px; font-size: 12px; font-weight: bold; }"
+        "QPushButton:hover { background: %3; }"
+        "QPushButton:pressed { background: %4; }"
+        "QPushButton:disabled { background: %5; color: %6; }"
+    ).arg(t.blue, t.btnText, t.blueHover, t.bluePressed, t.surface1, t.overlay0));
+
+    filterApplyBtn_->setStyleSheet(QString(
         "QPushButton {"
         "  background: %1; color: %2; border: none;"
         "  border-radius: 5px; padding: 7px 16px; font-size: 12px; font-weight: bold; }"
@@ -488,4 +611,43 @@ void ResultPanel::applyTheme(const Theme& t) {
         "QCheckBox::indicator:checked {"
         "  background: %6; border-color: %6; }"
     ).arg(t.base, t.text, t.mantle, t.surface0, t.subtext0, t.blue, t.subtext1, t.surface1));
+}
+
+void ResultPanel::onFilterApplyClicked()
+{
+    int type = filterTypeCombo_->currentIndex();
+    switch (type) {
+        case 0: // 阈值
+            emit thresholdRequested(threshMinSpin_->value(), threshMaxSpin_->value());
+            break;
+        case 1: { // 裁剪平面
+            glm::vec3 normal(0.0f);
+            int axis = planeAxisCombo_->currentIndex();
+            normal[axis] = 1.0f;
+            float offset = static_cast<float>(planeOffsetSpin_->value());
+            glm::vec3 origin = normal * offset;
+            emit clipPlaneRequested(origin, normal, clipSideCheck_->isChecked());
+            break;
+        }
+        case 2: { // 切片平面
+            glm::vec3 normal(0.0f);
+            int axis = planeAxisCombo_->currentIndex();
+            normal[axis] = 1.0f;
+            float offset = static_cast<float>(planeOffsetSpin_->value());
+            glm::vec3 origin = normal * offset;
+            emit slicePlaneRequested(origin, normal);
+            break;
+        }
+        case 3: // 等值面
+            emit isoSurfaceRequested(static_cast<float>(isoValueSpin_->value()));
+            break;
+    }
+    filterApplyBtn_->setEnabled(true);
+    filterClearBtn_->setEnabled(true);
+}
+
+void ResultPanel::onFilterClearClicked()
+{
+    emit filterCleared();
+    filterClearBtn_->setEnabled(false);
 }

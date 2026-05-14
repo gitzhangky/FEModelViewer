@@ -185,6 +185,11 @@ void GLWidget::setVertexScalars(const std::vector<float>& scalars, float minVal,
     scalarMin_ = minVal;
     scalarMax_ = maxVal;
     numBands_ = numBands;
+    // 先完成待上传的网格，防止 paintGL 中 uploadMesh() 覆盖标量数据
+    if (needsUpload_) {
+        makeCurrent();
+        uploadMesh();
+    }
     vao_.bind();
     scalarVbo_.bind();
     scalarVbo_.allocate(scalars.data(), static_cast<int>(scalars.size() * sizeof(float)));
@@ -195,6 +200,44 @@ void GLWidget::setVertexScalars(const std::vector<float>& scalars, float minVal,
     glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), nullptr);
     glEnableVertexAttribArray(2);
     vao_.release();
+    update();
+}
+
+void GLWidget::setSliceLines(const std::vector<float>& lineVertices) {
+    sliceVertCount_ = static_cast<int>(lineVertices.size() / 3);
+    if (sliceVertCount_ > 0) {
+        makeCurrent();
+        if (!sliceVao_.isCreated()) sliceVao_.create();
+        if (!sliceVbo_.isCreated()) sliceVbo_.create();
+        sliceVao_.bind();
+        sliceVbo_.bind();
+        sliceVbo_.allocate(lineVertices.data(),
+                           static_cast<int>(lineVertices.size() * sizeof(float)));
+        shader_->enableAttributeArray(0);
+        shader_->setAttributeBuffer(0, GL_FLOAT, 0, 3, 3 * sizeof(float));
+        sliceVbo_.release();
+        sliceVao_.release();
+        doneCurrent();
+    }
+    update();
+}
+
+void GLWidget::clearSliceLines() {
+    sliceVertCount_ = 0;
+    update();
+}
+
+void GLWidget::setIsoSurfaceMesh(const Mesh& mesh) {
+    isoMesh_ = mesh;
+    isoIndexCount_ = static_cast<int>(mesh.indices.size());
+    isoNeedsUpload_ = true;
+    update();
+}
+
+void GLWidget::clearIsoSurface() {
+    isoMesh_.vertices.clear();
+    isoMesh_.indices.clear();
+    isoIndexCount_ = 0;
     update();
 }
 
@@ -753,6 +796,56 @@ void GLWidget::paintGL() {
         glLineWidth(1.0f);
         glDrawArrays(GL_LINES, 0, overlayVertCount_);
         overlayVao_.release();
+        glDisable(GL_BLEND);
+    }
+
+    // ── 绘制切片交线 ──
+    if (sliceVertCount_ > 0) {
+        shader_->setUniformValue("uWireframe", true);
+        shader_->setUniformValue("uUseVertexColor", false);
+        shader_->setUniformValue("uColor", QVector3D(1.0f, 0.2f, 0.2f));
+        shader_->setUniformValue("uWireAlpha", 1.0f);
+        glDisable(GL_DEPTH_TEST);
+        sliceVao_.bind();
+        glLineWidth(2.0f);
+        glDrawArrays(GL_LINES, 0, sliceVertCount_);
+        glLineWidth(1.0f);
+        sliceVao_.release();
+        glEnable(GL_DEPTH_TEST);
+    }
+
+    // ── 绘制等值面 ──
+    if (isoIndexCount_ > 0) {
+        if (isoNeedsUpload_) {
+            isoNeedsUpload_ = false;
+            if (!isoVao_.isCreated()) isoVao_.create();
+            if (!isoVbo_.isCreated()) isoVbo_.create();
+            if (!isoIbo_) {
+                isoIbo_ = new QOpenGLBuffer(QOpenGLBuffer::IndexBuffer);
+                isoIbo_->create();
+            }
+            isoVao_.bind();
+            isoVbo_.bind();
+            isoVbo_.allocate(isoMesh_.vertices.data(),
+                             static_cast<int>(isoMesh_.vertices.size() * sizeof(float)));
+            shader_->enableAttributeArray(0);
+            shader_->setAttributeBuffer(0, GL_FLOAT, 0, 3, 6 * sizeof(float));
+            shader_->enableAttributeArray(1);
+            shader_->setAttributeBuffer(1, GL_FLOAT, 3 * sizeof(float), 3, 6 * sizeof(float));
+            isoIbo_->bind();
+            isoIbo_->allocate(isoMesh_.indices.data(),
+                              static_cast<int>(isoMesh_.indices.size() * sizeof(unsigned int)));
+            isoVao_.release();
+        }
+        shader_->setUniformValue("uWireframe", false);
+        shader_->setUniformValue("uUseVertexColor", false);
+        shader_->setUniformValue("uColor", QVector3D(0.2f, 0.8f, 0.4f));
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        shader_->setUniformValue("uWireAlpha", 0.6f);
+        isoVao_.bind();
+        glDrawElements(GL_TRIANGLES, isoIndexCount_, GL_UNSIGNED_INT, nullptr);
+        isoVao_.release();
         glDisable(GL_BLEND);
     }
 

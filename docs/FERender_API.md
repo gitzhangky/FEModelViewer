@@ -39,14 +39,18 @@
   - [6.2 FEAnimationController — 帧动画控制器](#62-feanimationcontroller--帧动画控制器)
 - [7. 探针与导出 API](#7-探针与导出-api)
   - [7.1 FEProbe — 结果探针](#71-feprobe--结果探针)
-- [8. 完整使用示例](#8-完整使用示例)
-  - [8.1 加载模型并渲染](#81-加载模型并渲染)
-  - [8.2 显示标量云图](#82-显示标量云图)
-  - [8.3 部件可见性控制](#83-部件可见性控制)
-  - [8.4 拾取交互](#84-拾取交互)
-  - [8.5 变形显示](#85-变形显示)
-  - [8.6 变形动画](#86-变形动画)
-  - [8.7 探针查值与热点导出](#87-探针查值与热点导出)
+- [8. 过滤与等值面 API](#8-过滤与等值面-api)
+  - [8.1 FEPostFilter — 后处理过滤器](#81-fepostfilter--后处理过滤器)
+  - [8.2 FEIsoSurface — 等值面提取](#82-feisosurface--等值面提取)
+- [9. 完整使用示例](#9-完整使用示例)
+  - [9.1 加载模型并渲染](#91-加载模型并渲染)
+  - [9.2 显示标量云图](#92-显示标量云图)
+  - [9.3 部件可见性控制](#93-部件可见性控制)
+  - [9.4 拾取交互](#94-拾取交互)
+  - [9.5 变形显示](#95-变形显示)
+  - [9.6 变形动画](#96-变形动画)
+  - [9.7 探针查值与热点导出](#97-探针查值与热点导出)
+  - [9.8 阈值过滤与裁剪](#98-阈值过滤与裁剪)
 - [附录 A：头文件清单](#附录-a头文件清单)
 - [附录 B：单元类型速查表](#附录-b单元类型速查表)
 
@@ -1359,9 +1363,111 @@ FEProbe::writeScalarFieldCsv("stress_field.csv", stressField);
 
 ---
 
-## 8. 完整使用示例
+## 8. 过滤与等值面 API
 
-### 8.1 加载模型并渲染
+### 8.1 FEPostFilter — 后处理过滤器
+
+**头文件**：`FEPostFilter.h`
+
+提供 CPU 端的网格过滤操作：阈值、裁剪平面、切片平面。
+
+#### FEPlane（平面定义）
+
+```cpp
+struct FEPlane {
+    glm::vec3 origin{0.0f};           // 平面上一点
+    glm::vec3 normal{0.0f, 0.0f, 1.0f}; // 平面法线
+};
+```
+
+#### FESliceResult（切片结果）
+
+```cpp
+struct FESliceResult {
+    std::vector<float> lineVertices;  // 交线顶点 [x,y,z, ...]
+    int lineCount = 0;                // 线段数量
+};
+```
+
+#### FEPostFilter
+
+```cpp
+class FEPostFilter {
+public:
+    // 按单元标量值阈值过滤（保留完整三角形）
+    static FERenderData thresholdByElementValue(const FERenderData& input,
+                                                const FEScalarField& field,
+                                                float minValue, float maxValue);
+
+    // 按裁剪平面过滤（质心判断）
+    static FERenderData clipByPlane(const FERenderData& input,
+                                    const FEPlane& plane,
+                                    bool keepPositiveSide);
+
+    // 生成切片平面与网格的交线
+    static FESliceResult sliceByPlane(const FERenderData& input,
+                                      const FEPlane& plane);
+};
+```
+
+`sliceByPlane()` 会对交点去重：平面只接触三角形单个顶点时不生成零长度线段；三角形整体落在切片平面上时返回该三角形轮廓线。
+
+**使用示例**：
+
+```cpp
+#include "FEPostFilter.h"
+
+// 阈值过滤：保留应力 > 100 的单元
+auto filtered = FEPostFilter::thresholdByElementValue(renderData, stressField, 100.0f, 1e10f);
+glWidget->setMesh(filtered.mesh);
+glWidget->setTriangleToElementMap(filtered.triangleToElement);
+
+// 裁剪平面：保留 Y > 0 的部分
+FEPlane plane;
+plane.origin = glm::vec3(0.0f);
+plane.normal = glm::vec3(0.0f, 1.0f, 0.0f);
+auto clipped = FEPostFilter::clipByPlane(renderData, plane, true);
+
+// 切片：获取 Z=5.0 处的交线
+FEPlane slicePlane;
+slicePlane.origin = glm::vec3(0.0f, 0.0f, 5.0f);
+slicePlane.normal = glm::vec3(0.0f, 0.0f, 1.0f);
+auto slice = FEPostFilter::sliceByPlane(renderData, slicePlane);
+glWidget->setSliceLines(slice.lineVertices);
+```
+
+### 8.2 FEIsoSurface — 等值面提取
+
+**头文件**：`FEIsoSurface.h`
+
+从体网格中提取标量等值面（Marching Tetrahedra），仅支持 TET4 和 HEX8。
+
+```cpp
+class FEIsoSurface {
+public:
+    static Mesh extract(const FEModel& model,
+                        const FEScalarField& field,   // 必须是节点场
+                        float isoValue);
+};
+```
+
+**使用示例**：
+
+```cpp
+#include "FEIsoSurface.h"
+
+Mesh isoMesh = FEIsoSurface::extract(model, temperatureField, 50.0f);
+glWidget->setIsoSurfaceMesh(isoMesh);
+
+// 清除等值面
+glWidget->clearIsoSurface();
+```
+
+---
+
+## 9. 完整使用示例
+
+### 9.1 加载模型并渲染
 
 ```cpp
 #include <QApplication>
@@ -1412,7 +1518,7 @@ int main(int argc, char* argv[]) {
 }
 ```
 
-### 8.2 显示标量云图
+### 9.2 显示标量云图
 
 ```cpp
 // 假设已有 model 和 viewer
@@ -1453,7 +1559,7 @@ viewer.setColorBarIdLabel("Node ID");
 viewer.setColorBarExtremes(mapped.minId, mapped.minValue, mapped.maxId, mapped.maxValue);
 ```
 
-### 8.3 部件可见性控制
+### 9.3 部件可见性控制
 
 ```cpp
 // 假设模型有 3 个部件
@@ -1481,7 +1587,7 @@ const auto& colors = viewer.partColors();
 // colors[2] → Bearing 的 RGB
 ```
 
-### 8.4 拾取交互
+### 9.4 拾取交互
 
 ```cpp
 // 设置拾取模式
@@ -1519,7 +1625,7 @@ if (sel.hasSelection()) {
 }
 ```
 
-### 8.5 变形显示
+### 9.5 变形显示
 
 ```cpp
 // 假设有位移矢量场
@@ -1539,7 +1645,7 @@ viewer.setMesh(deformed);
 viewer.fitToModel(model.computeCenter(), model.computeSize());
 ```
 
-### 8.6 变形动画
+### 9.6 变形动画
 
 ```cpp
 #include "FEDeformation.h"
@@ -1577,7 +1683,7 @@ anim.play();
 
 ---
 
-### 8.7 探针查值与热点导出
+### 9.7 探针查值与热点导出
 
 ```cpp
 #include "FEProbe.h"
@@ -1608,6 +1714,36 @@ FEProbe::writePathSamplesCsv("path.csv", samples);
 FEProbe::writeScalarFieldCsv("field.csv", stressField);
 ```
 
+### 9.8 阈值过滤与裁剪
+
+```cpp
+#include "FEPostFilter.h"
+#include "FEIsoSurface.h"
+
+// 阈值过滤：仅显示应力在 [100, 500] 范围内的单元
+auto filtered = FEPostFilter::thresholdByElementValue(renderData, stressField, 100.0f, 500.0f);
+glWidget->setMesh(filtered.mesh);
+glWidget->setTriangleToElementMap(filtered.triangleToElement);
+glWidget->setVertexToNodeMap(filtered.vertexToNode);
+
+// 裁剪平面：切掉 X < 0 的部分
+FEPlane plane;
+plane.origin = glm::vec3(0.0f);
+plane.normal = glm::vec3(1.0f, 0.0f, 0.0f);
+auto clipped = FEPostFilter::clipByPlane(renderData, plane, true);
+
+// 切片：在 Z=10 处显示截面交线
+FEPlane slicePlane;
+slicePlane.origin = glm::vec3(0.0f, 0.0f, 10.0f);
+slicePlane.normal = glm::vec3(0.0f, 0.0f, 1.0f);
+auto slice = FEPostFilter::sliceByPlane(renderData, slicePlane);
+glWidget->setSliceLines(slice.lineVertices);
+
+// 等值面：提取温度 = 50 度的等值面
+Mesh iso = FEIsoSurface::extract(model, tempField, 50.0f);
+glWidget->setIsoSurfaceMesh(iso);
+```
+
 ---
 
 ## 附录 A：头文件清单
@@ -1625,6 +1761,8 @@ FEProbe::writeScalarFieldCsv("field.csv", stressField);
 | `FEDeformation.h` | `FEDeformation`, `FEDeformationOptions` | 变形显示工具类 |
 | `FEAnimationController.h` | `FEAnimationController` | 帧动画控制器（QTimer 驱动） |
 | `FEProbe.h` | `FEProbe`, `FEProbeValue`, `FEPathSample` | 结果探针：点值查询、热点、路径采样、CSV 导出 |
+| `FEPostFilter.h` | `FEPostFilter`, `FEPlane`, `FESliceResult` | 后处理过滤器：阈值、裁剪、切片 |
+| `FEIsoSurface.h` | `FEIsoSurface` | 等值面提取（Marching Tetrahedra） |
 | `FEParser.h` | `FEParser` | 有限元文件解析器（INP/BDF/OP2/UNV） |
 | `Geometry.h` | `Mesh`, `Geometry::*` | 网格结构与几何体生成 |
 | `FERenderData.h` | `FERenderData` | 渲染数据包（Mesh + 映射表） |
