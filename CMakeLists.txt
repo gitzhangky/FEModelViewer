@@ -341,6 +341,18 @@ if(BUILD_TESTING)
         COMMAND test_result_panel
     )
 
+    qt5_wrap_cpp(TEST_PARTS_PANEL_MOC_SRCS PartsPanel.h)
+    add_executable(test_parts_panel
+        tests/test_parts_panel.cpp
+        PartsPanel.cpp
+        ${TEST_PARTS_PANEL_MOC_SRCS}
+    )
+    set_target_properties(test_parts_panel PROPERTIES AUTOMOC OFF)
+    target_link_libraries(test_parts_panel PRIVATE FERender Qt5::Core Qt5::Gui Qt5::Widgets)
+    add_test(NAME parts_panel
+        COMMAND test_parts_panel
+    )
+
     add_test(NAME ferender_public_headers
         COMMAND ${CMAKE_COMMAND}
             "-DINSTALLED_HEADERS=${RENDER_HEADERS}"

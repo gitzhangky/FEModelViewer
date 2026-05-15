@@ -11,6 +11,7 @@
 #include <QPixmap>
 #include <QPainter>
 #include <QIcon>
+#include <QSignalBlocker>
 #include <set>
 
 PartsPanel::PartsPanel(QWidget* parent) : QWidget(parent) {
@@ -179,6 +180,7 @@ void PartsPanel::onSelectionChanged() {
 
 void PartsPanel::selectParts(const std::vector<int>& partIndices) {
     if (!rootItem_) return;
+    QSignalBlocker treeSignalBlocker(tree_);
     updating_ = true;
 
     // 构建快速查找集合
