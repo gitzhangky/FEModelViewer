@@ -490,12 +490,7 @@ void GLWidget::initializeGL() {
 }
 
 void GLWidget::paintGL() {
-    // 使用 QPainter + beginNativePainting/endNativePainting 正确隔离
-    // 原生 GL 渲染和 QPainter 2D 文字渲染，防止 GL 状态污染 QPainter
-    // 内部状态追踪（Windows 上 Qt 的 GL2 引擎对此尤为敏感）
-    QPainter painter(this);
-    painter.beginNativePainting();
-
+    // 恢复 GL 状态（QPainter 可能在上一帧末尾修改了 viewport/深度/混合等）
     int dpr_ = devicePixelRatio();
     glViewport(0, 0, width() * dpr_, height() * dpr_);
     glEnable(GL_DEPTH_TEST);
@@ -514,10 +509,6 @@ void GLWidget::paintGL() {
     // 无数据时只绘制坐标轴
     if (mesh_.indices.empty() && mesh_.edgeIndices.empty()) {
         drawAxesIndicator();
-        painter.endNativePainting();
-        painter.setRenderHint(QPainter::Antialiasing);
-        drawAxesLabels(painter);
-        painter.end();
         return;
     }
 
@@ -571,16 +562,7 @@ void GLWidget::paintGL() {
     shader_->release();
 
     drawAxesIndicator();
-
-    // ── 结束原生 GL，切换到 QPainter 2D 渲染 ──
-    painter.endNativePainting();
-
-    painter.setRenderHint(QPainter::Antialiasing);
-    drawAxesLabels(painter);
-    if (showLabels_ && selection_.hasSelection())
-        drawIdLabels(painter, mvp);
-    painter.end();
-
+    render2DOverlays(mvp);
     updateFpsStats();
 }
 
@@ -944,6 +926,14 @@ void GLWidget::renderSelectionHighlight() {
     glEnable(GL_DEPTH_TEST);
 }
 
+void GLWidget::render2DOverlays(const glm::mat4& mvp) {
+    QPainter painter(this);
+    painter.setRenderHint(QPainter::Antialiasing);
+    drawAxesLabels(painter);
+    if (showLabels_ && selection_.hasSelection())
+        drawIdLabels(painter, mvp);
+    painter.end();
+}
 
 void GLWidget::updateFpsStats() {
     frameCount_++;
