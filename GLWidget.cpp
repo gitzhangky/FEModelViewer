@@ -1124,18 +1124,15 @@ int GLWidget::colorToId(unsigned char r, unsigned char g, unsigned char b) {
 void GLWidget::renderPickBuffer(const glm::mat4& mvp) {
     if (!pickFbo_ || triToElem_.empty()) return;
 
-    // 保存 Qt 包装器不跟踪的 GL 状态
-    GLint prevFbo;
     GLint prevViewport[4];
     GLfloat prevClearColor[4];
     GLboolean prevDepthTest, prevBlend;
-    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFbo);
     glGetIntegerv(GL_VIEWPORT, prevViewport);
     glGetFloatv(GL_COLOR_CLEAR_VALUE, prevClearColor);
     glGetBooleanv(GL_DEPTH_TEST, &prevDepthTest);
     glGetBooleanv(GL_BLEND, &prevBlend);
 
-    glBindFramebuffer(GL_FRAMEBUFFER, pickFbo_->handle());
+    pickFbo_->bind();
 
     int dpr = devicePixelRatio();
     glViewport(0, 0, width() * dpr, height() * dpr);
@@ -1195,7 +1192,7 @@ void GLWidget::renderPickBuffer(const glm::mat4& mvp) {
     pickShader_->release();
 
     // 恢复 GL 状态
-    glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(prevFbo));
+    QOpenGLFramebufferObject::bindDefault();
     glViewport(prevViewport[0], prevViewport[1], prevViewport[2], prevViewport[3]);
     glClearColor(prevClearColor[0], prevClearColor[1], prevClearColor[2], prevClearColor[3]);
     if (prevDepthTest) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
@@ -1216,19 +1213,14 @@ void GLWidget::pickAtPoint(const QPoint& pos, bool ctrlHeld) {
 
     renderPickBuffer(mvp);
 
-    // 读取点击位置像素（使用原始 GL 调用，避免 Qt FBO 状态追踪污染）
     unsigned char pixel[4] = {0};
     {
-        GLint prevFbo;
-        glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFbo);
-        glBindFramebuffer(GL_FRAMEBUFFER, pickFbo_->handle());
-
+        pickFbo_->bind();
         int dpr = devicePixelRatio();
         int px = pos.x() * dpr;
-        int py = (height() - pos.y()) * dpr;  // OpenGL Y 轴翻转
+        int py = (height() - pos.y()) * dpr;
         glReadPixels(px, py, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
-
-        glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(prevFbo));
+        QOpenGLFramebufferObject::bindDefault();
     }
 
     int elemId = colorToId(pixel[0], pixel[1], pixel[2]);
@@ -1447,14 +1439,12 @@ void GLWidget::deselectAtPoint(const QPoint& pos) {
 
     unsigned char pixel[4] = {0};
     {
-        GLint prevFbo;
-        glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFbo);
-        glBindFramebuffer(GL_FRAMEBUFFER, pickFbo_->handle());
+        pickFbo_->bind();
         int dpr = devicePixelRatio();
         int px = pos.x() * dpr;
         int py = (height() - pos.y()) * dpr;
         glReadPixels(px, py, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
-        glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(prevFbo));
+        QOpenGLFramebufferObject::bindDefault();
     }
 
     int elemId = colorToId(pixel[0], pixel[1], pixel[2]);
