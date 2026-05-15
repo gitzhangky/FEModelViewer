@@ -186,7 +186,6 @@ private:
     void renderSliceLines();
     void renderIsoSurface();
     void renderSelectionHighlight();
-    void render2DOverlays(const glm::mat4& mvp);
     void updateFpsStats();
 
     // ── 拾取相关 ──
