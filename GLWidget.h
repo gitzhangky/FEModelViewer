@@ -188,6 +188,7 @@ private:
     void renderSelectionHighlight();
     void render2DOverlays(const glm::mat4& mvp);
     void updateFpsStats();
+    void bindWidgetFramebuffer();
 
     // ── 拾取相关 ──
     void renderPickBuffer(const glm::mat4& mvp);

@@ -946,6 +946,12 @@ void GLWidget::updateFpsStats() {
     }
 }
 
+void GLWidget::bindWidgetFramebuffer() {
+    // QOpenGLWidget 渲染到自己的内部 FBO，不能恢复到 0；
+    // Windows 上绑定错误 FBO 会让 Qt GL2 文字引擎在拾取后失效。
+    glBindFramebuffer(GL_FRAMEBUFFER, defaultFramebufferObject());
+}
+
 
 
 void GLWidget::resizeGL(int w, int h) {
@@ -1192,7 +1198,7 @@ void GLWidget::renderPickBuffer(const glm::mat4& mvp) {
     pickShader_->release();
 
     // 恢复 GL 状态
-    QOpenGLFramebufferObject::bindDefault();
+    bindWidgetFramebuffer();
     glViewport(prevViewport[0], prevViewport[1], prevViewport[2], prevViewport[3]);
     glClearColor(prevClearColor[0], prevClearColor[1], prevClearColor[2], prevClearColor[3]);
     if (prevDepthTest) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
@@ -1220,7 +1226,7 @@ void GLWidget::pickAtPoint(const QPoint& pos, bool ctrlHeld) {
         int px = pos.x() * dpr;
         int py = (height() - pos.y()) * dpr;
         glReadPixels(px, py, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
-        QOpenGLFramebufferObject::bindDefault();
+        bindWidgetFramebuffer();
     }
 
     int elemId = colorToId(pixel[0], pixel[1], pixel[2]);
@@ -1444,7 +1450,7 @@ void GLWidget::deselectAtPoint(const QPoint& pos) {
         int px = pos.x() * dpr;
         int py = (height() - pos.y()) * dpr;
         glReadPixels(px, py, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
-        QOpenGLFramebufferObject::bindDefault();
+        bindWidgetFramebuffer();
     }
 
     int elemId = colorToId(pixel[0], pixel[1], pixel[2]);

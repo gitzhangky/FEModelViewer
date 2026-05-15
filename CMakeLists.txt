@@ -372,6 +372,12 @@ if(BUILD_TESTING)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check_parse_mode_layering.cmake"
     )
 
+    add_test(NAME qopenglwidget_framebuffer_restore
+        COMMAND ${CMAKE_COMMAND}
+            "-DSOURCE_FILE=${CMAKE_CURRENT_SOURCE_DIR}/GLWidget.cpp"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check_qopenglwidget_framebuffer.cmake"
+    )
+
     add_test(NAME installed_simple_viewer_example
         COMMAND ${CMAKE_COMMAND}
             "-DPROJECT_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
