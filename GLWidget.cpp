@@ -928,8 +928,6 @@ void GLWidget::renderSelectionHighlight() {
 
 void GLWidget::render2DOverlays(const glm::mat4& mvp) {
     QPainter painter(this);
-    painter.beginNativePainting();
-    painter.endNativePainting();
     painter.setRenderHint(QPainter::Antialiasing);
     drawAxesLabels(painter);
     if (showLabels_ && selection_.hasSelection())
@@ -1126,46 +1124,19 @@ int GLWidget::colorToId(unsigned char r, unsigned char g, unsigned char b) {
 void GLWidget::renderPickBuffer(const glm::mat4& mvp) {
     if (!pickFbo_ || triToElem_.empty()) return;
 
-    // ── 获取原始 GL 函数指针，完全绕过 Qt 的 GL 状态追踪 ──
-    auto glBindVAO_ = reinterpret_cast<void(APIENTRY*)(GLuint)>(
-        context()->getProcAddress("glBindVertexArray"));
-    auto glUseProg_ = reinterpret_cast<void(APIENTRY*)(GLuint)>(
-        context()->getProcAddress("glUseProgram"));
-    auto glGetUniformLoc_ = reinterpret_cast<GLint(APIENTRY*)(GLuint, const char*)>(
-        context()->getProcAddress("glGetUniformLocation"));
-    auto glUniformMat4_ = reinterpret_cast<void(APIENTRY*)(GLint, GLsizei, GLboolean, const GLfloat*)>(
-        context()->getProcAddress("glUniformMatrix4fv"));
-    auto glUniform3f_ = reinterpret_cast<void(APIENTRY*)(GLint, GLfloat, GLfloat, GLfloat)>(
-        context()->getProcAddress("glUniform3f"));
-    auto glGenBuf_ = reinterpret_cast<void(APIENTRY*)(GLsizei, GLuint*)>(
-        context()->getProcAddress("glGenBuffers"));
-    auto glDelBuf_ = reinterpret_cast<void(APIENTRY*)(GLsizei, const GLuint*)>(
-        context()->getProcAddress("glDeleteBuffers"));
-    auto glBufData_ = reinterpret_cast<void(APIENTRY*)(GLenum, GLsizeiptr, const void*, GLenum)>(
-        context()->getProcAddress("glBufferData"));
-
-    if (!glBindVAO_ || !glUseProg_ || !glGetUniformLoc_ || !glUniformMat4_ ||
-        !glUniform3f_ || !glGenBuf_ || !glDelBuf_ || !glBufData_) return;
-
-    // ── 保存所有关键 GL 状态 ──
-    GLint prevFbo, prevProgram, prevVao, prevABO, prevEBO;
+    // 保存 Qt 包装器不跟踪的 GL 状态
+    GLint prevFbo;
     GLint prevViewport[4];
     GLfloat prevClearColor[4];
     GLboolean prevDepthTest, prevBlend;
     glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFbo);
     glGetIntegerv(GL_VIEWPORT, prevViewport);
     glGetFloatv(GL_COLOR_CLEAR_VALUE, prevClearColor);
-    glGetIntegerv(GL_CURRENT_PROGRAM, &prevProgram);
-    glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &prevVao);
-    glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &prevABO);
-    glGetIntegerv(GL_ELEMENT_ARRAY_BUFFER_BINDING, &prevEBO);
     glGetBooleanv(GL_DEPTH_TEST, &prevDepthTest);
     glGetBooleanv(GL_BLEND, &prevBlend);
 
-    // ── 全部使用原始 GL 调用，不触碰任何 Qt 包装器 ──
     glBindFramebuffer(GL_FRAMEBUFFER, pickFbo_->handle());
 
-    // 设置 viewport 匹配 FBO 尺寸（QPainter 可能在上一帧修改了 viewport）
     int dpr = devicePixelRatio();
     glViewport(0, 0, width() * dpr, height() * dpr);
 
@@ -1174,28 +1145,27 @@ void GLWidget::renderPickBuffer(const glm::mat4& mvp) {
     glEnable(GL_DEPTH_TEST);
     glDisable(GL_BLEND);
 
-    GLuint pickProg = pickShader_->programId();
-    glUseProg_(pickProg);
+    // 使用 Qt 包装器绑定着色器和 VAO，确保 Qt 状态追踪与实际 GL 状态一致
+    // （之前使用原始 GL 调用会导致 QPainter 内部状态缓存失效，
+    //  表现为拾取后 drawText 静默失败：标签和坐标轴文字消失）
+    pickShader_->bind();
+    pickShader_->setUniformValue("uMVP",
+        QMatrix4x4(glm::value_ptr(glm::transpose(mvp))));
 
-    GLint mvpLoc = glGetUniformLoc_(pickProg, "uMVP");
-    glUniformMat4_(mvpLoc, 1, GL_FALSE, glm::value_ptr(mvp));
+    GLint pickColorLoc = pickShader_->uniformLocation("uPickColor");
 
-    GLint pickColorLoc = glGetUniformLoc_(pickProg, "uPickColor");
-
-    glBindVAO_(pickVao_.objectId());
-    glBindBuffer(GL_ARRAY_BUFFER, vbo_.bufferId());
+    pickVao_.bind();
+    vbo_.bind();
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), nullptr);
     glEnableVertexAttribArray(0);
 
-    // 创建原始 GL 索引缓冲
     GLuint rawIbo = 0;
-    glGenBuf_(1, &rawIbo);
+    glGenBuffers(1, &rawIbo);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, rawIbo);
-    glBufData_(GL_ELEMENT_ARRAY_BUFFER,
-               static_cast<GLsizeiptr>(allTriIndices_.size() * sizeof(unsigned int)),
-               allTriIndices_.data(), GL_STATIC_DRAW);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER,
+                 static_cast<GLsizeiptr>(allTriIndices_.size() * sizeof(unsigned int)),
+                 allTriIndices_.data(), GL_STATIC_DRAW);
 
-    // 逐单元绘制，跳过隐藏部件
     int triCount = static_cast<int>(triToElem_.size());
     int i = 0;
     while (i < triCount) {
@@ -1213,23 +1183,21 @@ void GLWidget::renderPickBuffer(const glm::mat4& mvp) {
         }
 
         glm::vec3 c = idToColor(elemId);
-        glUniform3f_(pickColorLoc, c.x, c.y, c.z);
+        glUniform3f(pickColorLoc, c.x, c.y, c.z);
         glDrawElements(GL_TRIANGLES, (i - start) * 3, GL_UNSIGNED_INT,
                        reinterpret_cast<void*>(start * 3 * sizeof(unsigned int)));
     }
 
-    // ── 清理临时 IBO ──
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
-    glDelBuf_(1, &rawIbo);
+    glDeleteBuffers(1, &rawIbo);
 
-    // ── 恢复所有 GL 状态（同样使用原始调用） ──
+    pickVao_.release();
+    pickShader_->release();
+
+    // 恢复 GL 状态
     glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(prevFbo));
     glViewport(prevViewport[0], prevViewport[1], prevViewport[2], prevViewport[3]);
     glClearColor(prevClearColor[0], prevClearColor[1], prevClearColor[2], prevClearColor[3]);
-    glBindVAO_(static_cast<GLuint>(prevVao));
-    glUseProg_(static_cast<GLuint>(prevProgram));
-    glBindBuffer(GL_ARRAY_BUFFER, static_cast<GLuint>(prevABO));
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, static_cast<GLuint>(prevEBO));
     if (prevDepthTest) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
     if (prevBlend) glEnable(GL_BLEND); else glDisable(GL_BLEND);
 }
