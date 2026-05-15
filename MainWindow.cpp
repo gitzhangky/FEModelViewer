@@ -119,6 +119,8 @@ MainWindow::MainWindow() {
         glWidget_->setUseVertexColor(false);
         glWidget_->setColorBarVisible(false);
         feModelPanel_->clearActiveScalarField();
+        resultPanel_->clearResults();
+        if (animController_) animController_->setFrameCount(0);
 
         glWidget_->setMesh(mesh);
         glWidget_->setTriangleToElementMap(triToElem);
@@ -537,6 +539,8 @@ void MainWindow::setupToolBar() {
         glWidget_->setUseVertexColor(false);
         glWidget_->setColorBarVisible(false);
         feModelPanel_->clearActiveScalarField();
+        resultPanel_->clearResults();
+        if (animController_) animController_->setFrameCount(0);
 
         feModelPanel_->clearModel();
         statusProgress_->setVisible(false);
