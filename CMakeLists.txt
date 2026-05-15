@@ -296,6 +296,17 @@ if(BUILD_TESTING)
         COMMAND test_post_state
     )
 
+    add_executable(test_import_path_state
+        tests/test_import_path_state.cpp
+    )
+    target_include_directories(test_import_path_state PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+    target_link_libraries(test_import_path_state PRIVATE Qt5::Core)
+    add_test(NAME import_path_state
+        COMMAND test_import_path_state
+    )
+
     add_executable(test_iso_cube_data
         tests/test_iso_cube_data.cpp
     )

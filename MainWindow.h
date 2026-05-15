@@ -27,6 +27,7 @@
 #include "FERenderData.h"
 #include "FEModel.h"
 #include "FEField.h"
+#include "ImportPathState.h"
 #include "PostState.h"
 
 class GLWidget;
@@ -54,6 +55,8 @@ private:
     void browseModelFile();
     void browseResultFile();
     void applyFiles();
+    void refreshFilePathEdits();
+    void syncImportPathsFromEdits();
 
     void applyDeformation(float scale, bool overlayUndeformed);
     void clearDeformation();
@@ -91,6 +94,7 @@ private:
     QTabWidget*    bottomTabs_     = nullptr;
     QLineEdit*     modelPathEdit_  = nullptr;
     QLineEdit*     resultPathEdit_ = nullptr;
+    ImportPathState importPaths_;
 
     // 侧边栏停靠
     QDockWidget*   partsDock_      = nullptr;

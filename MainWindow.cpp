@@ -362,11 +362,44 @@ QWidget* MainWindow::createFilePanel() {
     // 恢复上次的文件路径
     {
         QSettings settings("FEModelViewer", "FEModelViewer");
-        modelPathEdit_->setText(settings.value("lastModelPath", QString()).toString());
-        resultPathEdit_->setText(settings.value("lastResultPath", QString()).toString());
+        const QString modelPath = settings.value("lastModelPath", QString()).toString();
+        const QString resultPath = settings.value("lastResultPath", QString()).toString();
+        const bool defaultAutoFilled = ImportPathState::looksAutoFilled(modelPath, resultPath);
+        const bool autoFilled =
+            settings.value("lastResultPathAutoFilled", defaultAutoFilled).toBool();
+
+        importPaths_.restore(modelPath, resultPath, autoFilled);
+        refreshFilePathEdits();
     }
 
     return panel;
+}
+
+void MainWindow::refreshFilePathEdits() {
+    modelPathEdit_->setText(importPaths_.modelPath);
+    resultPathEdit_->setText(importPaths_.resultPath);
+}
+
+void MainWindow::syncImportPathsFromEdits() {
+    const QString editedModel = modelPathEdit_->text().trimmed();
+    const QString editedResult = resultPathEdit_->text().trimmed();
+
+    if (!ImportPathState::samePath(editedModel, importPaths_.modelPath)) {
+        const QString previousAutoResult = importPaths_.resultPath;
+        const bool wasAutoFilled = importPaths_.resultPathAutoFilled;
+
+        importPaths_.selectModelFile(editedModel);
+
+        // 正常 UI 下结果框只会由 browseResultFile 改；这里照顾测试/辅助工具直接设值的情况。
+        if (!ImportPathState::samePath(editedResult, importPaths_.resultPath)
+            && !(wasAutoFilled && ImportPathState::samePath(editedResult, previousAutoResult))) {
+            importPaths_.selectResultFile(editedResult);
+        }
+    } else if (!ImportPathState::samePath(editedResult, importPaths_.resultPath)) {
+        importPaths_.selectResultFile(editedResult);
+    }
+
+    refreshFilePathEdits();
 }
 
 void MainWindow::browseModelFile() {
@@ -389,13 +422,9 @@ void MainWindow::browseModelFile() {
     QString path = dialog.selectedFiles().first();
 
     if (!path.isEmpty()) {
-        modelPathEdit_->setText(path);
+        importPaths_.selectModelFile(path);
+        refreshFilePathEdits();
         settings.setValue("lastOpenDir", QFileInfo(path).absolutePath());
-
-        // OP2 文件同时包含几何和结果，自动填充结果路径
-        if (QFileInfo(path).suffix().toLower() == "op2") {
-            resultPathEdit_->setText(path);
-        }
     }
 }
 
@@ -420,14 +449,16 @@ void MainWindow::browseResultFile() {
     QString path = dialog.selectedFiles().first();
 
     if (!path.isEmpty()) {
-        resultPathEdit_->setText(path);
+        importPaths_.selectResultFile(path);
+        refreshFilePathEdits();
         settings.setValue("lastOpenDir", QFileInfo(path).absolutePath());
     }
 }
 
 void MainWindow::applyFiles() {
-    QString modelPath = modelPathEdit_->text().trimmed();
-    QString resultPath = resultPathEdit_->text().trimmed();
+    syncImportPathsFromEdits();
+    QString modelPath = importPaths_.modelPath;
+    QString resultPath = importPaths_.resultPath;
 
     if (modelPath.isEmpty() && resultPath.isEmpty()) {
         QMessageBox::information(this, "提示", "请先选择模型文件或结果文件。");
@@ -731,9 +762,11 @@ void MainWindow::applyTheme(const Theme& t) {
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {
+    syncImportPathsFromEdits();
     QSettings settings("FEModelViewer", "FEModelViewer");
-    settings.setValue("lastModelPath", modelPathEdit_->text());
-    settings.setValue("lastResultPath", resultPathEdit_->text());
+    settings.setValue("lastModelPath", importPaths_.modelPath);
+    settings.setValue("lastResultPath", importPaths_.resultPath);
+    settings.setValue("lastResultPathAutoFilled", importPaths_.resultPathAutoFilled);
     QMainWindow::closeEvent(event);
 }
 
