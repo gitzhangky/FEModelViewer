@@ -171,9 +171,23 @@ private:
     void drawAxesIndicator();
     void drawAxesLabels(QPainter& painter);  // 坐标轴标签（需外部提供 QPainter）
     void drawIdLabels(QPainter& painter, const glm::mat4& mvp);  // 选中项 ID 标签
-    void drawColorBar(QPainter& painter);
     void uploadColors();      // 将部件颜色上传到 colorVbo_
     void rebuildEdgeIbo();    // 根据部件可见性重建边线 IBO
+
+    // ── paintGL 渲染子步骤 ──
+    void processDeferredPicks();
+    void rebuildPartVisibilityIbo();
+    void renderBackground();
+    void renderMainMesh();
+    void renderMeshEdges();
+    void updateSelectionHighlight();
+    void renderOverlayMesh();
+    void renderClipPreview();
+    void renderSliceLines();
+    void renderIsoSurface();
+    void renderSelectionHighlight();
+    void render2DOverlays(const glm::mat4& mvp);
+    void updateFpsStats();
 
     // ── 拾取相关 ──
     void renderPickBuffer(const glm::mat4& mvp);

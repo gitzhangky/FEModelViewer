@@ -27,6 +27,7 @@
 #include "FERenderData.h"
 #include "FEModel.h"
 #include "FEField.h"
+#include "PostState.h"
 
 class GLWidget;
 class MonitorPanel;
@@ -63,8 +64,13 @@ private:
     void applyIsoSurface(float isoValue);
     void clearFilters();
     void updateFilterPlaneBounds();
+
     const FERenderData& activeRenderData() const;
     const FEModel& activeModel() const;
+    const FERenderData& displayRenderData() const;
+    void pushRenderDataToGL(const FERenderData& rd);
+    void beginPostEffect(PostEffectMode mode);
+    void reapplyContourIfNeeded();
 
     GLWidget*              glWidget_        = nullptr;
     MonitorPanel*          monitorPanel_    = nullptr;
@@ -90,19 +96,10 @@ private:
     QDockWidget*   partsDock_      = nullptr;
     QDockWidget*   modelInfoDock_  = nullptr;
 
-    // 变形状态
-    bool           deformActive_   = false;
-    float          deformScale_    = 1.0f;
-    bool           deformOverlay_  = false;
-    FERenderData   deformedRD_;
-    FEModel        deformedModel_;
-
-    // 过滤状态
-    bool           filterActive_   = false;
-    FERenderData   filteredRD_;
-    FEScalarField  activeContourField_;
-    QString        activeContourTitle_;
-    bool           contourActive_  = false;
+    // 后处理显示状态
+    DeformState     deform_;
+    PostEffectState postEffect_;
+    ContourState    contour_;
 
     // 主题相关
     Theme          currentTheme_;

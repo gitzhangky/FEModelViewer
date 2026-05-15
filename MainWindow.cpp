@@ -108,6 +108,18 @@ MainWindow::MainWindow() {
             this, [this](const Mesh& mesh, const glm::vec3& center, float size,
                          const std::vector<int>& triToElem,
                          const std::vector<int>& vertexToNode){
+        // 新模型加载，清除全部旧状态
+        deform_.clear();
+        postEffect_.clear();
+        contour_.clear();
+        glWidget_->clearSliceLines();
+        glWidget_->clearIsoSurface();
+        glWidget_->clearClipPlanePreview();
+        glWidget_->setOverlayVisible(false);
+        glWidget_->setUseVertexColor(false);
+        glWidget_->setColorBarVisible(false);
+        feModelPanel_->clearActiveScalarField();
+
         glWidget_->setMesh(mesh);
         glWidget_->setTriangleToElementMap(triToElem);
         glWidget_->setVertexToNodeMap(vertexToNode);
@@ -193,9 +205,7 @@ MainWindow::MainWindow() {
     // 清除云图 → 恢复部件颜色
     connect(resultPanel_, &ResultPanel::clearResult,
             this, [this]() {
-        contourActive_ = false;
-        activeContourField_ = FEScalarField{};
-        activeContourTitle_.clear();
+        contour_.clear();
         glWidget_->setUseVertexColor(false);
         glWidget_->setColorBarVisible(false);
         glWidget_->update();
@@ -217,8 +227,8 @@ MainWindow::MainWindow() {
             this, [this](int frameIndex) {
         resultPanel_->selectFrame(frameIndex);
 
-        if (deformActive_)
-            applyDeformation(deformScale_, deformOverlay_);
+        if (deform_.active)
+            applyDeformation(deform_.scale, deform_.overlay);
 
         FEScalarField field;
         QString title;
@@ -516,6 +526,18 @@ void MainWindow::setupToolBar() {
 
     // ── 连接 ──
     connect(clearAction, &QAction::triggered, this, [this]() {
+        // 清除全部后处理状态
+        deform_.clear();
+        postEffect_.clear();
+        contour_.clear();
+        glWidget_->clearSliceLines();
+        glWidget_->clearIsoSurface();
+        glWidget_->clearClipPlanePreview();
+        glWidget_->setOverlayVisible(false);
+        glWidget_->setUseVertexColor(false);
+        glWidget_->setColorBarVisible(false);
+        feModelPanel_->clearActiveScalarField();
+
         feModelPanel_->clearModel();
         statusProgress_->setVisible(false);
         progressText_->setVisible(false);
@@ -717,12 +739,50 @@ void MainWindow::closeEvent(QCloseEvent* event) {
 
 const FERenderData& MainWindow::activeRenderData() const
 {
-    return deformActive_ ? deformedRD_ : feModelPanel_->currentRenderData();
+    return deform_.active ? deform_.renderData : feModelPanel_->currentRenderData();
 }
 
 const FEModel& MainWindow::activeModel() const
 {
-    return deformActive_ ? deformedModel_ : feModelPanel_->currentModel();
+    return deform_.active ? deform_.model : feModelPanel_->currentModel();
+}
+
+const FERenderData& MainWindow::displayRenderData() const
+{
+    if (postEffect_.isActive() && postEffect_.isMeshReplacement())
+        return postEffect_.filteredRD;
+    return activeRenderData();
+}
+
+void MainWindow::pushRenderDataToGL(const FERenderData& rd)
+{
+    glWidget_->setMesh(rd.mesh);
+    glWidget_->setTriangleToElementMap(rd.triangleToElement);
+    glWidget_->setVertexToNodeMap(rd.vertexToNode);
+    glWidget_->setTriangleToPartMap(rd.triangleToPart);
+    glWidget_->setEdgeToPartMap(rd.edgeToPart);
+}
+
+void MainWindow::reapplyContourIfNeeded()
+{
+    if (contour_.active)
+        applyContour(contour_.field, contour_.title);
+}
+
+void MainWindow::beginPostEffect(PostEffectMode mode)
+{
+    glWidget_->clearSliceLines();
+    glWidget_->clearIsoSurface();
+
+    bool wasReplacement = postEffect_.isActive() && postEffect_.isMeshReplacement();
+    bool willReplace = (mode == PostEffectMode::Threshold
+                     || mode == PostEffectMode::ClipPlane);
+
+    if (wasReplacement && !willReplace)
+        pushRenderDataToGL(activeRenderData());
+
+    postEffect_.clear();
+    postEffect_.mode = mode;
 }
 
 void MainWindow::updateFilterPlaneBounds()
@@ -751,11 +811,17 @@ void MainWindow::applyDeformation(float scale, bool overlayUndeformed)
     opts.scale = scale;
     opts.overlayUndeformed = overlayUndeformed;
 
-    deformedModel_ = FEDeformation::apply(model, disp, opts);
-    deformedRD_ = FEMeshConverter::toRenderData(deformedModel_);
-    deformActive_ = true;
-    deformScale_ = scale;
-    deformOverlay_ = overlayUndeformed;
+    deform_.model = FEDeformation::apply(model, disp, opts);
+    deform_.renderData = FEMeshConverter::toRenderData(deform_.model);
+    deform_.active = true;
+    deform_.scale = scale;
+    deform_.overlay = overlayUndeformed;
+
+    // 主网格即将替换，清除依赖旧网格的后处理效果
+    postEffect_.clear();
+    glWidget_->clearSliceLines();
+    glWidget_->clearIsoSurface();
+    glWidget_->clearClipPlanePreview();
 
     if (overlayUndeformed) {
         glWidget_->setOverlayMesh(feModelPanel_->currentRenderData().mesh);
@@ -764,29 +830,28 @@ void MainWindow::applyDeformation(float scale, bool overlayUndeformed)
         glWidget_->setOverlayVisible(false);
     }
 
-    glWidget_->setMesh(deformedRD_.mesh);
-    glWidget_->setTriangleToElementMap(deformedRD_.triangleToElement);
-    glWidget_->setVertexToNodeMap(deformedRD_.vertexToNode);
-    glWidget_->setTriangleToPartMap(deformedRD_.triangleToPart);
-    glWidget_->setEdgeToPartMap(deformedRD_.edgeToPart);
+    pushRenderDataToGL(deform_.renderData);
+    reapplyContourIfNeeded();
 
-    float size = deformedModel_.computeSize();
+    float size = deform_.model.computeSize();
     if (size > 0.0f)
-        glWidget_->fitToModel(deformedModel_.computeCenter(), size);
+        glWidget_->fitToModel(deform_.model.computeCenter(), size);
     updateFilterPlaneBounds();
 }
 
 void MainWindow::clearDeformation()
 {
-    deformActive_ = false;
+    deform_.clear();
 
-    const FERenderData& rd = feModelPanel_->currentRenderData();
+    // 主网格即将还原，清除依赖旧网格的后处理效果
+    postEffect_.clear();
+    glWidget_->clearSliceLines();
+    glWidget_->clearIsoSurface();
+    glWidget_->clearClipPlanePreview();
     glWidget_->setOverlayVisible(false);
-    glWidget_->setMesh(rd.mesh);
-    glWidget_->setTriangleToElementMap(rd.triangleToElement);
-    glWidget_->setVertexToNodeMap(rd.vertexToNode);
-    glWidget_->setTriangleToPartMap(rd.triangleToPart);
-    glWidget_->setEdgeToPartMap(rd.edgeToPart);
+
+    pushRenderDataToGL(feModelPanel_->currentRenderData());
+    reapplyContourIfNeeded();
 
     const FEModel& model = feModelPanel_->currentModel();
     float size = model.computeSize();
@@ -797,14 +862,14 @@ void MainWindow::clearDeformation()
 
 void MainWindow::applyContour(const FEScalarField& field, const QString& title)
 {
-    activeContourField_ = field;
-    activeContourTitle_ = title;
-    contourActive_ = true;
+    contour_.field = field;
+    contour_.title = title;
+    contour_.active = true;
 
     const FEModel& model = activeModel();
     if (model.nodes.empty()) return;
 
-    const FERenderData& rd = filterActive_ ? filteredRD_ : activeRenderData();
+    const FERenderData& rd = displayRenderData();
     int vertCount = static_cast<int>(rd.mesh.vertices.size() / 6);
     if (vertCount == 0) return;
 
@@ -822,13 +887,10 @@ void MainWindow::applyContour(const FEScalarField& field, const QString& title)
 
 // ── 过滤方法 ──
 
-static void applyFilteredRD(GLWidget* gl, const FERenderData& rd,
-                             const std::vector<FEPart>& parts) {
-    gl->setMesh(rd.mesh);
-    gl->setTriangleToElementMap(rd.triangleToElement);
-    gl->setVertexToNodeMap(rd.vertexToNode);
-    gl->setTriangleToPartMap(rd.triangleToPart);
-    gl->setEdgeToPartMap(rd.edgeToPart);
+static int axisFromNormal(const glm::vec3& n) {
+    if (std::abs(n.y) > 0.5f) return 1;
+    if (std::abs(n.z) > 0.5f) return 2;
+    return 0;
 }
 
 void MainWindow::applyThreshold(float minVal, float maxVal)
@@ -840,7 +902,6 @@ void MainWindow::applyThreshold(float minVal, float maxVal)
     QString title;
     if (!resultPanel_->currentScalarField(field, title)) return;
 
-    // 对于节点场的阈值，需要先把节点值映射到单元上（取平均）
     FEScalarField elemField = field;
     if (field.location == FieldLocation::Node) {
         elemField.values.clear();
@@ -857,23 +918,22 @@ void MainWindow::applyThreshold(float minVal, float maxVal)
         }
     }
 
-    filteredRD_ = FEPostFilter::thresholdByElementValue(rd, elemField, minVal, maxVal);
-    filterActive_ = true;
+    beginPostEffect(PostEffectMode::Threshold);
 
-    glWidget_->clearSliceLines();
-    glWidget_->clearIsoSurface();
-    applyFilteredRD(glWidget_, filteredRD_, {});
+    postEffect_.threshold = { title, minVal, maxVal };
+    postEffect_.filteredRD = FEPostFilter::thresholdByElementValue(rd, elemField, minVal, maxVal);
+    postEffect_.applied = true;
 
-    if (contourActive_)
-        applyContour(activeContourField_, activeContourTitle_);
+    pushRenderDataToGL(postEffect_.filteredRD);
+    reapplyContourIfNeeded();
 
     int total = rd.triangleCount();
-    int kept = filteredRD_.triangleCount();
+    int kept = postEffect_.filteredRD.triangleCount();
     int totalElems = static_cast<int>(elemField.values.size());
     int keptElems = 0;
     {
         std::set<int> seen;
-        for (int eid : filteredRD_.triangleToElement) seen.insert(eid);
+        for (int eid : postEffect_.filteredRD.triangleToElement) seen.insert(eid);
         keptElems = static_cast<int>(seen.size());
     }
     statusBar()->showMessage(
@@ -893,23 +953,26 @@ void MainWindow::applyClipPlane(const glm::vec3& origin, const glm::vec3& normal
     plane.origin = origin;
     plane.normal = normal;
 
-    filteredRD_ = FEPostFilter::clipByPlane(rd, plane, keepPositive);
-    filterActive_ = true;
+    beginPostEffect(PostEffectMode::ClipPlane);
 
-    glWidget_->clearSliceLines();
-    glWidget_->clearIsoSurface();
-    applyFilteredRD(glWidget_, filteredRD_, {});
+    int axis = axisFromNormal(normal);
+    postEffect_.clipPlane = { axis, origin[axis], origin, normal, keepPositive };
+    postEffect_.filteredRD = FEPostFilter::clipByPlane(rd, plane, keepPositive);
+    postEffect_.applied = true;
 
-    if (contourActive_)
-        applyContour(activeContourField_, activeContourTitle_);
+    pushRenderDataToGL(postEffect_.filteredRD);
+    reapplyContourIfNeeded();
 }
 
 void MainWindow::applySlicePlane(const glm::vec3& origin, const glm::vec3& normal)
 {
-    glWidget_->clearSliceLines();
-    glWidget_->clearIsoSurface();
+    beginPostEffect(PostEffectMode::Slice);
 
-    const FERenderData& rd = filterActive_ ? filteredRD_ : activeRenderData();
+    int axis = axisFromNormal(normal);
+    postEffect_.slice = { axis, origin[axis], origin, normal };
+    postEffect_.applied = true;
+
+    const FERenderData& rd = displayRenderData();
     if (rd.triangleCount() == 0) return;
 
     FEPlane plane;
@@ -922,8 +985,7 @@ void MainWindow::applySlicePlane(const glm::vec3& origin, const glm::vec3& norma
 
 void MainWindow::applyIsoSurface(float isoValue)
 {
-    glWidget_->clearSliceLines();
-    glWidget_->clearIsoSurface();
+    beginPostEffect(PostEffectMode::IsoSurface);
 
     const FEModel& model = activeModel();
     if (model.nodes.empty()) return;
@@ -932,20 +994,24 @@ void MainWindow::applyIsoSurface(float isoValue)
     QString title;
     if (!resultPanel_->currentScalarField(field, title)) return;
 
+    postEffect_.iso = { title, isoValue };
+    postEffect_.applied = true;
+
     Mesh iso = FEIsoSurface::extract(model, field, isoValue);
     glWidget_->setIsoSurfaceMesh(iso);
 }
 
 void MainWindow::clearFilters()
 {
-    filterActive_ = false;
+    bool wasReplacement = postEffect_.isActive() && postEffect_.isMeshReplacement();
+    postEffect_.clear();
+
     glWidget_->clearSliceLines();
     glWidget_->clearIsoSurface();
     glWidget_->clearClipPlanePreview();
 
-    const FERenderData& rd = activeRenderData();
-    applyFilteredRD(glWidget_, rd, {});
+    if (wasReplacement)
+        pushRenderDataToGL(activeRenderData());
 
-    if (contourActive_)
-        applyContour(activeContourField_, activeContourTitle_);
+    reapplyContourIfNeeded();
 }

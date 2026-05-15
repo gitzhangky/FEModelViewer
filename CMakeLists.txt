@@ -108,6 +108,7 @@ set(RENDER_HEADERS
 
 set(RENDER_SOURCES
     Camera.cpp
+    ColorBarOverlay.cpp
     Geometry.cpp
     GLWidget.cpp
     FEModel.cpp
@@ -285,6 +286,14 @@ if(BUILD_TESTING)
     target_link_libraries(test_post_filter PRIVATE FERender)
     add_test(NAME post_filter
         COMMAND test_post_filter
+    )
+
+    add_executable(test_post_state
+        tests/test_post_state.cpp
+    )
+    target_link_libraries(test_post_state PRIVATE FERender)
+    add_test(NAME post_state
+        COMMAND test_post_state
     )
 
     add_executable(test_iso_cube_data
