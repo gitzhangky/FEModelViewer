@@ -161,6 +161,11 @@ private:
         model_ = makeHexModel();
         renderData_ = FEMeshConverter::toRenderData(model_);
 
+        // 清理之前可能开启的后处理状态（iso-surface / overlay wireframe），
+        // 否则 Reload 后仍残留，主网格因 isoActive 而不渲染
+        viewer_->clearIsoSurface();
+        viewer_->setOverlayVisible(false);
+
         viewer_->setMesh(renderData_.mesh);
         viewer_->setTriangleToElementMap(renderData_.triangleToElement);
         viewer_->setVertexToNodeMap(renderData_.vertexToNode);

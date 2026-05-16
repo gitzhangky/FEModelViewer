@@ -8,6 +8,12 @@ cmake_minimum_required(VERSION 3.16)
 
 project(FEModelViewer LANGUAGES C CXX)
 
+# 用户未显式指定 -DCMAKE_INSTALL_PREFIX 时，默认装到 build 目录下的 install/，
+# 而不是 Windows 上需要管理员权限的 C:/Program Files (x86)/。
+if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
+    set(CMAKE_INSTALL_PREFIX "${CMAKE_BINARY_DIR}/install" CACHE PATH "Install path" FORCE)
+endif()
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 

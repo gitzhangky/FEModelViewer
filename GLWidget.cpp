@@ -120,6 +120,7 @@ void GLWidget::setVertexColors(const std::vector<float>& colors) {
     colorVbo_.allocate(colors.data(), static_cast<int>(colors.size() * sizeof(float)));
     glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), nullptr);
     glEnableVertexAttribArray(2);
+    colorVbo_.release();
     vao_.release();
     update();
 }
@@ -143,6 +144,7 @@ void GLWidget::setVertexScalars(const std::vector<float>& scalars, float minVal,
     colorVbo_.bind();
     glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), nullptr);
     glEnableVertexAttribArray(2);
+    colorVbo_.release();
     vao_.release();
     update();
 }
@@ -349,6 +351,7 @@ void GLWidget::initializeGL() {
         glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(float),
                               reinterpret_cast<void*>(2 * sizeof(float)));
         glEnableVertexAttribArray(1);
+        bgVbo_.release();
         bgVao_.release();
     }
 
@@ -464,6 +467,7 @@ void GLWidget::initializeGL() {
     glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float),
                           reinterpret_cast<void*>(3 * sizeof(float)));
     glEnableVertexAttribArray(1);
+    axesVbo_.release();
     axesVao_.release();
 
     // 启用深度测试，确保近处物体遮挡远处物体
@@ -814,6 +818,7 @@ void GLWidget::renderClipPreview() {
         clipPreviewIbo_->bind();
         clipPreviewIbo_->allocate(clipPreviewMesh_.indices.data(),
                                   static_cast<int>(clipPreviewMesh_.indices.size() * sizeof(unsigned int)));
+        clipPreviewVbo_.release();
         clipPreviewVao_.release();
 
         clipPreviewEdgeVao_.bind();
@@ -886,6 +891,7 @@ void GLWidget::renderIsoSurface() {
         isoIbo_->bind();
         isoIbo_->allocate(isoMesh_.indices.data(),
                           static_cast<int>(isoMesh_.indices.size() * sizeof(unsigned int)));
+        isoVbo_.release();
         isoVao_.release();
     }
     shader_->setUniformValue("uWireframe", false);
@@ -2401,6 +2407,7 @@ void GLWidget::uploadMesh() {
         scalarVbo_.allocate(defaultScalars.data(), static_cast<int>(defaultScalars.size() * sizeof(float)));
         glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, sizeof(float), nullptr);
         glEnableVertexAttribArray(3);
+        scalarVbo_.release();
     }
 
     vao_.release();
@@ -2430,6 +2437,7 @@ void GLWidget::uploadMesh() {
         // 法线属性设为 0（线框模式不使用法线）
         glDisableVertexAttribArray(1);
 
+        edgeVbo_.release();
         edgeVao_.release();
     }
 }
