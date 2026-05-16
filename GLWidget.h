@@ -314,6 +314,7 @@ private:
     float bgTopColor_[3] = {0.38f, 0.45f, 0.58f};
     float bgBotColor_[3] = {0.68f, 0.74f, 0.82f};
     glm::mat4 axesMVP_{1.0f};          // drawAxesIndicator() 计算后传给 drawAxesLabels()
+    std::unordered_set<long long> labelBinScratch_;  // drawIdLabels 屏幕 bin 去重的临时存储（避免每帧分配）
 
     // ── 交互状态 ──
     QPoint lastPos_;

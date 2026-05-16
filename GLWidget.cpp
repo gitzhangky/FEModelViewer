@@ -534,9 +534,15 @@ void GLWidget::paintGL() {
 
     renderBackground();
 
-    // 无数据时只绘制坐标轴
+    // 无数据时只绘制坐标轴（含其 X/Y/Z 文字标签）
     if (mesh_.indices.empty() && mesh_.edgeIndices.empty()) {
         drawAxesIndicator();
+        {
+            QPainter painter(this);
+            painter.setRenderHint(QPainter::Antialiasing);
+            drawAxesLabels(painter);
+            painter.end();
+        }
         return;
     }
 
@@ -2084,6 +2090,24 @@ void GLWidget::drawIdLabels(QPainter& painter, const glm::mat4& mvp) {
 
     QFontMetrics fm(font);
 
+    // 屏幕剔除 + bin 去重：大模型选中几十万节点时，全画每帧 9*N 次 drawText
+    // 会爆性能。先用 bin (≈一个字号高的格子) 抑制重叠，每格只画第一个；
+    // 完全在屏幕外的标签直接跳过。
+    const int binPx = std::max(16, fm.height());
+    auto& usedBins = labelBinScratch_;
+    usedBins.clear();
+    const int wPx = width(), hPx = height();
+    auto reserveBin = [&](const QPointF& sp) -> bool {
+        if (sp.x() < -50.0 || sp.x() > wPx + 50.0 ||
+            sp.y() < -50.0 || sp.y() > hPx + 50.0)
+            return false;   // 屏外
+        int bx = static_cast<int>(sp.x()) / binPx;
+        int by = static_cast<int>(sp.y()) / binPx;
+        long long key = (static_cast<long long>(bx) << 32) ^ static_cast<unsigned int>(by);
+        if (!usedBins.insert(key).second) return false;   // 同格已占用
+        return true;
+    };
+
     if (pickMode_ == PickMode::Node) {
         // ── 节点标签 ──
         if (!selection_.selectedNodes.empty() && !vertexToNode_.empty()) {
@@ -2105,6 +2129,7 @@ void GLWidget::drawIdLabels(QPainter& painter, const glm::mat4& mvp) {
                               mesh_.vertices[vi * 6 + 2]);
                 QPointF sp = project(pos);
                 if (sp.x() < 0) continue;
+                if (!reserveBin(sp)) continue;
 
                 QString text = QString::number(nid);
                 int tx = static_cast<int>(sp.x()) - fm.horizontalAdvance(text) / 2;
@@ -2144,6 +2169,7 @@ void GLWidget::drawIdLabels(QPainter& painter, const glm::mat4& mvp) {
                 glm::vec3 center(sx / count, sy / count, sz / count);
                 QPointF sp = project(center);
                 if (sp.x() < 0) continue;
+                if (!reserveBin(sp)) continue;
 
                 QString text = QString("Part %1").arg(pi + 1);
                 int tx = static_cast<int>(sp.x()) - fm.horizontalAdvance(text) / 2;
@@ -2181,6 +2207,7 @@ void GLWidget::drawIdLabels(QPainter& painter, const glm::mat4& mvp) {
                 glm::vec3 center(acc.sx / acc.count, acc.sy / acc.count, acc.sz / acc.count);
                 QPointF sp = project(center);
                 if (sp.x() < 0) continue;
+                if (!reserveBin(sp)) continue;
 
                 QString text = QString::number(eid);
                 int tx = static_cast<int>(sp.x()) - fm.horizontalAdvance(text) / 2;
