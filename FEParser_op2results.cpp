@@ -12,6 +12,7 @@
 
 #include <map>
 #include <cstring>
+#include <cstdio>
 #include <cmath>
 
 bool FEParser::parseNastranOp2Results(const QString& filePath, FEResultData& results)
@@ -124,7 +125,9 @@ bool FEParser::parseNastranOp2Results(const QString& filePath, FEResultData& res
     }
 
     results.clear();
-    std::map<int, int> subcaseMap;
+    // key = subcaseId * 100000 + mode（modal 分析每个 mode 独立 subcase；
+    // static 分析 mode=0 退化为按 subcaseId 索引）
+    std::map<long long, int> subcaseMap;
 
     bool foundAny = false;
 
@@ -176,15 +179,37 @@ bool FEParser::parseNastranOp2Results(const QString& filePath, FEResultData& res
         const int IDENT_SIZE = 588;
         (void)IDENT_SIZE;
 
-        auto getOrCreateSubcase = [&](int scId) -> FESubcase& {
-            auto it = subcaseMap.find(scId);
+        // OP2 IDENT 字段（每 word 4 bytes，1-based）：
+        //   word 4 (offset 12) ISUBCASE
+        //   word 5 (offset 16) MODE / LSDVMN / step number
+        //   word 7 (offset 24) EIGENVALUE (float)
+        //   word 8 (offset 28) FREQ in Hz (float, modal)
+        // modal 分析 (SOL 103) 每个 mode 对应一个独立 IDENT/DATA 对，但 ISUBCASE
+        // 都是 1；用 (subcase, mode) 复合 key 把不同 mode 分到不同 subcase，
+        // 否则 UI 里会看到 N 个名字都叫 "Displacement" 的结果类型。
+        auto getOrCreateSubcase = [&](int scId, int mode, float freqHz) -> FESubcase& {
+            long long key = static_cast<long long>(scId) * 100000LL + mode;
+            auto it = subcaseMap.find(key);
             if (it == subcaseMap.end()) {
                 int idx = static_cast<int>(results.subcases.size());
                 FESubcase sc;
                 sc.id = scId;
-                sc.name = "Subcase " + std::to_string(scId);
+                if (mode > 0) {
+                    char buf[80];
+                    if (freqHz > 0.0f) {
+                        std::snprintf(buf, sizeof(buf),
+                                      "Subcase %d Mode %d (%.2f Hz)",
+                                      scId, mode, static_cast<double>(freqHz));
+                    } else {
+                        std::snprintf(buf, sizeof(buf),
+                                      "Subcase %d Mode %d", scId, mode);
+                    }
+                    sc.name = buf;
+                } else {
+                    sc.name = "Subcase " + std::to_string(scId);
+                }
                 results.subcases.push_back(sc);
-                subcaseMap[scId] = idx;
+                subcaseMap[key] = idx;
                 return results.subcases[idx];
             }
             return results.subcases[it->second];
@@ -198,10 +223,12 @@ bool FEParser::parseNastranOp2Results(const QString& filePath, FEResultData& res
                 if (identRec.size() < 16) continue;
                 int subcaseId = readInt(identRec.constData() + 12);
                 if (subcaseId <= 0) subcaseId = 1;
+                int mode = (identRec.size() >= 20) ? readInt(identRec.constData() + 16) : 0;
+                float freqHz = (identRec.size() >= 32) ? readFloat(identRec.constData() + 28) : 0.0f;
 
                 if (dataRec.size() < 32) continue;
 
-                FESubcase& subcase = getOrCreateSubcase(subcaseId);
+                FESubcase& subcase = getOrCreateSubcase(subcaseId, mode, freqHz);
 
                 FEResultType dispType;
                 dispType.name = "Displacement";
@@ -264,6 +291,8 @@ bool FEParser::parseNastranOp2Results(const QString& filePath, FEResultData& res
                 int elemTypeCode = readInt(identRec.constData() + 8);
                 int subcaseId    = readInt(identRec.constData() + 12);
                 if (subcaseId <= 0) subcaseId = 1;
+                int mode = (identRec.size() >= 20) ? readInt(identRec.constData() + 16) : 0;
+                float freqHz = (identRec.size() >= 32) ? readFloat(identRec.constData() + 28) : 0.0f;
 
                 // Rod 类单元：CROD(1), CBEAM(2), CTUBE(3), CONROD(10), CBAR(34/100)
                 bool isRod = (elemTypeCode == 1 || elemTypeCode == 2 ||
@@ -291,7 +320,7 @@ bool FEParser::parseNastranOp2Results(const QString& filePath, FEResultData& res
                     continue;
                 }
 
-                FESubcase& subcase = getOrCreateSubcase(subcaseId);
+                FESubcase& subcase = getOrCreateSubcase(subcaseId, mode, freqHz);
 
                 FEResultType* stressPtr = nullptr;
                 for (auto& rt : subcase.resultTypes) {
