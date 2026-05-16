@@ -98,6 +98,8 @@ int main(int argc, char* argv[]) {
 
     // ── 启动应用 ──
     QApplication app(argc, argv);
+    QApplication::setOrganizationName("FEModelViewer");
+    QApplication::setApplicationName("FEModelViewer");
 
     MainWindow window;
     window.show();

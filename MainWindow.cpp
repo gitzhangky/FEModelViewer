@@ -306,9 +306,14 @@ MainWindow::MainWindow() {
     connect(resultPanel_, &ResultPanel::planePreviewCleared,
             glWidget_, &GLWidget::clearClipPlanePreview);
 
-    // ── 初始主题（默认深色）──
-    currentTheme_ = Theme::dark();
-    applyTheme(currentTheme_);
+    // ── 初始主题：从 QSettings 读上次选择，缺省时默认深色 ──
+    {
+        QSettings settings;
+        themeIndex_ = settings.value("theme/index", 0).toInt();
+        if (themeIndex_ < 0 || themeIndex_ >= Theme::count()) themeIndex_ = 0;
+        currentTheme_ = Theme::byIndex(themeIndex_);
+        applyTheme(currentTheme_);
+    }
 }
 
 // ════════════════════════════════════════════════════════════
@@ -560,6 +565,8 @@ void MainWindow::setupToolBar() {
             themeIndex_ = i;
             currentTheme_ = Theme::byIndex(i);
             applyTheme(currentTheme_);
+            // 持久化用户选择，下次启动时恢复
+            QSettings().setValue("theme/index", i);
         });
     }
     themeAction_ = toolbar_->addAction("主题");
