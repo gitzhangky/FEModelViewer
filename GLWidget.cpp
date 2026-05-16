@@ -746,6 +746,7 @@ void GLWidget::updateSelectionHighlight() {
             glEnableVertexAttribArray(0);
             glDisableVertexAttribArray(1);
             selEdgeVao_.release();
+            selEdgeVbo_.release();
             hlMode = 1;
         }
         selectionDirty_ = false;
@@ -947,8 +948,10 @@ void GLWidget::updateFpsStats() {
 }
 
 void GLWidget::bindWidgetFramebuffer() {
-    // QOpenGLWidget 渲染到自己的内部 FBO，不能恢复到 0；
-    // Windows 上绑定错误 FBO 会让 Qt GL2 文字引擎在拾取后失效。
+    // QOpenGLWidget 渲染到自己的内部 FBO，必须恢复到 defaultFramebufferObject()
+    // 而不是 0；后者会让后续渲染丢失。pickFbo_ 用 raw glBindFramebuffer 绑定
+    // (不走 QOpenGLFramebufferObject::bind()，避免 Qt 内部 current_fbo 追踪指向
+    // pickFbo_ 这个可能在 resize 时被销毁的对象)，对应这里也用 raw 调用恢复。
     glBindFramebuffer(GL_FRAMEBUFFER, defaultFramebufferObject());
 }
 
@@ -1138,7 +1141,15 @@ void GLWidget::renderPickBuffer(const glm::mat4& mvp) {
     glGetBooleanv(GL_DEPTH_TEST, &prevDepthTest);
     glGetBooleanv(GL_BLEND, &prevBlend);
 
-    pickFbo_->bind();
+    // FBO 用原始 glBindFramebuffer 绑定，不走 QOpenGLFramebufferObject 的成员方法：
+    // Qt 内部用 QOpenGLContextPrivate::current_fbo 追踪当前 FBO，调用 Qt 的绑定
+    // 包装器会把追踪指向 pickFbo_，但恢复时必须用原始 GL 调用
+    // (defaultFramebufferObject() 不能通过 Qt 包装器恢复)，导致 Qt 追踪停留在
+    // 已失效的指针。后续 QPainter 构造会按这个指针写字体缓存到错误的 FBO，
+    // 表现为 Windows GL2 文字引擎拾取后 drawText 静默失败（标签和坐标轴消失），
+    // 直到下一次 makeCurrent/doneCurrent (例如切换主题) 重置追踪才恢复。
+    // macOS 走不同的绘制引擎路径，对此不敏感。
+    glBindFramebuffer(GL_FRAMEBUFFER, pickFbo_->handle());
 
     int dpr = devicePixelRatio();
     glViewport(0, 0, width() * dpr, height() * dpr);
@@ -1196,6 +1207,9 @@ void GLWidget::renderPickBuffer(const glm::mat4& mvp) {
 
     pickVao_.release();
     pickShader_->release();
+    // 释放 ARRAY_BUFFER 绑定。VAO release 不会自动解绑 ARRAY_BUFFER（global state），
+    // 残留绑定在 Windows Qt 5 GL2 文字引擎里会让后续 QPainter::drawText 静默失败。
+    vbo_.release();
 
     // 恢复 GL 状态
     bindWidgetFramebuffer();
@@ -1208,7 +1222,7 @@ void GLWidget::renderPickBuffer(const glm::mat4& mvp) {
 void GLWidget::pickAtPoint(const QPoint& pos, bool ctrlHeld) {
     if (!pickFbo_ || triToElem_.empty()) return;
 
-    // 注意：此函数现在仅在 paintGL() 内调用，GL 上下文已由 Qt 管理，
+    // 注意：此函数仅在 paintGL() 内调用，GL 上下文已由 Qt 管理，
     // 无需手动 makeCurrent/doneCurrent。
 
     // 渲染拾取缓冲
@@ -1221,7 +1235,8 @@ void GLWidget::pickAtPoint(const QPoint& pos, bool ctrlHeld) {
 
     unsigned char pixel[4] = {0};
     {
-        pickFbo_->bind();
+        // 原始 GL 绑定，避免污染 Qt 的 current_fbo 追踪（详见 renderPickBuffer 注释）
+        glBindFramebuffer(GL_FRAMEBUFFER, pickFbo_->handle());
         int dpr = devicePixelRatio();
         int px = pos.x() * dpr;
         int py = (height() - pos.y()) * dpr;
@@ -1445,7 +1460,8 @@ void GLWidget::deselectAtPoint(const QPoint& pos) {
 
     unsigned char pixel[4] = {0};
     {
-        pickFbo_->bind();
+        // 原始 GL 绑定，避免污染 Qt 的 current_fbo 追踪（详见 renderPickBuffer 注释）
+        glBindFramebuffer(GL_FRAMEBUFFER, pickFbo_->handle());
         int dpr = devicePixelRatio();
         int px = pos.x() * dpr;
         int py = (height() - pos.y()) * dpr;
@@ -1673,6 +1689,11 @@ void GLWidget::rebuildSelectionEdges() {
     glEnableVertexAttribArray(0);
     glDisableVertexAttribArray(1);
     selEdgeVao_.release();
+    // 释放 ARRAY_BUFFER 全局绑定。VAO release 不会自动解绑 ARRAY_BUFFER（它是 global state，
+    // 不是 VAO state），残留的 bind 在 Windows Qt 5 GL2 文字引擎中会让后续 QPainter::drawText
+    // 提交到错误的 buffer，表现为拾取后标签静默消失，直到 makeCurrent/doneCurrent 循环
+    // (如切换主题) 重置 paint engine 才恢复。macOS 走不同的绘制引擎路径，对此不敏感。
+    selEdgeVbo_.release();
 }
 
 void GLWidget::buildEdgeAdjacency() {
@@ -1861,6 +1882,7 @@ void GLWidget::updateSilhouetteFromCache() {
     glEnableVertexAttribArray(0);
     glDisableVertexAttribArray(1);
     selEdgeVao_.release();
+    selEdgeVbo_.release();
 }
 
 void GLWidget::drawAxesIndicator() {
