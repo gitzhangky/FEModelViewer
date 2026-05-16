@@ -8,3 +8,6 @@ install-vs/
 .cache/
 .vscode/
 .claude/settings.local.json
+
+# generate_hex_grid.py 输出的大模型测试文件（数百 MB，不入版本控制）
+examples/data/hex_*x*x*.bdf
