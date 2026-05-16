@@ -78,6 +78,9 @@ public:
     /** @brief 设置拾取模式 */
     void setPickMode(PickMode mode);
 
+    /** @brief 获取当前拾取模式 */
+    PickMode pickMode() const { return pickMode_; }
+
     /** @brief 设置是否显示选中项的 ID 标签 */
     void setShowLabels(bool show);
 

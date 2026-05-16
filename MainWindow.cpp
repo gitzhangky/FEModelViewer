@@ -174,8 +174,22 @@ MainWindow::MainWindow() {
     connect(partsPanel_, &PartsPanel::partVisibilityChanged,
             glWidget_, &GLWidget::setPartVisibility);
 
+    // 用户在模型树里选中部件 → 自动切到部件拾取模式（同步 toolbar 按钮和 GLWidget），
+    // 然后把这些部件在 3D 视图中高亮。selectParts() 自己用 updating_ 标志抑制
+    // 回环，所以来自 GLWidget partsPicked 的程序性同步不会触发此 lambda。
     connect(partsPanel_, &PartsPanel::partSelectionChanged,
-            glWidget_, &GLWidget::highlightParts);
+            this, [this](const std::vector<int>& parts) {
+        if (!parts.empty() && glWidget_->pickMode() != PickMode::Part) {
+            for (QAction* a : pickGroup_->actions()) {
+                if (a->data().toInt() == static_cast<int>(PickMode::Part)) {
+                    a->setChecked(true);
+                    break;
+                }
+            }
+            glWidget_->setPickMode(PickMode::Part);
+        }
+        glWidget_->highlightParts(parts);
+    });
 
     // 部件拾取 → 同步模型树选中状态
     connect(glWidget_, &GLWidget::partsPicked,
