@@ -11,6 +11,7 @@
 #include <QWheelEvent>
 #include <QPainter>
 #include <QFontMetrics>
+#include <QOpenGLBuffer>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include <algorithm>
@@ -30,6 +31,22 @@ static QByteArray loadShaderSource(const QString& resourcePath) {
     }
     return f.readAll();
 }
+
+// ──────────────────────────────────────────────────────────────
+// ScopedBufferBind: 对 QOpenGLBuffer::bind() 的 RAII 包装。
+// 构造时 bind，作用域结束时自动 release，避免漏 release 导致 GL_ARRAY_BUFFER
+// 全局状态污染（Windows 上 Qt 5 GL2 文字引擎会因此让 QPainter::drawText 静默失败）。
+// 项目内所有"配对 bind/release"路径都应改用此 wrapper，杜绝裸 .bind()。
+// ──────────────────────────────────────────────────────────────
+class ScopedBufferBind {
+public:
+    explicit ScopedBufferBind(QOpenGLBuffer& buf) : buf_(buf) { buf_.bind(); }
+    ~ScopedBufferBind() { buf_.release(); }
+    ScopedBufferBind(const ScopedBufferBind&) = delete;
+    ScopedBufferBind& operator=(const ScopedBufferBind&) = delete;
+private:
+    QOpenGLBuffer& buf_;
+};
 
 // ── 部件颜色调色板（Catppuccin Mocha）──
 static const glm::vec3 kPartPalette[] = {
@@ -116,11 +133,12 @@ void GLWidget::setVertexColors(const std::vector<float>& colors) {
     useVertexColor_ = true;
     // 直接上传颜色到 colorVbo_，不修改主 VBO
     vao_.bind();
-    colorVbo_.bind();
-    colorVbo_.allocate(colors.data(), static_cast<int>(colors.size() * sizeof(float)));
-    glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), nullptr);
-    glEnableVertexAttribArray(2);
-    colorVbo_.release();
+    {
+        ScopedBufferBind bind(colorVbo_);
+        colorVbo_.allocate(colors.data(), static_cast<int>(colors.size() * sizeof(float)));
+        glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), nullptr);
+        glEnableVertexAttribArray(2);
+    }
     vao_.release();
     update();
 }
@@ -136,15 +154,18 @@ void GLWidget::setVertexScalars(const std::vector<float>& scalars, float minVal,
         uploadMesh();
     }
     vao_.bind();
-    scalarVbo_.bind();
-    scalarVbo_.allocate(scalars.data(), static_cast<int>(scalars.size() * sizeof(float)));
-    glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, sizeof(float), nullptr);
-    glEnableVertexAttribArray(3);
+    {
+        ScopedBufferBind bindScalar(scalarVbo_);
+        scalarVbo_.allocate(scalars.data(), static_cast<int>(scalars.size() * sizeof(float)));
+        glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, sizeof(float), nullptr);
+        glEnableVertexAttribArray(3);
+    }
     // 恢复 colorVbo_ 的 attribute 2 绑定（防止 scalarVbo_ 的 bind 污染）
-    colorVbo_.bind();
-    glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), nullptr);
-    glEnableVertexAttribArray(2);
-    colorVbo_.release();
+    {
+        ScopedBufferBind bindColor(colorVbo_);
+        glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), nullptr);
+        glEnableVertexAttribArray(2);
+    }
     vao_.release();
     update();
 }
@@ -156,12 +177,13 @@ void GLWidget::setSliceLines(const std::vector<float>& lineVertices) {
         if (!sliceVao_.isCreated()) sliceVao_.create();
         if (!sliceVbo_.isCreated()) sliceVbo_.create();
         sliceVao_.bind();
-        sliceVbo_.bind();
-        sliceVbo_.allocate(lineVertices.data(),
-                           static_cast<int>(lineVertices.size() * sizeof(float)));
-        shader_->enableAttributeArray(0);
-        shader_->setAttributeBuffer(0, GL_FLOAT, 0, 3, 3 * sizeof(float));
-        sliceVbo_.release();
+        {
+            ScopedBufferBind bind(sliceVbo_);
+            sliceVbo_.allocate(lineVertices.data(),
+                               static_cast<int>(lineVertices.size() * sizeof(float)));
+            shader_->enableAttributeArray(0);
+            shader_->setAttributeBuffer(0, GL_FLOAT, 0, 3, 3 * sizeof(float));
+        }
         sliceVao_.release();
         doneCurrent();
     }
@@ -344,14 +366,15 @@ void GLWidget::initializeGL() {
             -1,  1,  bgTopColor_[0], bgTopColor_[1], bgTopColor_[2],
         };
         bgVao_.bind();
-        bgVbo_.bind();
-        bgVbo_.allocate(bgData, sizeof(bgData));
-        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), nullptr);
-        glEnableVertexAttribArray(0);
-        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(float),
-                              reinterpret_cast<void*>(2 * sizeof(float)));
-        glEnableVertexAttribArray(1);
-        bgVbo_.release();
+        {
+            ScopedBufferBind bind(bgVbo_);
+            bgVbo_.allocate(bgData, sizeof(bgData));
+            glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), nullptr);
+            glEnableVertexAttribArray(0);
+            glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(float),
+                                  reinterpret_cast<void*>(2 * sizeof(float)));
+            glEnableVertexAttribArray(1);
+        }
         bgVao_.release();
     }
 
@@ -460,14 +483,15 @@ void GLWidget::initializeGL() {
     axesVao_.create();
     axesVbo_.create();
     axesVao_.bind();
-    axesVbo_.bind();
-    axesVbo_.allocate(allData.data(), static_cast<int>(allData.size() * sizeof(float)));
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), nullptr);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float),
-                          reinterpret_cast<void*>(3 * sizeof(float)));
-    glEnableVertexAttribArray(1);
-    axesVbo_.release();
+    {
+        ScopedBufferBind bind(axesVbo_);
+        axesVbo_.allocate(allData.data(), static_cast<int>(allData.size() * sizeof(float)));
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), nullptr);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float),
+                              reinterpret_cast<void*>(3 * sizeof(float)));
+        glEnableVertexAttribArray(1);
+    }
     axesVao_.release();
 
     // 启用深度测试，确保近处物体遮挡远处物体
@@ -743,14 +767,15 @@ void GLWidget::updateSelectionHighlight() {
             }
             selEdgeVertCount_ = static_cast<int>(hlVerts.size() / 3);
             selEdgeVao_.bind();
-            selEdgeVbo_.bind();
-            if (!hlVerts.empty())
-                selEdgeVbo_.allocate(hlVerts.data(), static_cast<int>(hlVerts.size() * sizeof(float)));
-            glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), nullptr);
-            glEnableVertexAttribArray(0);
-            glDisableVertexAttribArray(1);
+            {
+                ScopedBufferBind bind(selEdgeVbo_);
+                if (!hlVerts.empty())
+                    selEdgeVbo_.allocate(hlVerts.data(), static_cast<int>(hlVerts.size() * sizeof(float)));
+                glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), nullptr);
+                glEnableVertexAttribArray(0);
+                glDisableVertexAttribArray(1);
+            }
             selEdgeVao_.release();
-            selEdgeVbo_.release();
             hlMode = 1;
         }
         selectionDirty_ = false;
@@ -771,12 +796,13 @@ void GLWidget::renderOverlayMesh() {
         if (!overlayVao_.isCreated()) overlayVao_.create();
         if (!overlayVbo_.isCreated()) overlayVbo_.create();
         overlayVao_.bind();
-        overlayVbo_.bind();
-        overlayVbo_.allocate(overlayMesh_.edgeVertices.data(),
-                            static_cast<int>(overlayMesh_.edgeVertices.size() * sizeof(float)));
-        shader_->enableAttributeArray(0);
-        shader_->setAttributeBuffer(0, GL_FLOAT, 0, 3, 3 * sizeof(float));
-        overlayVbo_.release();
+        {
+            ScopedBufferBind bind(overlayVbo_);
+            overlayVbo_.allocate(overlayMesh_.edgeVertices.data(),
+                                static_cast<int>(overlayMesh_.edgeVertices.size() * sizeof(float)));
+            shader_->enableAttributeArray(0);
+            shader_->setAttributeBuffer(0, GL_FLOAT, 0, 3, 3 * sizeof(float));
+        }
         overlayVao_.release();
         overlayVertCount_ = static_cast<int>(overlayMesh_.edgeVertices.size() / 3);
     }
@@ -808,27 +834,29 @@ void GLWidget::renderClipPreview() {
         if (!clipPreviewEdgeVbo_.isCreated()) clipPreviewEdgeVbo_.create();
 
         clipPreviewVao_.bind();
-        clipPreviewVbo_.bind();
-        clipPreviewVbo_.allocate(clipPreviewMesh_.vertices.data(),
-                                 static_cast<int>(clipPreviewMesh_.vertices.size() * sizeof(float)));
-        shader_->enableAttributeArray(0);
-        shader_->setAttributeBuffer(0, GL_FLOAT, 0, 3, 6 * sizeof(float));
-        shader_->enableAttributeArray(1);
-        shader_->setAttributeBuffer(1, GL_FLOAT, 3 * sizeof(float), 3, 6 * sizeof(float));
-        clipPreviewIbo_->bind();
-        clipPreviewIbo_->allocate(clipPreviewMesh_.indices.data(),
-                                  static_cast<int>(clipPreviewMesh_.indices.size() * sizeof(unsigned int)));
-        clipPreviewVbo_.release();
+        {
+            ScopedBufferBind bind(clipPreviewVbo_);
+            clipPreviewVbo_.allocate(clipPreviewMesh_.vertices.data(),
+                                     static_cast<int>(clipPreviewMesh_.vertices.size() * sizeof(float)));
+            shader_->enableAttributeArray(0);
+            shader_->setAttributeBuffer(0, GL_FLOAT, 0, 3, 6 * sizeof(float));
+            shader_->enableAttributeArray(1);
+            shader_->setAttributeBuffer(1, GL_FLOAT, 3 * sizeof(float), 3, 6 * sizeof(float));
+            clipPreviewIbo_->bind();
+            clipPreviewIbo_->allocate(clipPreviewMesh_.indices.data(),
+                                      static_cast<int>(clipPreviewMesh_.indices.size() * sizeof(unsigned int)));
+        }
         clipPreviewVao_.release();
 
         clipPreviewEdgeVao_.bind();
-        clipPreviewEdgeVbo_.bind();
-        clipPreviewEdgeVbo_.allocate(clipPreviewMesh_.edgeVertices.data(),
-                                     static_cast<int>(clipPreviewMesh_.edgeVertices.size() * sizeof(float)));
-        shader_->enableAttributeArray(0);
-        shader_->setAttributeBuffer(0, GL_FLOAT, 0, 3, 3 * sizeof(float));
-        glDisableVertexAttribArray(1);
-        clipPreviewEdgeVbo_.release();
+        {
+            ScopedBufferBind bind(clipPreviewEdgeVbo_);
+            clipPreviewEdgeVbo_.allocate(clipPreviewMesh_.edgeVertices.data(),
+                                         static_cast<int>(clipPreviewMesh_.edgeVertices.size() * sizeof(float)));
+            shader_->enableAttributeArray(0);
+            shader_->setAttributeBuffer(0, GL_FLOAT, 0, 3, 3 * sizeof(float));
+            glDisableVertexAttribArray(1);
+        }
         clipPreviewEdgeVao_.release();
     }
 
@@ -881,17 +909,18 @@ void GLWidget::renderIsoSurface() {
             isoIbo_->create();
         }
         isoVao_.bind();
-        isoVbo_.bind();
-        isoVbo_.allocate(isoMesh_.vertices.data(),
-                         static_cast<int>(isoMesh_.vertices.size() * sizeof(float)));
-        shader_->enableAttributeArray(0);
-        shader_->setAttributeBuffer(0, GL_FLOAT, 0, 3, 6 * sizeof(float));
-        shader_->enableAttributeArray(1);
-        shader_->setAttributeBuffer(1, GL_FLOAT, 3 * sizeof(float), 3, 6 * sizeof(float));
-        isoIbo_->bind();
-        isoIbo_->allocate(isoMesh_.indices.data(),
-                          static_cast<int>(isoMesh_.indices.size() * sizeof(unsigned int)));
-        isoVbo_.release();
+        {
+            ScopedBufferBind bind(isoVbo_);
+            isoVbo_.allocate(isoMesh_.vertices.data(),
+                             static_cast<int>(isoMesh_.vertices.size() * sizeof(float)));
+            shader_->enableAttributeArray(0);
+            shader_->setAttributeBuffer(0, GL_FLOAT, 0, 3, 6 * sizeof(float));
+            shader_->enableAttributeArray(1);
+            shader_->setAttributeBuffer(1, GL_FLOAT, 3 * sizeof(float), 3, 6 * sizeof(float));
+            isoIbo_->bind();
+            isoIbo_->allocate(isoMesh_.indices.data(),
+                              static_cast<int>(isoMesh_.indices.size() * sizeof(unsigned int)));
+        }
         isoVao_.release();
     }
     shader_->setUniformValue("uWireframe", false);
@@ -1177,7 +1206,7 @@ void GLWidget::renderPickBuffer(const glm::mat4& mvp) {
     GLint pickColorLoc = pickShader_->uniformLocation("uPickColor");
 
     pickVao_.bind();
-    vbo_.bind();
+    ScopedBufferBind bindVbo(vbo_);
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), nullptr);
     glEnableVertexAttribArray(0);
 
@@ -1215,9 +1244,8 @@ void GLWidget::renderPickBuffer(const glm::mat4& mvp) {
 
     pickVao_.release();
     pickShader_->release();
-    // 释放 ARRAY_BUFFER 绑定。VAO release 不会自动解绑 ARRAY_BUFFER（global state），
-    // 残留绑定在 Windows Qt 5 GL2 文字引擎里会让后续 QPainter::drawText 静默失败。
-    vbo_.release();
+    // vbo_ 通过 ScopedBufferBind 在函数 scope 结束时自动 release（避免漏 release
+    // 导致 Windows Qt 5 GL2 文字引擎 QPainter::drawText 静默失败）。
 
     // 恢复 GL 状态
     bindWidgetFramebuffer();
@@ -1690,19 +1718,16 @@ void GLWidget::rebuildSelectionEdges() {
     selEdgeVertCount_ = static_cast<int>(verts.size() / 3);
 
     selEdgeVao_.bind();
-    selEdgeVbo_.bind();
-    if (!verts.empty()) {
-        selEdgeVbo_.allocate(verts.data(), static_cast<int>(verts.size() * sizeof(float)));
+    {
+        ScopedBufferBind bind(selEdgeVbo_);
+        if (!verts.empty()) {
+            selEdgeVbo_.allocate(verts.data(), static_cast<int>(verts.size() * sizeof(float)));
+        }
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), nullptr);
+        glEnableVertexAttribArray(0);
+        glDisableVertexAttribArray(1);
     }
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), nullptr);
-    glEnableVertexAttribArray(0);
-    glDisableVertexAttribArray(1);
     selEdgeVao_.release();
-    // 释放 ARRAY_BUFFER 全局绑定。VAO release 不会自动解绑 ARRAY_BUFFER（它是 global state，
-    // 不是 VAO state），残留的 bind 在 Windows Qt 5 GL2 文字引擎中会让后续 QPainter::drawText
-    // 提交到错误的 buffer，表现为拾取后标签静默消失，直到 makeCurrent/doneCurrent 循环
-    // (如切换主题) 重置 paint engine 才恢复。macOS 走不同的绘制引擎路径，对此不敏感。
-    selEdgeVbo_.release();
 }
 
 void GLWidget::buildEdgeAdjacency() {
@@ -1884,14 +1909,15 @@ void GLWidget::updateSilhouetteFromCache() {
     selEdgeVertCount_ = static_cast<int>(verts.size() / 3);
 
     selEdgeVao_.bind();
-    selEdgeVbo_.bind();
-    if (!verts.empty())
-        selEdgeVbo_.allocate(verts.data(), static_cast<int>(verts.size() * sizeof(float)));
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), nullptr);
-    glEnableVertexAttribArray(0);
-    glDisableVertexAttribArray(1);
+    {
+        ScopedBufferBind bind(selEdgeVbo_);
+        if (!verts.empty())
+            selEdgeVbo_.allocate(verts.data(), static_cast<int>(verts.size() * sizeof(float)));
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), nullptr);
+        glEnableVertexAttribArray(0);
+        glDisableVertexAttribArray(1);
+    }
     selEdgeVao_.release();
-    selEdgeVbo_.release();
 }
 
 void GLWidget::drawAxesIndicator() {
@@ -2217,9 +2243,10 @@ void GLWidget::applyTheme(const Theme& theme) {
             -1,  1,  theme.bgTopR, theme.bgTopG, theme.bgTopB,
         };
         makeCurrent();
-        bgVbo_.bind();
-        bgVbo_.write(0, bgData, sizeof(bgData));
-        bgVbo_.release();
+        {
+            ScopedBufferBind bind(bgVbo_);
+            bgVbo_.write(0, bgData, sizeof(bgData));
+        }
         doneCurrent();
     }
     update();
@@ -2370,22 +2397,24 @@ void GLWidget::uploadMesh() {
     vao_.bind();
 
     // 上传顶点数据到 VBO — 始终 6-float 步长 [pos(3) + normal(3)]
-    vbo_.bind();
-    vbo_.allocate(mesh_.vertices.data(),
-                  static_cast<int>(mesh_.vertices.size() * sizeof(float)));
+    {
+        ScopedBufferBind bind(vbo_);
+        vbo_.allocate(mesh_.vertices.data(),
+                      static_cast<int>(mesh_.vertices.size() * sizeof(float)));
 
-    // 上传索引数据到 IBO
-    activeIndexCount_ = static_cast<int>(mesh_.indices.size());
-    ibo_->bind();
-    ibo_->allocate(mesh_.indices.data(),
-                   static_cast<int>(mesh_.indices.size() * sizeof(unsigned int)));
+        // 上传索引数据到 IBO（IndexBuffer 是 VAO state，跟随 vao_.release 自动失效）
+        activeIndexCount_ = static_cast<int>(mesh_.indices.size());
+        ibo_->bind();
+        ibo_->allocate(mesh_.indices.data(),
+                       static_cast<int>(mesh_.indices.size() * sizeof(unsigned int)));
 
-    // 始终 6-float 步长
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), nullptr);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float),
-                          reinterpret_cast<void*>(3 * sizeof(float)));
-    glEnableVertexAttribArray(1);
+        // 始终 6-float 步长
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), nullptr);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float),
+                              reinterpret_cast<void*>(3 * sizeof(float)));
+        glEnableVertexAttribArray(1);
+    }
 
     // ── 颜色缓冲（per-vertex，默认为 color_） ──
     {
@@ -2396,7 +2425,7 @@ void GLWidget::uploadMesh() {
             defaultColors[v * 3 + 1] = color_.y;
             defaultColors[v * 3 + 2] = color_.z;
         }
-        colorVbo_.bind();
+        ScopedBufferBind bind(colorVbo_);
         colorVbo_.allocate(defaultColors.data(), static_cast<int>(defaultColors.size() * sizeof(float)));
         glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), nullptr);
         glEnableVertexAttribArray(2);
@@ -2406,11 +2435,10 @@ void GLWidget::uploadMesh() {
     {
         int vertCount = static_cast<int>(mesh_.vertices.size() / 6);
         std::vector<float> defaultScalars(vertCount, 0.0f);
-        scalarVbo_.bind();
+        ScopedBufferBind bind(scalarVbo_);
         scalarVbo_.allocate(defaultScalars.data(), static_cast<int>(defaultScalars.size() * sizeof(float)));
         glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, sizeof(float), nullptr);
         glEnableVertexAttribArray(3);
-        scalarVbo_.release();
     }
 
     vao_.release();
@@ -2425,22 +2453,21 @@ void GLWidget::uploadMesh() {
         }
 
         edgeVao_.bind();
+        {
+            ScopedBufferBind bind(edgeVbo_);
+            edgeVbo_.allocate(mesh_.edgeVertices.data(),
+                              static_cast<int>(mesh_.edgeVertices.size() * sizeof(float)));
 
-        edgeVbo_.bind();
-        edgeVbo_.allocate(mesh_.edgeVertices.data(),
-                          static_cast<int>(mesh_.edgeVertices.size() * sizeof(float)));
+            edgeIbo_->bind();
+            edgeIbo_->allocate(mesh_.edgeIndices.data(),
+                               static_cast<int>(mesh_.edgeIndices.size() * sizeof(unsigned int)));
 
-        edgeIbo_->bind();
-        edgeIbo_->allocate(mesh_.edgeIndices.data(),
-                           static_cast<int>(mesh_.edgeIndices.size() * sizeof(unsigned int)));
-
-        // 边线顶点只有位置（3 float），无法线
-        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), nullptr);
-        glEnableVertexAttribArray(0);
-        // 法线属性设为 0（线框模式不使用法线）
-        glDisableVertexAttribArray(1);
-
-        edgeVbo_.release();
+            // 边线顶点只有位置（3 float），无法线
+            glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), nullptr);
+            glEnableVertexAttribArray(0);
+            // 法线属性设为 0（线框模式不使用法线）
+            glDisableVertexAttribArray(1);
+        }
         edgeVao_.release();
     }
 }
