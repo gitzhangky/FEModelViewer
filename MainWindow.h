@@ -58,7 +58,7 @@ private:
     void refreshFilePathEdits();
     void syncImportPathsFromEdits();
 
-    void applyDeformation(float scale, bool overlayUndeformed);
+    void applyDeformation(float scale, bool overlayUndeformed, bool autoFit = true);
     void clearDeformation();
     void applyContour(const FEScalarField& field, const QString& title);
     void applyThreshold(float minVal, float maxVal);

@@ -230,7 +230,7 @@ MainWindow::MainWindow() {
         resultPanel_->selectFrame(frameIndex);
 
         if (deform_.active)
-            applyDeformation(deform_.scale, deform_.overlay);
+            applyDeformation(deform_.scale, deform_.overlay, /*autoFit=*/false);
 
         FEScalarField field;
         QString title;
@@ -836,7 +836,7 @@ void MainWindow::updateFilterPlaneBounds()
     resultPanel_->setPlaneBounds(bbMin, bbMax);
 }
 
-void MainWindow::applyDeformation(float scale, bool overlayUndeformed)
+void MainWindow::applyDeformation(float scale, bool overlayUndeformed, bool autoFit)
 {
     const FEModel& model = feModelPanel_->currentModel();
     if (model.nodes.empty()) return;
@@ -870,9 +870,13 @@ void MainWindow::applyDeformation(float scale, bool overlayUndeformed)
     pushRenderDataToGL(deform_.renderData);
     reapplyContourIfNeeded();
 
-    float size = deform_.model.computeSize();
-    if (size > 0.0f)
-        glWidget_->fitToModel(deform_.model.computeCenter(), size);
+    // 仅在用户手动应用变形时自动 fit；动画切帧 (autoFit=false) 不重置相机，
+    // 否则 zoom/rotate 会被每帧的 fitToModel 复原。
+    if (autoFit) {
+        float size = deform_.model.computeSize();
+        if (size > 0.0f)
+            glWidget_->fitToModel(deform_.model.computeCenter(), size);
+    }
     updateFilterPlaneBounds();
 }
 
