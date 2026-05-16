@@ -581,7 +581,7 @@ void GLWidget::processDeferredPicks() {
     }
     if (pickRectPending_) {
         pickRectPending_ = false;
-        pickInRect(pendingPickRect_);
+        pickInRect(pendingPickRect_, pendingPickCtrl_);
     }
     if (deselectPointPending_) {
         deselectPointPending_ = false;
@@ -1055,16 +1055,18 @@ void GLWidget::mouseReleaseEvent(QMouseEvent* e) {
         isBoxSelecting_ = false;
 
         QRect rect = QRect(boxOrigin_, e->pos()).normalized();
+        bool ctrl = (e->modifiers() & (Qt::ControlModifier | Qt::ShiftModifier));
         if (rect.width() > 3 && rect.height() > 3) {
-            // 框选
+            // 框选（ctrl/shift 持有 → 追加到现有选择集）
             pickRectPending_ = true;
             pendingPickRect_ = rect;
+            pendingPickCtrl_ = ctrl;
             update();
         } else {
             // 范围太小视为点选
             pickPointPending_ = true;
             pendingPickPos_ = e->pos();
-            pendingPickCtrl_ = (e->modifiers() & (Qt::ControlModifier | Qt::ShiftModifier));
+            pendingPickCtrl_ = ctrl;
             update();
         }
     }
@@ -1338,7 +1340,7 @@ void GLWidget::pickAtPoint(const QPoint& pos, bool ctrlHeld) {
     }
 }
 
-void GLWidget::pickInRect(const QRect& rect) {
+void GLWidget::pickInRect(const QRect& rect, bool ctrlHeld) {
     if (triToElem_.empty()) return;
 
     // 注意：此函数现在仅在 paintGL() 内调用，GL 上下文已由 Qt 管理。
@@ -1355,7 +1357,8 @@ void GLWidget::pickInRect(const QRect& rect) {
     if (ndcL > ndcR) std::swap(ndcL, ndcR);
     if (ndcB > ndcT) std::swap(ndcB, ndcT);
 
-    selection_.clear();
+    // ctrlHeld 时累加到现有选择集（追加框选）；否则替换
+    if (!ctrlHeld) selection_.clear();
 
     int vertCount = static_cast<int>(mesh_.vertices.size() / 6);
 

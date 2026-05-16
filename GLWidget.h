@@ -193,7 +193,7 @@ private:
     // ── 拾取相关 ──
     void renderPickBuffer(const glm::mat4& mvp);
     void pickAtPoint(const QPoint& pos, bool ctrlHeld);
-    void pickInRect(const QRect& rect);
+    void pickInRect(const QRect& rect, bool ctrlHeld);
     void deselectAtPoint(const QPoint& pos);
     void deselectInRect(const QRect& rect);
     glm::vec3 idToColor(int id);

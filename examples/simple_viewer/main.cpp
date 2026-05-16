@@ -135,23 +135,44 @@ private:
     }
 
     static FEModel makeHexModel() {
+        // 4 个 HEX8 沿 X 轴一排，共 20 节点 / 4 单元。
+        // 用多单元结构方便演示框选、追加选择 (Ctrl/Shift + 拖动)。
         FEModel model;
-        model.name = "Sample HEX8";
+        model.name = "Sample HEX8 Row";
 
-        model.addNode(1, {-1.0f, -1.0f, -1.0f});
-        model.addNode(2, { 1.0f, -1.0f, -1.0f});
-        model.addNode(3, { 1.0f,  1.0f, -1.0f});
-        model.addNode(4, {-1.0f,  1.0f, -1.0f});
-        model.addNode(5, {-1.0f, -1.0f,  1.0f});
-        model.addNode(6, { 1.0f, -1.0f,  1.0f});
-        model.addNode(7, { 1.0f,  1.0f,  1.0f});
-        model.addNode(8, {-1.0f,  1.0f,  1.0f});
-        model.addElement(1001, ElementType::HEX8, {1, 2, 3, 4, 5, 6, 7, 8});
+        // 底层 z=-0.5（10 个节点）
+        model.addNode( 1, {-2.0f, -0.5f, -0.5f});
+        model.addNode( 2, {-1.0f, -0.5f, -0.5f});
+        model.addNode( 3, { 0.0f, -0.5f, -0.5f});
+        model.addNode( 4, { 1.0f, -0.5f, -0.5f});
+        model.addNode( 5, { 2.0f, -0.5f, -0.5f});
+        model.addNode( 6, {-2.0f,  0.5f, -0.5f});
+        model.addNode( 7, {-1.0f,  0.5f, -0.5f});
+        model.addNode( 8, { 0.0f,  0.5f, -0.5f});
+        model.addNode( 9, { 1.0f,  0.5f, -0.5f});
+        model.addNode(10, { 2.0f,  0.5f, -0.5f});
+        // 顶层 z=+0.5（10 个节点）
+        model.addNode(11, {-2.0f, -0.5f,  0.5f});
+        model.addNode(12, {-1.0f, -0.5f,  0.5f});
+        model.addNode(13, { 0.0f, -0.5f,  0.5f});
+        model.addNode(14, { 1.0f, -0.5f,  0.5f});
+        model.addNode(15, { 2.0f, -0.5f,  0.5f});
+        model.addNode(16, {-2.0f,  0.5f,  0.5f});
+        model.addNode(17, {-1.0f,  0.5f,  0.5f});
+        model.addNode(18, { 0.0f,  0.5f,  0.5f});
+        model.addNode(19, { 1.0f,  0.5f,  0.5f});
+        model.addNode(20, { 2.0f,  0.5f,  0.5f});
+
+        // HEX8 顶点顺序：bottom 逆时针 → top 逆时针
+        model.addElement(1001, ElementType::HEX8, { 1, 2, 7, 6, 11, 12, 17, 16});
+        model.addElement(1002, ElementType::HEX8, { 2, 3, 8, 7, 12, 13, 18, 17});
+        model.addElement(1003, ElementType::HEX8, { 3, 4, 9, 8, 13, 14, 19, 18});
+        model.addElement(1004, ElementType::HEX8, { 4, 5,10, 9, 14, 15, 20, 19});
 
         FEPart part;
-        part.name = "Cube Part";
-        part.nodeIds = {1, 2, 3, 4, 5, 6, 7, 8};
-        part.elementIds = {1001};
+        part.name = "Hex Row";
+        for (int n = 1; n <= 20; ++n) part.nodeIds.push_back(n);
+        part.elementIds = {1001, 1002, 1003, 1004};
         model.parts.push_back(part);
 
         return model;
