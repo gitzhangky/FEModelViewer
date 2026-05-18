@@ -336,6 +336,16 @@ if(BUILD_TESTING)
         COMMAND test_node_vertex_lookup
     )
 
+    add_executable(test_label_layout
+        tests/test_label_layout.cpp
+    )
+    target_include_directories(test_label_layout PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+    add_test(NAME label_layout
+        COMMAND test_label_layout
+    )
+
     add_executable(test_iso_cube_data
         tests/test_iso_cube_data.cpp
     )

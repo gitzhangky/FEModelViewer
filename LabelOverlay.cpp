@@ -1,6 +1,7 @@
 #include "LabelOverlay.h"
 
 #include "GLWidget.h"
+#include "LabelLayout.h"
 #include "PickRenderer.h"
 
 #include <QFontMetrics>
@@ -18,8 +19,12 @@ void LabelOverlay::setAxesMvp(const glm::mat4& mvp) {
 
 void LabelOverlay::render(QPainter& painter, const glm::mat4& sceneMvp) {
     drawAxesLabels(painter);
-    if (w_.showLabels_ && w_.selection_.hasSelection())
+    if (w_.showLabels_ && w_.selection_.hasSelection()) {
         drawIdLabels(painter, sceneMvp);
+    } else {
+        lastLabelMode_ = -1;
+        lastLabelIds_.clear();
+    }
 }
 
 void LabelOverlay::drawAxesLabels(QPainter& painter) {
@@ -116,6 +121,18 @@ void LabelOverlay::drawIdLabels(QPainter& painter, const glm::mat4& mvp) {
         return w_.isTriangleVisible(triIndex);
     };
 
+    int modeKey = static_cast<int>(w_.pickMode_);
+    const std::vector<int> previousLabelIds =
+        (lastLabelMode_ == modeKey) ? lastLabelIds_ : std::vector<int>{};
+    std::vector<int> drawnLabelIds;
+    bool placementUpdated = false;
+
+    auto rememberPlacedLabels = [&]() {
+        lastLabelMode_ = modeKey;
+        lastLabelIds_ = drawnLabelIds;
+        placementUpdated = true;
+    };
+
     if (w_.pickMode_ == PickMode::Node) {
         // ── 节点标签 ──
         if (!w_.selection_.selectedNodes.empty() && !w_.nodeToFirstVertex_.empty()) {
@@ -146,7 +163,11 @@ void LabelOverlay::drawIdLabels(QPainter& painter, const glm::mat4& mvp) {
                 }
             }
 
-            for (int nid : w_.selection_.selectedNodes) {
+            std::vector<int> nodeIds(w_.selection_.selectedNodes.begin(),
+                                     w_.selection_.selectedNodes.end());
+            auto orderedNodeIds = LabelLayout::stablePriorityOrder(nodeIds, previousLabelIds);
+
+            for (int nid : orderedNodeIds) {
                 if (!w_.isNodeVisible(nid)) continue;
                 if (filterNodesByVisibility && visibleNodes.count(nid) == 0)
                     continue;
@@ -166,8 +187,10 @@ void LabelOverlay::drawIdLabels(QPainter& painter, const glm::mat4& mvp) {
                 int tx = static_cast<int>(sp.x()) - fm.horizontalAdvance(text) / 2;
                 int ty = static_cast<int>(sp.y()) + offsetY;
                 drawOutlinedText(tx, ty, text);
+                drawnLabelIds.push_back(nid);
                 if (usedBins.size() >= maxReservedBins) break;
             }
+            rememberPlacedLabels();
         }
 
     } else if (w_.pickMode_ == PickMode::Part) {
@@ -181,8 +204,13 @@ void LabelOverlay::drawIdLabels(QPainter& painter, const glm::mat4& mvp) {
                     selectedParts.insert(pi);
             }
 
+            std::unordered_map<long long, int> partLabelStacks;
+            int drawnPartLabels = 0;
+            std::vector<int> partIds(selectedParts.begin(), selectedParts.end());
+            auto orderedPartIds = LabelLayout::stablePriorityOrder(partIds, previousLabelIds);
+
             // 计算每个选中部件的重心
-            for (int pi : selectedParts) {
+            for (int pi : orderedPartIds) {
                 if (pi < 0 || pi >= static_cast<int>(w_.partTriangles_.size())) continue;
                 float sx = 0, sy = 0, sz = 0;
                 int count = 0;
@@ -201,15 +229,20 @@ void LabelOverlay::drawIdLabels(QPainter& painter, const glm::mat4& mvp) {
                 if (count == 0) continue;
                 glm::vec3 center(sx / count, sy / count, sz / count);
                 QPointF sp = project(center);
-                if (sp.x() < 0) continue;
-                if (!reserveBin(sp)) continue;
+                if (sp.x() < -50.0 || sp.x() > wPx + 50.0 ||
+                    sp.y() < -50.0 || sp.y() > hPx + 50.0)
+                    continue;
 
                 QString text = QString("Part %1").arg(pi + 1);
                 int tx = static_cast<int>(sp.x()) - fm.horizontalAdvance(text) / 2;
-                int ty = static_cast<int>(sp.y()) + offsetY;
+                int stackOffset = LabelLayout::nextStackOffset(
+                    sp.x(), sp.y(), binPx, fm.height(), partLabelStacks);
+                int ty = static_cast<int>(sp.y()) + offsetY + stackOffset;
                 drawOutlinedText(tx, ty, text);
-                if (usedBins.size() >= maxReservedBins) break;
+                drawnLabelIds.push_back(pi);
+                if (++drawnPartLabels >= static_cast<int>(maxReservedBins)) break;
             }
+            rememberPlacedLabels();
         }
 
     } else {
@@ -238,9 +271,16 @@ void LabelOverlay::drawIdLabels(QPainter& painter, const glm::mat4& mvp) {
                 }
             }
 
-            for (const auto& entry : elemCentroids) {
-                int eid = entry.first;
-                const ElemAccum& acc = entry.second;
+            std::vector<int> elemIds;
+            elemIds.reserve(elemCentroids.size());
+            for (const auto& entry : elemCentroids)
+                elemIds.push_back(entry.first);
+            auto orderedElemIds = LabelLayout::stablePriorityOrder(elemIds, previousLabelIds);
+
+            for (int eid : orderedElemIds) {
+                auto elemIt = elemCentroids.find(eid);
+                if (elemIt == elemCentroids.end()) continue;
+                const ElemAccum& acc = elemIt->second;
                 if (acc.count == 0) continue;
                 glm::vec3 center(acc.sx / acc.count, acc.sy / acc.count, acc.sz / acc.count);
                 QPointF sp = project(center);
@@ -251,8 +291,15 @@ void LabelOverlay::drawIdLabels(QPainter& painter, const glm::mat4& mvp) {
                 int tx = static_cast<int>(sp.x()) - fm.horizontalAdvance(text) / 2;
                 int ty = static_cast<int>(sp.y()) + offsetY;
                 drawOutlinedText(tx, ty, text);
+                drawnLabelIds.push_back(eid);
                 if (usedBins.size() >= maxReservedBins) break;
             }
+            rememberPlacedLabels();
         }
+    }
+
+    if (!placementUpdated) {
+        lastLabelMode_ = -1;
+        lastLabelIds_.clear();
     }
 }

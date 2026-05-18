@@ -3,6 +3,7 @@
 #include <glm/glm.hpp>
 
 #include <unordered_set>
+#include <vector>
 
 class GLWidget;
 class QPainter;
@@ -20,4 +21,6 @@ private:
     GLWidget& w_;
     glm::mat4 axesMVP_{1.0f};
     std::unordered_set<long long> labelBinScratch_;
+    int lastLabelMode_ = -1;
+    std::vector<int> lastLabelIds_;
 };
