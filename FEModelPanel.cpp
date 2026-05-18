@@ -28,6 +28,7 @@
 #include <QThread>
 #include <QEventLoop>
 #include <QRegularExpressionValidator>
+#include <algorithm>
 #include <functional>
 #include <atomic>
 
@@ -107,6 +108,22 @@ void FEModelPanel::applyTheme(const Theme& t) {
             "QPushButton:pressed { background: %4; }"
         ).arg(t.blue, t.btnText, t.blueHover, t.bluePressed));
     }
+
+    auto applySecondaryButton = [&](QPushButton* btn, const QString& base,
+                                    const QString& disabledText) {
+        if (!btn) return;
+        btn->setStyleSheet(QString(
+            "QPushButton {"
+            "  background: %1; color: %2; border: none;"
+            "  border-radius: 5px; padding: 6px 10px; font-size: 12px; font-weight: bold;"
+            "  min-height: 24px; }"
+            "QPushButton:hover { background: %3; }"
+            "QPushButton:pressed { background: %4; }"
+            "QPushButton:disabled { background: %5; color: %6; }"
+        ).arg(base, t.btnText, t.surface1, t.surface2, t.surface0, disabledText));
+    };
+    applySecondaryButton(showBtn_, t.green, t.overlay0);
+    applySecondaryButton(hideBtn_, t.red, t.overlay0);
 }
 
 // ════════════════════════════════════════════════════════════
@@ -301,7 +318,10 @@ bool FEModelPanel::parseUnvResults(const QString& filePath, FEResultData& result
 void FEModelPanel::clearModel() {
     currentModel_.clear();
     currentRenderData_.clear();
+    currentSelectionMode_ = PickMode::Node;
+    currentSelectionIds_.clear();
     updateInfoLabels();
+    updateVisibilityActionState();
     emit meshGenerated(Mesh{}, glm::vec3(0), 0, {}, {});
     emit partsChanged(QString(), {}, {}, {});
 }
@@ -400,6 +420,15 @@ QGroupBox* FEModelPanel::createSearchGroup() {
     inputRow->addWidget(searchBtn_);
     layout->addLayout(inputRow);
 
+    auto* actionRow = new QHBoxLayout;
+    showBtn_ = new QPushButton("显示");
+    hideBtn_ = new QPushButton("隐藏");
+    showBtn_->setEnabled(false);
+    hideBtn_->setEnabled(false);
+    actionRow->addWidget(showBtn_);
+    actionRow->addWidget(hideBtn_);
+    layout->addLayout(actionRow);
+
     // 格式提示
     auto* hintLabel = new QLabel("支持: 单个 42 | 多个 1,3,5 | 范围 5-10");
     hintLabel->setObjectName("searchHint");
@@ -408,13 +437,24 @@ QGroupBox* FEModelPanel::createSearchGroup() {
 
     connect(searchBtn_, &QPushButton::clicked, this, &FEModelPanel::onSearchTriggered);
     connect(searchInput_, &QLineEdit::returnPressed, this, &FEModelPanel::onSearchTriggered);
+    connect(showBtn_, &QPushButton::clicked, this, &FEModelPanel::onShowTriggered);
+    connect(hideBtn_, &QPushButton::clicked, this, &FEModelPanel::onHideTriggered);
+    connect(searchTypeCombo_, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [this](int) {
+                updateVisibilityActionState();
+            });
+    connect(searchInput_, &QLineEdit::textChanged,
+            this, [this](const QString&) {
+                updateVisibilityActionState();
+            });
+    updateVisibilityActionState();
 
     return group;
 }
 
-void FEModelPanel::onSearchTriggered() {
+std::vector<int> FEModelPanel::parseSearchIds() const {
     QString text = searchInput_->text().trimmed();
-    if (text.isEmpty()) return;
+    if (text.isEmpty()) return {};
 
     // 解析 ID：支持逗号分隔和范围（如 1,3,5-10）
     std::vector<int> ids;
@@ -439,13 +479,91 @@ void FEModelPanel::onSearchTriggered() {
         }
     }
 
+    std::sort(ids.begin(), ids.end());
+    ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
+    return ids;
+}
+
+std::vector<int> FEModelPanel::visibilityTargetIds(PickMode& mode) const {
+    QString searchText = searchInput_ ? searchInput_->text().trimmed() : QString();
+    if (!searchText.isEmpty()) {
+        mode = searchTypeCombo_
+            ? static_cast<PickMode>(searchTypeCombo_->currentData().toInt())
+            : PickMode::Node;
+        return parseSearchIds();
+    }
+
+    mode = currentSelectionMode_;
+    if (mode == PickMode::Part)
+        return {};
+    return currentSelectionIds_;
+}
+
+void FEModelPanel::updateVisibilityActionState() {
+    if (!showBtn_ || !hideBtn_) return;
+
+    PickMode mode = PickMode::Node;
+    std::vector<int> ids = visibilityTargetIds(mode);
+    bool enable = mode != PickMode::Part && !ids.empty();
+    showBtn_->setEnabled(enable);
+    hideBtn_->setEnabled(enable);
+
+    QString tip;
+    bool hasSearchText = searchInput_ && !searchInput_->text().trimmed().isEmpty();
+    if (mode == PickMode::Part) {
+        tip = "部件显隐请使用左侧模型树";
+    } else if (hasSearchText && ids.empty()) {
+        tip = "请输入有效 ID";
+    } else if (!hasSearchText && ids.empty()) {
+        tip = "先拾取节点/单元，或输入 ID";
+    } else if (!hasSearchText) {
+        tip = "作用于当前选中项";
+    }
+    showBtn_->setToolTip(tip);
+    hideBtn_->setToolTip(tip);
+}
+
+void FEModelPanel::onSearchTriggered() {
+    std::vector<int> ids = parseSearchIds();
     if (ids.empty()) return;
 
     PickMode mode = static_cast<PickMode>(searchTypeCombo_->currentData().toInt());
     emit searchRequested(mode, ids);
 }
 
+void FEModelPanel::onShowTriggered() {
+    PickMode mode = PickMode::Node;
+    std::vector<int> ids = visibilityTargetIds(mode);
+    if (ids.empty()) return;
+
+    if (mode == PickMode::Part) return;
+    emit visibilityRequested(mode, ids, true);
+}
+
+void FEModelPanel::onHideTriggered() {
+    PickMode mode = PickMode::Node;
+    std::vector<int> ids = visibilityTargetIds(mode);
+    if (ids.empty()) return;
+
+    if (mode == PickMode::Part) return;
+    emit visibilityRequested(mode, ids, false);
+}
+
 void FEModelPanel::updateSelectionInfo(PickMode mode, int count, const std::vector<int>& ids) {
+    currentSelectionMode_ = mode;
+    currentSelectionIds_ = ids;
+    std::sort(currentSelectionIds_.begin(), currentSelectionIds_.end());
+    currentSelectionIds_.erase(
+        std::unique(currentSelectionIds_.begin(), currentSelectionIds_.end()),
+        currentSelectionIds_.end());
+
+    if (searchInput_ && searchInput_->text().trimmed().isEmpty() && searchTypeCombo_) {
+        int index = searchTypeCombo_->findData(static_cast<int>(mode));
+        if (index >= 0 && index != searchTypeCombo_->currentIndex())
+            searchTypeCombo_->setCurrentIndex(index);
+    }
+    updateVisibilityActionState();
+
     QString modeName;
     switch (mode) {
         case PickMode::Node:    modeName = "节点"; break;
@@ -552,4 +670,3 @@ void FEModelPanel::clearActiveScalarField() {
     hasActiveField_ = false;
     probeValueLabel_->setText("结果值: -");
 }
-

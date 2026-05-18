@@ -203,6 +203,16 @@ MainWindow::MainWindow() {
     connect(feModelPanel_, &FEModelPanel::searchRequested,
             glWidget_, &GLWidget::selectByIds);
 
+    // 节点/单元显隐 → GLWidget
+    connect(feModelPanel_, &FEModelPanel::visibilityRequested,
+            this, [this](PickMode mode, const std::vector<int>& ids, bool visible) {
+        if (mode == PickMode::Node) {
+            glWidget_->setNodesVisibility(ids, visible);
+        } else if (mode == PickMode::Element) {
+            glWidget_->setElementsVisibility(ids, visible);
+        }
+    });
+
     monitorPanel_->bindToWidget(glWidget_);
 
     // ── 结果面板连接 ──

@@ -1069,6 +1069,15 @@ public slots:
     void highlightParts(const std::vector<int>& partIndices);
 ```
 
+#### 节点/单元显隐
+
+```cpp
+void setNodesVisibility(const std::vector<int>& nodeIds, bool visible);
+void setElementsVisibility(const std::vector<int>& elementIds, bool visible);
+```
+
+`setNodesVisibility()` 会隐藏这些节点以及所有连接到这些节点的单元；`setElementsVisibility()` 只隐藏指定单元。两者都会同步影响表面三角形、线框边线、拾取、高亮和 ID 标签显示。
+
 #### 查询方法
 
 | 方法 | 返回类型 | 说明 |

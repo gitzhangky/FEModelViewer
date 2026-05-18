@@ -6,8 +6,8 @@
  *   - 初始化 OpenGL 上下文、编译着色器
  *   - 上传网格数据到 GPU（VAO/VBO/IBO）
  *   - 每帧渲染场景（FE 平光 + 网格线框）
- *   - 处理鼠标/键盘事件（轨道交互 + 拾取）
- *   - GPU Color Picking（点选 + 框选）
+ *   - 处理鼠标/键盘事件（轨道交互 + 拾取调度）
+ *   - 协调拾取、高亮、标签等内部渲染器
  *   - 统计 FPS 和查询硬件信息
  */
 
@@ -18,11 +18,11 @@
 #include <QOpenGLShaderProgram>
 #include <QOpenGLBuffer>
 #include <QOpenGLVertexArrayObject>
-#include <QOpenGLFramebufferObject>
 #include <QElapsedTimer>
 #include <QRubberBand>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <memory>
 #include <unordered_set>
 #include <unordered_map>
 #include <set>
@@ -37,9 +37,15 @@
 
 struct Theme;
 class ColorBarOverlay;   // 前向声明：色标覆盖层控件
+class LabelOverlay;
+class PickRenderer;
+class SelectionRenderer;
 
 class FERENDER_EXPORT GLWidget : public QOpenGLWidget, protected QOpenGLFunctions {
     Q_OBJECT
+    friend class LabelOverlay;
+    friend class PickRenderer;
+    friend class SelectionRenderer;
 
 public:
     explicit GLWidget(QWidget* parent = nullptr);
@@ -86,6 +92,12 @@ public:
 
     /** @brief 按 ID 列表选中节点或单元（供搜索框调用） */
     void selectByIds(PickMode mode, const std::vector<int>& ids);
+
+    /** @brief 设置一组节点的可见性（隐藏节点会隐藏连接到这些节点的单元） */
+    void setNodesVisibility(const std::vector<int>& nodeIds, bool visible);
+
+    /** @brief 设置一组单元的可见性 */
+    void setElementsVisibility(const std::vector<int>& elementIds, bool visible);
 
     /** @brief 设置未变形叠加网格（半透明线框显示原始形状） */
     void setOverlayMesh(const Mesh& mesh);
@@ -172,47 +184,37 @@ protected:
 private:
     void uploadMesh();
     void drawAxesIndicator();
-    void drawAxesLabels(QPainter& painter);  // 坐标轴标签（需外部提供 QPainter）
-    void drawIdLabels(QPainter& painter, const glm::mat4& mvp);  // 选中项 ID 标签
     void uploadColors();      // 将部件颜色上传到 colorVbo_
     void rebuildEdgeIbo();    // 根据部件可见性重建边线 IBO
 
     // ── paintGL 渲染子步骤 ──
-    void processDeferredPicks();
     void rebuildPartVisibilityIbo();
     void renderBackground();
     void renderMainMesh();
     void renderMeshEdges();
-    void updateSelectionHighlight();
     void renderOverlayMesh();
     void renderClipPreview();
     void renderSliceLines();
     void renderIsoSurface();
-    void renderSelectionHighlight();
     void render2DOverlays(const glm::mat4& mvp);
     void updateFpsStats();
     void bindWidgetFramebuffer();
-
-    // ── 拾取相关 ──
-    void renderPickBuffer(const glm::mat4& mvp);
-    void pickAtPoint(const QPoint& pos, bool ctrlHeld);
-    void pickInRect(const QRect& rect, bool ctrlHeld);
-    void deselectAtPoint(const QPoint& pos);
-    void deselectInRect(const QRect& rect);
-    glm::vec3 idToColor(int id);
-    int colorToId(unsigned char r, unsigned char g, unsigned char b);
-    void rebuildSelectionEdges();
-    void buildPartEdgeCache();       // 选中变化时构建边缓存（重操作）
-    void updateSilhouetteFromCache(); // 相机变化时从缓存刷新轮廓边（轻操作）
-    void buildEdgeAdjacency();       // 预建全局边邻接表（网格加载后一次性构建）
-    void selectPart(int partIndex);  // 将 partIndex 对应的所有单元加入 selection_.selectedElements
-    void deselectPart(int partIndex);  // 从 selection_ 中移除该部件所有单元
-    bool isPartFullySelected(int partIndex) const;  // 检查部件是否全部已选中
+    void cleanupGLResources();
+    void rebuildElementNodeMap();
+    void rebuildNodeVertexLookup();
+    void rebuildRenderEdgeMaps();
+    void markVisibilityDirty();
+    bool isPartVisible(int partIndex) const;
+    bool isElementVisible(int elemId) const;
+    bool isElementRenderable(int elemId) const;
+    bool isTriangleVisible(int triIndex) const;
+    bool isNodeVisible(int nodeId) const;
 
     // ── 场景对象 ──
     Camera cam_;
     Mesh mesh_;
     bool needsUpload_ = true;
+    bool glResourcesCleaned_ = false;
 
     // ── OpenGL 对象 ──
     QOpenGLShaderProgram* shader_ = nullptr;
@@ -231,10 +233,10 @@ private:
     QOpenGLBuffer* edgeIbo_ = nullptr;
     int edgeIndexCount_ = 0;
 
-    // ── 拾取 ──
-    QOpenGLShaderProgram* pickShader_ = nullptr;
-    QOpenGLFramebufferObject* pickFbo_ = nullptr;
-    QOpenGLVertexArrayObject pickVao_;   // 拾取专用 VAO，避免污染主 VAO 的顶点属性状态
+    // ── 拾取 / 高亮 / 标签（内部实现类，不暴露到安装头） ──
+    std::shared_ptr<PickRenderer> pickRenderer_;
+    std::shared_ptr<SelectionRenderer> selectionRenderer_;
+    std::shared_ptr<LabelOverlay> labelOverlay_;
     std::vector<int> triToElem_;        // 三角形索引 → 单元 ID
     std::vector<int> vertexToNode_;     // 渲染顶点索引 → FEM 节点 ID
     PickMode pickMode_ = PickMode::Node;  // 当前拾取模式（与下拉框默认值同步）
@@ -272,35 +274,17 @@ private:
     int activeEdgeIndexCount_ = 0;           // 当前可见边线索引数量
     bool edgeVisibilityDirty_ = false;       // 需要重建边线 IBO
 
-    // ── 选中高亮边线 ──
-    QOpenGLVertexArrayObject selEdgeVao_;
-    QOpenGLBuffer selEdgeVbo_{QOpenGLBuffer::VertexBuffer};
-    int selEdgeVertCount_ = 0;
-    bool selectionDirty_ = false;
-    bool silhouetteDirty_ = false;    // 仅视角变化，需刷新轮廓边
-    int selHlMode_ = 0;   // 0=lines, 1=points
-
-    // ── 部件轮廓边缓存（选中变化时构建，相机变化时复用） ──
-    struct SilhouetteCandidate {
-        float ax, ay, az, bx, by, bz;  // 边两端顶点坐标
-        glm::vec3 n0, n1;               // 两侧三角形法线
-    };
-    std::vector<float> cachedStaticEdgeVerts_;              // 不随视角变化的边（边界/特征/开放）
-    std::vector<SilhouetteCandidate> cachedSilhouettes_;    // 需逐帧判定的轮廓边候选
-    bool partEdgeCacheValid_ = false;                       // 缓存是否有效
-
     // ── 预计算的每部件数据（在 setTriangleToPartMap 中构建） ──
     std::vector<std::vector<int>> partTriangles_;    // partIndex → 三角形索引列表
     std::vector<std::vector<int>> partElementIds_;   // partIndex → 去重单元 ID 列表
     std::unordered_map<int, int> elemToPart_;        // 单元 ID → 部件索引（快速反查）
-
-    // ── 预计算的全局边邻接表（网格+节点映射就绪后一次性构建） ──
-    struct PreEdge {
-        unsigned int va, vb;       // 代表性顶点索引
-        std::vector<int> adjTris;  // 相邻三角形索引
-    };
-    std::unordered_map<int64_t, PreEdge> edgeAdjMap_;
-    bool edgeAdjDirty_ = true;     // 网格或节点映射变化时置 true
+    std::unordered_map<int, std::unordered_set<int>> elemToNodes_;  // 单元 ID → 节点 ID 集
+    std::unordered_map<int, std::unordered_set<int>> nodeToElems_;  // 节点 ID → 相邻单元 ID 集
+    std::unordered_map<int, int> nodeToFirstVertex_; // 节点 ID → 首个渲染顶点索引（标签/高亮快速定位）
+    std::vector<std::vector<int>> renderEdgeToElems_; // 显示边线 → 相邻单元 ID 列表
+    std::vector<std::pair<int, int>> renderEdgeNodeIds_; // 显示边线 → 节点 ID 对
+    std::unordered_set<int> hiddenElements_;         // 被用户隐藏的单元 ID
+    std::unordered_set<int> hiddenNodes_;            // 被用户隐藏的节点 ID
 
     // ── 色标（Colorbar） ──
     bool colorBarVisible_ = false;
@@ -313,8 +297,6 @@ private:
     // 背景渐变颜色（initializeGL 使用，applyTheme 更新）
     float bgTopColor_[3] = {0.38f, 0.45f, 0.58f};
     float bgBotColor_[3] = {0.68f, 0.74f, 0.82f};
-    glm::mat4 axesMVP_{1.0f};          // drawAxesIndicator() 计算后传给 drawAxesLabels()
-    std::unordered_set<long long> labelBinScratch_;  // drawIdLabels 屏幕 bin 去重的临时存储（避免每帧分配）
 
     // ── 交互状态 ──
     QPoint lastPos_;
@@ -325,16 +307,6 @@ private:
     QRubberBand* rubberBand_ = nullptr; // 框选矩形
     QPoint boxOrigin_;                  // 框选起始点
 
-    // ── 延迟拾取（避免在 paintGL 外调用 makeCurrent 导致 GL 状态污染） ──
-    bool pickPointPending_ = false;     // 点选待处理
-    QPoint pendingPickPos_;             // 点选位置
-    bool pendingPickCtrl_ = false;      // 是否按住 Ctrl/Shift（累加模式）
-    bool pickRectPending_ = false;      // 框选待处理
-    QRect pendingPickRect_;             // 框选矩形
-    bool deselectPointPending_ = false; // 点选取消待处理
-    QPoint pendingDeselectPos_;         // 点选取消位置
-    bool deselectRectPending_ = false;  // 框选取消待处理
-    QRect pendingDeselectRect_;         // 框选取消矩形
     glm::vec3 color_{0.55f, 0.75f, 0.73f};
 
     // ── 叠加网格（未变形线框） ──

@@ -4,18 +4,25 @@
  */
 
 #include "GLWidget.h"
+#include "GLStateGuards.h"
+#include "LabelOverlay.h"
+#include "NodeVertexLookup.h"
+#include "PickRenderer.h"
+#include "SelectionRenderer.h"
 #include "Theme.h"
 #include "ColorBarOverlay.h"
+#include "VisibilityFilter.h"
 
 #include <QMouseEvent>
 #include <QWheelEvent>
 #include <QPainter>
-#include <QFontMetrics>
-#include <QOpenGLBuffer>
+#include <QCoreApplication>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include <algorithm>
-#include <map>
+#include <cmath>
+#include <memory>
+#include <string>
 
 // ============================================================
 // GLSL 着色器加载（从 Qt 资源加载外部 .glsl 文件）
@@ -31,22 +38,6 @@ static QByteArray loadShaderSource(const QString& resourcePath) {
     }
     return f.readAll();
 }
-
-// ──────────────────────────────────────────────────────────────
-// ScopedBufferBind: 对 QOpenGLBuffer::bind() 的 RAII 包装。
-// 构造时 bind，作用域结束时自动 release，避免漏 release 导致 GL_ARRAY_BUFFER
-// 全局状态污染（Windows 上 Qt 5 GL2 文字引擎会因此让 QPainter::drawText 静默失败）。
-// 项目内所有"配对 bind/release"路径都应改用此 wrapper，杜绝裸 .bind()。
-// ──────────────────────────────────────────────────────────────
-class ScopedBufferBind {
-public:
-    explicit ScopedBufferBind(QOpenGLBuffer& buf) : buf_(buf) { buf_.bind(); }
-    ~ScopedBufferBind() { buf_.release(); }
-    ScopedBufferBind(const ScopedBufferBind&) = delete;
-    ScopedBufferBind& operator=(const ScopedBufferBind&) = delete;
-private:
-    QOpenGLBuffer& buf_;
-};
 
 // ── 部件颜色调色板（Catppuccin Mocha）──
 static const glm::vec3 kPartPalette[] = {
@@ -121,12 +112,21 @@ static Mesh makeClipPlanePreviewMesh(const glm::vec3& bbMin,
 // 构造函数 & 公有方法
 // ============================================================
 
-GLWidget::GLWidget(QWidget* parent) : QOpenGLWidget(parent) {
+GLWidget::GLWidget(QWidget* parent)
+    : QOpenGLWidget(parent),
+      pickRenderer_(std::make_shared<PickRenderer>(*this)),
+      selectionRenderer_(std::make_shared<SelectionRenderer>(*this)),
+      labelOverlay_(std::make_shared<LabelOverlay>(*this)) {
     // 设置强焦点策略，使 widget 能接收键盘事件
     setFocusPolicy(Qt::StrongFocus);
 
     // 创建色标覆盖层（raster 绘制，不受 GL 状态影响）
     colorBarOverlay_ = new ColorBarOverlay(this);
+
+    // 应用退出时先于 QOpenGLContext 销毁释放 GL 对象，避免 Qt 在析构阶段报警。
+    connect(QCoreApplication::instance(), &QCoreApplication::aboutToQuit,
+            this, &GLWidget::cleanupGLResources,
+            Qt::DirectConnection);
 }
 
 void GLWidget::setVertexColors(const std::vector<float>& colors) {
@@ -264,11 +264,18 @@ void GLWidget::setMesh(const Mesh& mesh) {
     partTriangles_.clear();
     partElementIds_.clear();
     elemToPart_.clear();
+    elemToNodes_.clear();
+    nodeToElems_.clear();
+    nodeToFirstVertex_.clear();
+    renderEdgeToElems_.clear();
+    renderEdgeNodeIds_.clear();
+    hiddenElements_.clear();
+    hiddenNodes_.clear();
     activeIndexCount_ = static_cast<int>(mesh.indices.size());
     partVisibilityDirty_ = false;
     edgeVisibilityDirty_ = false;
     needsColorUpload_ = false;
-    edgeAdjDirty_ = true;
+    selectionRenderer_->resetForMesh();
     needsUpload_ = true;
     update();
 }
@@ -288,11 +295,203 @@ void GLWidget::fitToModel(const glm::vec3& center, float size) {
 
 void GLWidget::setTriangleToElementMap(const std::vector<int>& map) {
     triToElem_ = map;
+    rebuildElementNodeMap();
+    rebuildRenderEdgeMaps();
 }
 
 void GLWidget::setVertexToNodeMap(const std::vector<int>& map) {
     vertexToNode_ = map;
-    edgeAdjDirty_ = true;
+    rebuildNodeVertexLookup();
+    rebuildElementNodeMap();
+    rebuildRenderEdgeMaps();
+    selectionRenderer_->markEdgeAdjacencyDirty();
+}
+
+void GLWidget::rebuildNodeVertexLookup() {
+    nodeToFirstVertex_ = NodeVertexLookup::buildFirstVertexByNode(vertexToNode_);
+}
+
+void GLWidget::rebuildElementNodeMap() {
+    elemToNodes_.clear();
+    nodeToElems_.clear();
+
+    int triCount = std::min(static_cast<int>(triToElem_.size()),
+                            static_cast<int>(mesh_.indices.size() / 3));
+    for (int t = 0; t < triCount; ++t) {
+        int elemId = triToElem_[t];
+        if (elemId < 0) continue;
+        auto& elemNodes = elemToNodes_[elemId];
+        for (int k = 0; k < 3; ++k) {
+            unsigned int vi = mesh_.indices[t * 3 + k];
+            if (vi >= vertexToNode_.size()) continue;
+            int nodeId = vertexToNode_[vi];
+            if (nodeId < 0) continue;
+            elemNodes.insert(nodeId);
+            nodeToElems_[nodeId].insert(elemId);
+        }
+    }
+
+    int elemEdgeCount = std::min(static_cast<int>(mesh_.elemEdgeToElement.size()),
+                                 static_cast<int>(mesh_.elemEdgeNodeIds.size()));
+    for (int i = 0; i < elemEdgeCount; ++i) {
+        int elemId = mesh_.elemEdgeToElement[i];
+        if (elemId < 0) continue;
+        auto [a, b] = mesh_.elemEdgeNodeIds[i];
+        elemToNodes_[elemId].insert(a);
+        elemToNodes_[elemId].insert(b);
+        nodeToElems_[a].insert(elemId);
+        nodeToElems_[b].insert(elemId);
+    }
+}
+
+void GLWidget::rebuildRenderEdgeMaps() {
+    renderEdgeNodeIds_.clear();
+    renderEdgeToElems_.clear();
+
+    int edgeCount = static_cast<int>(allEdgeIndices_.size() / 2);
+    if (edgeCount <= 0) return;
+
+    auto edgeKey = [](int a, int b) -> long long {
+        int mn = std::min(a, b);
+        int mx = std::max(a, b);
+        return (static_cast<long long>(mn) << 32) |
+               static_cast<unsigned int>(mx);
+    };
+    auto posKey = [](float x, float y, float z) -> std::string {
+        return std::to_string(std::llround(x * 1000000.0f)) + "," +
+               std::to_string(std::llround(y * 1000000.0f)) + "," +
+               std::to_string(std::llround(z * 1000000.0f));
+    };
+
+    std::unordered_map<long long, std::unordered_set<int>> edgeElems;
+    int triCount = std::min(static_cast<int>(triToElem_.size()),
+                            static_cast<int>(mesh_.indices.size() / 3));
+    for (int t = 0; t < triCount; ++t) {
+        int elemId = triToElem_[t];
+        if (elemId < 0) continue;
+        for (int e = 0; e < 3; ++e) {
+            unsigned int va = mesh_.indices[t * 3 + e];
+            unsigned int vb = mesh_.indices[t * 3 + (e + 1) % 3];
+            int na = (va < vertexToNode_.size()) ? vertexToNode_[va] : static_cast<int>(va);
+            int nb = (vb < vertexToNode_.size()) ? vertexToNode_[vb] : static_cast<int>(vb);
+            edgeElems[edgeKey(na, nb)].insert(elemId);
+        }
+    }
+
+    int elemEdgeCount = std::min(static_cast<int>(mesh_.elemEdgeToElement.size()),
+                                 static_cast<int>(mesh_.elemEdgeNodeIds.size()));
+    for (int i = 0; i < elemEdgeCount; ++i) {
+        int elemId = mesh_.elemEdgeToElement[i];
+        if (elemId < 0) continue;
+        auto [a, b] = mesh_.elemEdgeNodeIds[i];
+        edgeElems[edgeKey(a, b)].insert(elemId);
+    }
+
+    std::unordered_map<std::string, int> posToNode;
+    int meshVertCount = std::min(static_cast<int>(mesh_.vertices.size() / 6),
+                                 static_cast<int>(vertexToNode_.size()));
+    for (int i = 0; i < meshVertCount; ++i) {
+        int nodeId = vertexToNode_[i];
+        if (nodeId < 0) continue;
+        posToNode.emplace(posKey(mesh_.vertices[i * 6],
+                                 mesh_.vertices[i * 6 + 1],
+                                 mesh_.vertices[i * 6 + 2]),
+                          nodeId);
+    }
+
+    renderEdgeNodeIds_.reserve(edgeCount);
+    renderEdgeToElems_.reserve(edgeCount);
+    for (int e = 0; e < edgeCount; ++e) {
+        unsigned int va = allEdgeIndices_[e * 2];
+        unsigned int vb = allEdgeIndices_[e * 2 + 1];
+        int na = static_cast<int>(va);
+        int nb = static_cast<int>(vb);
+        if (va * 3 + 2 < mesh_.edgeVertices.size()) {
+            auto it = posToNode.find(posKey(mesh_.edgeVertices[va * 3],
+                                            mesh_.edgeVertices[va * 3 + 1],
+                                            mesh_.edgeVertices[va * 3 + 2]));
+            if (it != posToNode.end()) na = it->second;
+        }
+        if (vb * 3 + 2 < mesh_.edgeVertices.size()) {
+            auto it = posToNode.find(posKey(mesh_.edgeVertices[vb * 3],
+                                            mesh_.edgeVertices[vb * 3 + 1],
+                                            mesh_.edgeVertices[vb * 3 + 2]));
+            if (it != posToNode.end()) nb = it->second;
+        }
+        renderEdgeNodeIds_.push_back({std::min(na, nb), std::max(na, nb)});
+
+        std::vector<int> elems;
+        auto it = edgeElems.find(edgeKey(na, nb));
+        if (it != edgeElems.end())
+            elems.assign(it->second.begin(), it->second.end());
+        renderEdgeToElems_.push_back(std::move(elems));
+    }
+}
+
+void GLWidget::markVisibilityDirty() {
+    partVisibilityDirty_ = true;
+    edgeVisibilityDirty_ = true;
+    selectionRenderer_->markSelectionDirty();
+    update();
+}
+
+bool GLWidget::isPartVisible(int partIndex) const {
+    return VisibilityFilter::isPartVisible(partIndex, partVisibility_);
+}
+
+bool GLWidget::isElementVisible(int elemId) const {
+    if (elemId < 0) return true;
+    auto pit = elemToPart_.find(elemId);
+    if (pit != elemToPart_.end() && !isPartVisible(pit->second))
+        return false;
+    return VisibilityFilter::isElementVisible(elemId, hiddenElements_, hiddenNodes_, elemToNodes_);
+}
+
+bool GLWidget::isElementRenderable(int elemId) const {
+    return isElementVisible(elemId);
+}
+
+bool GLWidget::isTriangleVisible(int triIndex) const {
+    if (triIndex < 0) return false;
+    if (triIndex < static_cast<int>(triToPart_.size()) && !isPartVisible(triToPart_[triIndex]))
+        return false;
+    if (triIndex < static_cast<int>(triToElem_.size()))
+        return isElementVisible(triToElem_[triIndex]);
+
+    if (!hiddenNodes_.empty() && triIndex * 3 + 2 < static_cast<int>(mesh_.indices.size())) {
+        for (int k = 0; k < 3; ++k) {
+            unsigned int vi = mesh_.indices[triIndex * 3 + k];
+            if (vi < vertexToNode_.size() && hiddenNodes_.count(vertexToNode_[vi]))
+                return false;
+        }
+    }
+    return true;
+}
+
+bool GLWidget::isNodeVisible(int nodeId) const {
+    if (nodeId < 0) return false;
+    if (hiddenNodes_.count(nodeId)) return false;
+    auto it = nodeToElems_.find(nodeId);
+    if (it == nodeToElems_.end()) return true;
+    for (int elemId : it->second)
+        if (isElementVisible(elemId)) return true;
+    return false;
+}
+
+void GLWidget::setNodesVisibility(const std::vector<int>& nodeIds, bool visible) {
+    for (int nodeId : nodeIds) {
+        if (visible) hiddenNodes_.erase(nodeId);
+        else hiddenNodes_.insert(nodeId);
+    }
+    markVisibilityDirty();
+}
+
+void GLWidget::setElementsVisibility(const std::vector<int>& elementIds, bool visible) {
+    for (int elemId : elementIds) {
+        if (visible) hiddenElements_.erase(elemId);
+        else hiddenElements_.insert(elemId);
+    }
+    markVisibilityDirty();
 }
 
 int GLWidget::vertexCount()   const { return static_cast<int>(mesh_.vertices.size() / 6); }
@@ -305,6 +504,10 @@ int GLWidget::triangleCount() const { return static_cast<int>(mesh_.indices.size
 void GLWidget::initializeGL() {
     // 初始化 OpenGL 函数指针（Qt 的 OpenGL 函数加载机制）
     initializeOpenGLFunctions();
+    connect(context(), &QOpenGLContext::aboutToBeDestroyed,
+            this, &GLWidget::cleanupGLResources,
+            Qt::DirectConnection);
+    glResourcesCleaned_ = false;
 
     // 查询并保存 GPU 硬件信息
     glRenderer_  = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
@@ -330,22 +533,19 @@ void GLWidget::initializeGL() {
     glGenBuffers(1, &triPartTbo_);
     glGenTextures(1, &triPartTex_);
 
-    // ── 拾取着色器 ──
-    pickShader_ = new QOpenGLShaderProgram(this);
-    pickShader_->addShaderFromSourceCode(QOpenGLShader::Vertex, loadShaderSource(":/shaders/pick.vert"));
-    pickShader_->addShaderFromSourceCode(QOpenGLShader::Fragment, loadShaderSource(":/shaders/pick.frag"));
-    pickShader_->link();
-
-    // ── 拾取专用 VAO（避免共用 vao_ 导致顶点属性状态泄漏到 QPainter） ──
-    pickVao_.create();
+    // ── 拾取（委托给 PickRenderer） ──
+    if (!pickRenderer_) pickRenderer_ = std::make_shared<PickRenderer>(*this);
+    pickRenderer_->initGL();
 
     // ── 边线 VAO/VBO（FE 模式专用）──
     edgeVao_.create();
     edgeVbo_.create();
 
-    // ── 选中高亮边线 VAO/VBO ──
-    selEdgeVao_.create();
-    selEdgeVbo_.create();
+    // ── 选中高亮（委托给 SelectionRenderer） ──
+    if (!selectionRenderer_) selectionRenderer_ = std::make_shared<SelectionRenderer>(*this);
+    selectionRenderer_->initGL();
+
+    if (!labelOverlay_) labelOverlay_ = std::make_shared<LabelOverlay>(*this);
 
     // ── 渐变背景着色器 + VAO/VBO（一次性创建）──
     bgShader_ = new QOpenGLShaderProgram(this);
@@ -517,6 +717,69 @@ void GLWidget::initializeGL() {
     emit glInitialized();
 }
 
+void GLWidget::cleanupGLResources() {
+    if (glResourcesCleaned_ || !context()) return;
+
+    makeCurrent();
+
+    if (triPartTex_) {
+        glDeleteTextures(1, &triPartTex_);
+        triPartTex_ = 0;
+    }
+    if (triPartTbo_) {
+        glDeleteBuffers(1, &triPartTbo_);
+        triPartTbo_ = 0;
+    }
+
+    pickRenderer_.reset();
+    selectionRenderer_.reset();
+    labelOverlay_.reset();
+
+    vao_.destroy();
+    vbo_.destroy();
+    colorVbo_.destroy();
+    scalarVbo_.destroy();
+    delete ibo_;
+    ibo_ = nullptr;
+
+    bgVao_.destroy();
+    bgVbo_.destroy();
+    edgeVao_.destroy();
+    edgeVbo_.destroy();
+    delete edgeIbo_;
+    edgeIbo_ = nullptr;
+
+    overlayVao_.destroy();
+    overlayVbo_.destroy();
+    sliceVao_.destroy();
+    sliceVbo_.destroy();
+
+    isoVao_.destroy();
+    isoVbo_.destroy();
+    delete isoIbo_;
+    isoIbo_ = nullptr;
+
+    clipPreviewVao_.destroy();
+    clipPreviewVbo_.destroy();
+    delete clipPreviewIbo_;
+    clipPreviewIbo_ = nullptr;
+    clipPreviewEdgeVao_.destroy();
+    clipPreviewEdgeVbo_.destroy();
+
+    axesVao_.destroy();
+    axesVbo_.destroy();
+
+    delete shader_;
+    shader_ = nullptr;
+    delete bgShader_;
+    bgShader_ = nullptr;
+    delete axesShader_;
+    axesShader_ = nullptr;
+
+    glResourcesCleaned_ = true;
+    doneCurrent();
+}
+
 void GLWidget::paintGL() {
     // 恢复 GL 状态（QPainter 可能在上一帧末尾修改了 viewport/深度/混合等）
     int dpr_ = devicePixelRatio();
@@ -525,7 +788,7 @@ void GLWidget::paintGL() {
     glDepthFunc(GL_LESS);
     glDisable(GL_BLEND);
 
-    processDeferredPicks();
+    pickRenderer_->processDeferredPicks();
 
     if (needsUpload_) uploadMesh();
     rebuildPartVisibilityIbo();
@@ -540,7 +803,7 @@ void GLWidget::paintGL() {
         {
             QPainter painter(this);
             painter.setRenderHint(QPainter::Antialiasing);
-            drawAxesLabels(painter);
+            labelOverlay_->drawAxesLabels(painter);
             painter.end();
         }
         return;
@@ -586,12 +849,12 @@ void GLWidget::paintGL() {
     // ── 逐步渲染 ──
     renderMainMesh();
     renderMeshEdges();
-    updateSelectionHighlight();
+    selectionRenderer_->update();
     renderOverlayMesh();
     renderClipPreview();
     renderSliceLines();
     renderIsoSurface();
-    renderSelectionHighlight();
+    selectionRenderer_->render(*shader_);
 
     shader_->release();
 
@@ -604,56 +867,24 @@ void GLWidget::paintGL() {
 // paintGL 渲染子步骤
 // ============================================================
 
-void GLWidget::processDeferredPicks() {
-    if (pickPointPending_) {
-        pickPointPending_ = false;
-        pickAtPoint(pendingPickPos_, pendingPickCtrl_);
-    }
-    if (pickRectPending_) {
-        pickRectPending_ = false;
-        pickInRect(pendingPickRect_, pendingPickCtrl_);
-    }
-    if (deselectPointPending_) {
-        deselectPointPending_ = false;
-        deselectAtPoint(pendingDeselectPos_);
-    }
-    if (deselectRectPending_) {
-        deselectRectPending_ = false;
-        deselectInRect(pendingDeselectRect_);
-    }
-}
-
 void GLWidget::rebuildPartVisibilityIbo() {
     if (!partVisibilityDirty_ || allTriIndices_.empty()) return;
     partVisibilityDirty_ = false;
 
-    std::vector<unsigned int> filtered;
-    filtered.reserve(allTriIndices_.size());
-    std::vector<float> filteredTriPart;
-    int triCount = static_cast<int>(allTriIndices_.size() / 3);
-    for (int t = 0; t < triCount; ++t) {
-        int part = (t < static_cast<int>(triToPart_.size())) ? triToPart_[t] : -1;
-        if (part >= 0) {
-            auto it = partVisibility_.find(part);
-            if (it != partVisibility_.end() && !it->second)
-                continue;
-        }
-        filtered.push_back(allTriIndices_[t * 3]);
-        filtered.push_back(allTriIndices_[t * 3 + 1]);
-        filtered.push_back(allTriIndices_[t * 3 + 2]);
-        filteredTriPart.push_back(static_cast<float>(part));
-    }
-    activeIndexCount_ = static_cast<int>(filtered.size());
+    auto filtered = VisibilityFilter::filterTriangles(
+        allTriIndices_, triToElem_, triToPart_, vertexToNode_,
+        partVisibility_, hiddenElements_, hiddenNodes_, elemToNodes_);
+    activeIndexCount_ = static_cast<int>(filtered.indices.size());
     vao_.bind();
     ibo_->bind();
-    ibo_->allocate(filtered.data(),
-                   static_cast<int>(filtered.size() * sizeof(unsigned int)));
+    ibo_->allocate(filtered.indices.data(),
+                   static_cast<int>(filtered.indices.size() * sizeof(unsigned int)));
     vao_.release();
 
     glBindBuffer(GL_TEXTURE_BUFFER, triPartTbo_);
     glBufferData(GL_TEXTURE_BUFFER,
-                 static_cast<int>(filteredTriPart.size() * sizeof(float)),
-                 filteredTriPart.data(), GL_STATIC_DRAW);
+                 static_cast<int>(filtered.triParts.size() * sizeof(float)),
+                 filtered.triParts.data(), GL_STATIC_DRAW);
     glBindTexture(GL_TEXTURE_BUFFER, triPartTex_);
     auto glTexBufferFn = reinterpret_cast<void(*)(GLenum, GLenum, GLuint)>(
         context()->getProcAddress("glTexBuffer"));
@@ -736,61 +967,6 @@ void GLWidget::renderMeshEdges() {
         glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
         vao_.release();
         if (wireAlpha < 1.0f) glDisable(GL_BLEND);
-    }
-}
-
-void GLWidget::updateSelectionHighlight() {
-    if (selectionDirty_) {
-        std::vector<float> hlVerts;
-        int hlMode = 0;
-
-        if (!selection_.selectedElements.empty() && !triToElem_.empty()) {
-            partEdgeCacheValid_ = false;
-            rebuildSelectionEdges();
-            hlMode = 0;
-        } else if (!selection_.selectedNodes.empty()) {
-            std::unordered_map<int, int> nodeToFirstVertex;
-            if (!vertexToNode_.empty()) {
-                for (int i = 0; i < static_cast<int>(vertexToNode_.size()); ++i) {
-                    int nid = vertexToNode_[i];
-                    if (nid >= 0 && nodeToFirstVertex.find(nid) == nodeToFirstVertex.end())
-                        nodeToFirstVertex[nid] = i;
-                }
-            }
-            for (int nid : selection_.selectedNodes) {
-                int vi = -1;
-                if (!nodeToFirstVertex.empty()) {
-                    auto it = nodeToFirstVertex.find(nid);
-                    if (it != nodeToFirstVertex.end()) vi = it->second;
-                } else {
-                    vi = nid;
-                }
-                if (vi >= 0 && vi * 6 + 2 < static_cast<int>(mesh_.vertices.size())) {
-                    hlVerts.push_back(mesh_.vertices[vi * 6]);
-                    hlVerts.push_back(mesh_.vertices[vi * 6 + 1]);
-                    hlVerts.push_back(mesh_.vertices[vi * 6 + 2]);
-                }
-            }
-            selEdgeVertCount_ = static_cast<int>(hlVerts.size() / 3);
-            selEdgeVao_.bind();
-            {
-                ScopedBufferBind bind(selEdgeVbo_);
-                if (!hlVerts.empty())
-                    selEdgeVbo_.allocate(hlVerts.data(), static_cast<int>(hlVerts.size() * sizeof(float)));
-                glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), nullptr);
-                glEnableVertexAttribArray(0);
-                glDisableVertexAttribArray(1);
-            }
-            selEdgeVao_.release();
-            hlMode = 1;
-        }
-        selectionDirty_ = false;
-        silhouetteDirty_ = false;
-        selHlMode_ = hlMode;
-    } else if (silhouetteDirty_ && partEdgeCacheValid_ &&
-               pickMode_ == PickMode::Part && selection_.hasSelection()) {
-        updateSilhouetteFromCache();
-        silhouetteDirty_ = false;
     }
 }
 
@@ -946,34 +1122,10 @@ void GLWidget::renderIsoSurface() {
     shader_->setUniformValue("uSurfaceAlpha", 1.0f);
 }
 
-void GLWidget::renderSelectionHighlight() {
-    if (selEdgeVertCount_ <= 0 || !selection_.hasSelection()) return;
-
-    shader_->setUniformValue("uWireframe", true);
-    shader_->setUniformValue("uWireAlpha", 1.0f);
-    shader_->setUniformValue("uUseVertexColor", false);
-    shader_->setUniformValue("uColor", QVector3D(1.0f, 0.78f, 0.0f));
-    glDisable(GL_DEPTH_TEST);
-
-    selEdgeVao_.bind();
-    if (selHlMode_ == 1) {
-        glPointSize(8.0f);
-        glDrawArrays(GL_POINTS, 0, selEdgeVertCount_);
-    } else {
-        glLineWidth(2.5f);
-        glDrawArrays(GL_LINES, 0, selEdgeVertCount_);
-        glLineWidth(1.0f);
-    }
-    selEdgeVao_.release();
-    glEnable(GL_DEPTH_TEST);
-}
-
 void GLWidget::render2DOverlays(const glm::mat4& mvp) {
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing);
-    drawAxesLabels(painter);
-    if (showLabels_ && selection_.hasSelection())
-        drawIdLabels(painter, mvp);
+    labelOverlay_->render(painter, mvp);
     painter.end();
 }
 
@@ -1001,12 +1153,7 @@ void GLWidget::bindWidgetFramebuffer() {
 void GLWidget::resizeGL(int w, int h) {
     glViewport(0, 0, w, h);
 
-    // 重建拾取 FBO（尺寸需与视口一致）
-    // 注意：resizeGL 由 Qt 调用时 GL 上下文已 current，无需手动 makeCurrent/doneCurrent
-    int dpr = devicePixelRatio();
-    delete pickFbo_;
-    pickFbo_ = new QOpenGLFramebufferObject(w * dpr, h * dpr,
-        QOpenGLFramebufferObject::Depth);
+    pickRenderer_->resizeFbo(w, h, devicePixelRatio());
 
     // 色标覆盖层跟随窗口大小
     if (colorBarOverlay_)
@@ -1078,7 +1225,7 @@ void GLWidget::mouseMoveEvent(QMouseEvent* e) {
 
     // 部件模式轮廓边依赖视角，相机变化时需要刷新
     if (pickMode_ == PickMode::Part && selection_.hasSelection())
-        silhouetteDirty_ = true;
+        selectionRenderer_->markSilhouetteDirty();
 
     update();
 }
@@ -1092,16 +1239,10 @@ void GLWidget::mouseReleaseEvent(QMouseEvent* e) {
         QRect rect = QRect(boxOrigin_, e->pos()).normalized();
         bool ctrl = (e->modifiers() & (Qt::ControlModifier | Qt::ShiftModifier));
         if (rect.width() > 3 && rect.height() > 3) {
-            // 框选（ctrl/shift 持有 → 追加到现有选择集）
-            pickRectPending_ = true;
-            pendingPickRect_ = rect;
-            pendingPickCtrl_ = ctrl;
+            pickRenderer_->requestPickRect(rect, ctrl);
             update();
         } else {
-            // 范围太小视为点选
-            pickPointPending_ = true;
-            pendingPickPos_ = e->pos();
-            pendingPickCtrl_ = ctrl;
+            pickRenderer_->requestPickPoint(e->pos(), ctrl);
             update();
         }
     }
@@ -1113,14 +1254,10 @@ void GLWidget::mouseReleaseEvent(QMouseEvent* e) {
 
         QRect rect = QRect(boxOrigin_, e->pos()).normalized();
         if (rect.width() > 3 && rect.height() > 3) {
-            // 框选取消
-            deselectRectPending_ = true;
-            pendingDeselectRect_ = rect;
+            pickRenderer_->requestDeselectRect(rect);
             update();
         } else {
-            // 范围太小视为点选取消
-            deselectPointPending_ = true;
-            pendingDeselectPos_ = e->pos();
+            pickRenderer_->requestDeselectPoint(e->pos());
             update();
         }
     }
@@ -1133,7 +1270,7 @@ void GLWidget::wheelEvent(QWheelEvent* e) {
     if (e->buttons() & (Qt::MiddleButton | Qt::RightButton)) return;
     cam_.zoom(e->angleDelta().y() / 120.0f);
     if (pickMode_ == PickMode::Part && selection_.hasSelection())
-        silhouetteDirty_ = true;
+        selectionRenderer_->markSilhouetteDirty();
     update();
 }
 
@@ -1141,9 +1278,7 @@ void GLWidget::keyPressEvent(QKeyEvent* e) {
     if (e->key() == Qt::Key_Escape) {
         if (selection_.hasSelection()) {
             selection_.clear();
-            selectionDirty_ = true;
-            partEdgeCacheValid_ = false;
-            selEdgeVertCount_ = 0;
+            selectionRenderer_->clearHighlight();
             emit selectionChanged(pickMode_, 0, {});
             update();
         } else {
@@ -1154,505 +1289,6 @@ void GLWidget::keyPressEvent(QKeyEvent* e) {
     }
 }
 
-// ============================================================
-// 拾取功能
-// ============================================================
-
-glm::vec3 GLWidget::idToColor(int id) {
-    // 将单元 ID+1 编码为 RGB 颜色（0 表示无命中）
-    id += 1;
-    int r = (id      ) & 0xFF;
-    int g = (id >>  8) & 0xFF;
-    int b = (id >> 16) & 0xFF;
-    return glm::vec3(r / 255.0f, g / 255.0f, b / 255.0f);
-}
-
-int GLWidget::colorToId(unsigned char r, unsigned char g, unsigned char b) {
-    if (r == 0 && g == 0 && b == 0) return -1;  // 背景
-    int id = r | (g << 8) | (b << 16);
-    return id - 1;
-}
-
-void GLWidget::renderPickBuffer(const glm::mat4& mvp) {
-    if (!pickFbo_ || triToElem_.empty()) return;
-
-    GLint prevViewport[4];
-    GLfloat prevClearColor[4];
-    GLboolean prevDepthTest, prevBlend;
-    glGetIntegerv(GL_VIEWPORT, prevViewport);
-    glGetFloatv(GL_COLOR_CLEAR_VALUE, prevClearColor);
-    glGetBooleanv(GL_DEPTH_TEST, &prevDepthTest);
-    glGetBooleanv(GL_BLEND, &prevBlend);
-
-    // FBO 用原始 glBindFramebuffer 绑定，不走 QOpenGLFramebufferObject 的成员方法：
-    // Qt 内部用 QOpenGLContextPrivate::current_fbo 追踪当前 FBO，调用 Qt 的绑定
-    // 包装器会把追踪指向 pickFbo_，但恢复时必须用原始 GL 调用
-    // (defaultFramebufferObject() 不能通过 Qt 包装器恢复)，导致 Qt 追踪停留在
-    // 已失效的指针。后续 QPainter 构造会按这个指针写字体缓存到错误的 FBO，
-    // 表现为 Windows GL2 文字引擎拾取后 drawText 静默失败（标签和坐标轴消失），
-    // 直到下一次 makeCurrent/doneCurrent (例如切换主题) 重置追踪才恢复。
-    // macOS 走不同的绘制引擎路径，对此不敏感。
-    glBindFramebuffer(GL_FRAMEBUFFER, pickFbo_->handle());
-
-    int dpr = devicePixelRatio();
-    glViewport(0, 0, width() * dpr, height() * dpr);
-
-    glClearColor(0, 0, 0, 1);
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-    glEnable(GL_DEPTH_TEST);
-    glDisable(GL_BLEND);
-
-    // 使用 Qt 包装器绑定着色器和 VAO，确保 Qt 状态追踪与实际 GL 状态一致
-    // （之前使用原始 GL 调用会导致 QPainter 内部状态缓存失效，
-    //  表现为拾取后 drawText 静默失败：标签和坐标轴文字消失）
-    pickShader_->bind();
-    pickShader_->setUniformValue("uMVP",
-        QMatrix4x4(glm::value_ptr(glm::transpose(mvp))));
-
-    GLint pickColorLoc = pickShader_->uniformLocation("uPickColor");
-
-    pickVao_.bind();
-    ScopedBufferBind bindVbo(vbo_);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), nullptr);
-    glEnableVertexAttribArray(0);
-
-    GLuint rawIbo = 0;
-    glGenBuffers(1, &rawIbo);
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, rawIbo);
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER,
-                 static_cast<GLsizeiptr>(allTriIndices_.size() * sizeof(unsigned int)),
-                 allTriIndices_.data(), GL_STATIC_DRAW);
-
-    int triCount = static_cast<int>(triToElem_.size());
-    int i = 0;
-    while (i < triCount) {
-        int elemId = triToElem_[i];
-        int start = i;
-        while (i < triCount && triToElem_[i] == elemId) ++i;
-
-        if (start < static_cast<int>(triToPart_.size())) {
-            int partIdx = triToPart_[start];
-            if (partIdx >= 0) {
-                auto it = partVisibility_.find(partIdx);
-                if (it != partVisibility_.end() && !it->second)
-                    continue;
-            }
-        }
-
-        glm::vec3 c = idToColor(elemId);
-        glUniform3f(pickColorLoc, c.x, c.y, c.z);
-        glDrawElements(GL_TRIANGLES, (i - start) * 3, GL_UNSIGNED_INT,
-                       reinterpret_cast<void*>(start * 3 * sizeof(unsigned int)));
-    }
-
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
-    glDeleteBuffers(1, &rawIbo);
-
-    pickVao_.release();
-    pickShader_->release();
-    // vbo_ 通过 ScopedBufferBind 在函数 scope 结束时自动 release（避免漏 release
-    // 导致 Windows Qt 5 GL2 文字引擎 QPainter::drawText 静默失败）。
-
-    // 恢复 GL 状态
-    bindWidgetFramebuffer();
-    glViewport(prevViewport[0], prevViewport[1], prevViewport[2], prevViewport[3]);
-    glClearColor(prevClearColor[0], prevClearColor[1], prevClearColor[2], prevClearColor[3]);
-    if (prevDepthTest) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
-    if (prevBlend) glEnable(GL_BLEND); else glDisable(GL_BLEND);
-}
-
-void GLWidget::pickAtPoint(const QPoint& pos, bool ctrlHeld) {
-    if (!pickFbo_ || triToElem_.empty()) return;
-
-    // 注意：此函数仅在 paintGL() 内调用，GL 上下文已由 Qt 管理，
-    // 无需手动 makeCurrent/doneCurrent。
-
-    // 渲染拾取缓冲
-    float aspect = (height() > 0) ? static_cast<float>(width()) / height() : 1.0f;
-    glm::mat4 projection = glm::perspective(glm::radians(45.0f), aspect, cam_.distance * 0.01f, cam_.distance * 10.0f);
-    glm::mat4 view = cam_.viewMatrix();
-    glm::mat4 mvp = projection * view;
-
-    renderPickBuffer(mvp);
-
-    unsigned char pixel[4] = {0};
-    {
-        // 原始 GL 绑定，避免污染 Qt 的 current_fbo 追踪（详见 renderPickBuffer 注释）
-        glBindFramebuffer(GL_FRAMEBUFFER, pickFbo_->handle());
-        int dpr = devicePixelRatio();
-        int px = pos.x() * dpr;
-        int py = (height() - pos.y()) * dpr;
-        glReadPixels(px, py, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
-        bindWidgetFramebuffer();
-    }
-
-    int elemId = colorToId(pixel[0], pixel[1], pixel[2]);
-
-    if (pickMode_ == PickMode::Node) {
-        // ── 节点拾取：找到点击处最近的顶点 ──
-        int closestNode = -1;
-        if (elemId >= 0) {
-            float ndcX = (2.0f * pos.x() / width()) - 1.0f;
-            float ndcY = 1.0f - (2.0f * pos.y() / height());
-            float minDist2 = 1e30f;
-            int triCount = static_cast<int>(triToElem_.size());
-            for (int t = 0; t < triCount; ++t) {
-                if (triToElem_[t] != elemId) continue;
-                for (int v = 0; v < 3; ++v) {
-                    unsigned int vi = mesh_.indices[t * 3 + v];
-                    glm::vec4 wp(mesh_.vertices[vi * 6],
-                                 mesh_.vertices[vi * 6 + 1],
-                                 mesh_.vertices[vi * 6 + 2], 1.0f);
-                    glm::vec4 clip = mvp * wp;
-                    if (clip.w <= 0) continue;
-                    float sx = clip.x / clip.w;
-                    float sy = clip.y / clip.w;
-                    float d2 = (sx - ndcX) * (sx - ndcX) + (sy - ndcY) * (sy - ndcY);
-                    if (d2 < minDist2) {
-                        minDist2 = d2;
-                        closestNode = (vi < vertexToNode_.size()) ? vertexToNode_[vi] : static_cast<int>(vi);
-                    }
-                }
-            }
-        }
-        if (!ctrlHeld) {
-            selection_.clear();
-            if (closestNode >= 0) selection_.selectedNodes.insert(closestNode);
-        } else {
-            if (closestNode >= 0) selection_.toggleNode(closestNode);
-        }
-
-    } else if (pickMode_ == PickMode::Part) {
-        // ── 部件拾取：命中单元 → elemToPart_ O(1) 查找部件索引 ──
-        int hitPart = -1;
-        if (elemId >= 0 && !elemToPart_.empty()) {
-            auto it = elemToPart_.find(elemId);
-            if (it != elemToPart_.end()) hitPart = it->second;
-        }
-        if (!ctrlHeld) {
-            selection_.clear();
-            if (hitPart >= 0) selectPart(hitPart);
-        } else {
-            if (hitPart >= 0) {
-                if (isPartFullySelected(hitPart))
-                    deselectPart(hitPart);
-                else
-                    selectPart(hitPart);
-            }
-        }
-
-    } else {
-        // ── 单元拾取 ──
-        if (!ctrlHeld) {
-            selection_.clear();
-            if (elemId >= 0) selection_.selectedElements.insert(elemId);
-        } else {
-            if (elemId >= 0) selection_.toggleElement(elemId);
-        }
-    }
-
-    selectionDirty_ = true;
-    {
-        std::vector<int> ids;
-        PickMode emitMode = pickMode_;
-        if (!selection_.selectedNodes.empty()) {
-            ids.assign(selection_.selectedNodes.begin(), selection_.selectedNodes.end());
-        } else {
-            ids.assign(selection_.selectedElements.begin(), selection_.selectedElements.end());
-        }
-        std::sort(ids.begin(), ids.end());
-        emit selectionChanged(emitMode, static_cast<int>(ids.size()), ids);
-    }
-    // 部件模式：发射选中的部件索引列表，同步模型树
-    if (pickMode_ == PickMode::Part) {
-        std::vector<int> pickedParts;
-        for (int pi = 0; pi < static_cast<int>(partElementIds_.size()); ++pi) {
-            if (isPartFullySelected(pi))
-                pickedParts.push_back(pi);
-        }
-        emit partsPicked(pickedParts);
-    }
-}
-
-void GLWidget::pickInRect(const QRect& rect, bool ctrlHeld) {
-    if (triToElem_.empty()) return;
-
-    // 注意：此函数现在仅在 paintGL() 内调用，GL 上下文已由 Qt 管理。
-
-    float aspect = (height() > 0) ? static_cast<float>(width()) / height() : 1.0f;
-    glm::mat4 projection = glm::perspective(glm::radians(45.0f), aspect, cam_.distance * 0.01f, cam_.distance * 10.0f);
-    glm::mat4 mvp = projection * cam_.viewMatrix();
-
-    // 框选范围转换为 NDC 坐标
-    float ndcL = (2.0f * rect.left() / width()) - 1.0f;
-    float ndcR = (2.0f * rect.right() / width()) - 1.0f;
-    float ndcT = 1.0f - (2.0f * rect.top() / height());
-    float ndcB = 1.0f - (2.0f * rect.bottom() / height());
-    if (ndcL > ndcR) std::swap(ndcL, ndcR);
-    if (ndcB > ndcT) std::swap(ndcB, ndcT);
-
-    // ctrlHeld 时累加到现有选择集（追加框选）；否则替换
-    if (!ctrlHeld) selection_.clear();
-
-    int vertCount = static_cast<int>(mesh_.vertices.size() / 6);
-
-    if (pickMode_ == PickMode::Node) {
-        // 节点模式：遍历所有渲染顶点，投影到屏幕判断是否在框内
-        std::unordered_set<int> addedNodes;
-        for (int vi = 0; vi < vertCount; ++vi) {
-            glm::vec4 wp(mesh_.vertices[vi * 6],
-                         mesh_.vertices[vi * 6 + 1],
-                         mesh_.vertices[vi * 6 + 2], 1.0f);
-            glm::vec4 clip = mvp * wp;
-            if (clip.w <= 0) continue;
-            float sx = clip.x / clip.w;
-            float sy = clip.y / clip.w;
-            if (sx >= ndcL && sx <= ndcR && sy >= ndcB && sy <= ndcT) {
-                int nodeId = (vi < static_cast<int>(vertexToNode_.size())) ? vertexToNode_[vi] : vi;
-                if (nodeId >= 0 && addedNodes.insert(nodeId).second)
-                    selection_.selectedNodes.insert(nodeId);
-            }
-        }
-    } else if (pickMode_ == PickMode::Part) {
-        // 部件模式：框内三角形 → 收集部件索引 → 选中这些部件所有单元
-        std::unordered_set<int> hitParts;
-        int triCount = static_cast<int>(triToElem_.size());
-        for (int t = 0; t < triCount; ++t) {
-            bool anyInside = false;
-            for (int v = 0; v < 3; ++v) {
-                unsigned int vi = mesh_.indices[t * 3 + v];
-                glm::vec4 wp(mesh_.vertices[vi * 6],
-                             mesh_.vertices[vi * 6 + 1],
-                             mesh_.vertices[vi * 6 + 2], 1.0f);
-                glm::vec4 clip = mvp * wp;
-                if (clip.w <= 0) continue;
-                float sx = clip.x / clip.w;
-                float sy = clip.y / clip.w;
-                if (sx >= ndcL && sx <= ndcR && sy >= ndcB && sy <= ndcT) {
-                    anyInside = true;
-                    break;
-                }
-            }
-            if (anyInside && t < static_cast<int>(triToPart_.size())) {
-                hitParts.insert(triToPart_[t]);
-            }
-        }
-        for (int p : hitParts) {
-            selectPart(p);
-        }
-    } else {
-        // 单元模式：遍历所有三角形，如果三角形任意一个顶点在框内则选中该单元
-        int triCount = static_cast<int>(triToElem_.size());
-        for (int t = 0; t < triCount; ++t) {
-            int elemId = triToElem_[t];
-            if (selection_.isElementSelected(elemId)) continue;  // 已选中，跳过
-
-            bool anyInside = false;
-            for (int v = 0; v < 3; ++v) {
-                unsigned int vi = mesh_.indices[t * 3 + v];
-                glm::vec4 wp(mesh_.vertices[vi * 6],
-                             mesh_.vertices[vi * 6 + 1],
-                             mesh_.vertices[vi * 6 + 2], 1.0f);
-                glm::vec4 clip = mvp * wp;
-                if (clip.w <= 0) continue;
-                float sx = clip.x / clip.w;
-                float sy = clip.y / clip.w;
-                if (sx >= ndcL && sx <= ndcR && sy >= ndcB && sy <= ndcT) {
-                    anyInside = true;
-                    break;
-                }
-            }
-            if (anyInside) {
-                selection_.selectedElements.insert(elemId);
-            }
-        }
-    }
-
-    selectionDirty_ = true;
-    {
-        std::vector<int> ids;
-        PickMode emitMode = pickMode_;
-        if (!selection_.selectedNodes.empty()) {
-            ids.assign(selection_.selectedNodes.begin(), selection_.selectedNodes.end());
-        } else {
-            ids.assign(selection_.selectedElements.begin(), selection_.selectedElements.end());
-        }
-        std::sort(ids.begin(), ids.end());
-        emit selectionChanged(emitMode, static_cast<int>(ids.size()), ids);
-    }
-    // 部件模式：发射选中的部件索引列表，同步模型树
-    if (pickMode_ == PickMode::Part) {
-        std::vector<int> pickedParts;
-        for (int pi = 0; pi < static_cast<int>(partElementIds_.size()); ++pi) {
-            if (isPartFullySelected(pi))
-                pickedParts.push_back(pi);
-        }
-        emit partsPicked(pickedParts);
-    }
-}
-
-void GLWidget::deselectAtPoint(const QPoint& pos) {
-    if (!pickFbo_ || triToElem_.empty()) return;
-
-    float aspect = (height() > 0) ? static_cast<float>(width()) / height() : 1.0f;
-    glm::mat4 projection = glm::perspective(glm::radians(45.0f), aspect, cam_.distance * 0.01f, cam_.distance * 10.0f);
-    glm::mat4 view = cam_.viewMatrix();
-    glm::mat4 mvp = projection * view;
-
-    renderPickBuffer(mvp);
-
-    unsigned char pixel[4] = {0};
-    {
-        // 原始 GL 绑定，避免污染 Qt 的 current_fbo 追踪（详见 renderPickBuffer 注释）
-        glBindFramebuffer(GL_FRAMEBUFFER, pickFbo_->handle());
-        int dpr = devicePixelRatio();
-        int px = pos.x() * dpr;
-        int py = (height() - pos.y()) * dpr;
-        glReadPixels(px, py, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
-        bindWidgetFramebuffer();
-    }
-
-    int elemId = colorToId(pixel[0], pixel[1], pixel[2]);
-
-    if (pickMode_ == PickMode::Node) {
-        int closestNode = -1;
-        if (elemId >= 0) {
-            float ndcX = (2.0f * pos.x() / width()) - 1.0f;
-            float ndcY = 1.0f - (2.0f * pos.y() / height());
-            float minDist2 = 1e30f;
-            int triCount = static_cast<int>(triToElem_.size());
-            for (int t = 0; t < triCount; ++t) {
-                if (triToElem_[t] != elemId) continue;
-                for (int v = 0; v < 3; ++v) {
-                    unsigned int vi = mesh_.indices[t * 3 + v];
-                    glm::vec4 wp(mesh_.vertices[vi * 6], mesh_.vertices[vi * 6 + 1],
-                                 mesh_.vertices[vi * 6 + 2], 1.0f);
-                    glm::vec4 clip = mvp * wp;
-                    if (clip.w <= 0) continue;
-                    float sx = clip.x / clip.w;
-                    float sy = clip.y / clip.w;
-                    float d2 = (sx - ndcX) * (sx - ndcX) + (sy - ndcY) * (sy - ndcY);
-                    if (d2 < minDist2) { minDist2 = d2; closestNode = (vi < vertexToNode_.size()) ? vertexToNode_[vi] : static_cast<int>(vi); }
-                }
-            }
-        }
-        if (closestNode >= 0) selection_.selectedNodes.erase(closestNode);
-
-    } else if (pickMode_ == PickMode::Part) {
-        if (elemId >= 0 && !elemToPart_.empty()) {
-            auto it = elemToPart_.find(elemId);
-            if (it != elemToPart_.end()) deselectPart(it->second);
-        }
-
-    } else {
-        if (elemId >= 0) selection_.selectedElements.erase(elemId);
-    }
-
-    selectionDirty_ = true;
-    {
-        std::vector<int> ids;
-        if (!selection_.selectedNodes.empty())
-            ids.assign(selection_.selectedNodes.begin(), selection_.selectedNodes.end());
-        else
-            ids.assign(selection_.selectedElements.begin(), selection_.selectedElements.end());
-        std::sort(ids.begin(), ids.end());
-        emit selectionChanged(pickMode_, static_cast<int>(ids.size()), ids);
-    }
-    if (pickMode_ == PickMode::Part) {
-        std::vector<int> pickedParts;
-        for (int pi = 0; pi < static_cast<int>(partElementIds_.size()); ++pi)
-            if (isPartFullySelected(pi)) pickedParts.push_back(pi);
-        emit partsPicked(pickedParts);
-    }
-}
-
-void GLWidget::deselectInRect(const QRect& rect) {
-    if (triToElem_.empty()) return;
-
-    float aspect = (height() > 0) ? static_cast<float>(width()) / height() : 1.0f;
-    glm::mat4 projection = glm::perspective(glm::radians(45.0f), aspect, cam_.distance * 0.01f, cam_.distance * 10.0f);
-    glm::mat4 mvp = projection * cam_.viewMatrix();
-
-    float ndcL = (2.0f * rect.left() / width()) - 1.0f;
-    float ndcR = (2.0f * rect.right() / width()) - 1.0f;
-    float ndcT = 1.0f - (2.0f * rect.top() / height());
-    float ndcB = 1.0f - (2.0f * rect.bottom() / height());
-    if (ndcL > ndcR) std::swap(ndcL, ndcR);
-    if (ndcB > ndcT) std::swap(ndcB, ndcT);
-
-    int vertCount = static_cast<int>(mesh_.vertices.size() / 6);
-
-    if (pickMode_ == PickMode::Node) {
-        std::unordered_set<int> removedNodes;
-        for (int vi = 0; vi < vertCount; ++vi) {
-            glm::vec4 wp(mesh_.vertices[vi * 6], mesh_.vertices[vi * 6 + 1],
-                         mesh_.vertices[vi * 6 + 2], 1.0f);
-            glm::vec4 clip = mvp * wp;
-            if (clip.w <= 0) continue;
-            float sx = clip.x / clip.w;
-            float sy = clip.y / clip.w;
-            if (sx >= ndcL && sx <= ndcR && sy >= ndcB && sy <= ndcT) {
-                int nodeId = (vi < static_cast<int>(vertexToNode_.size())) ? vertexToNode_[vi] : vi;
-                if (nodeId >= 0 && removedNodes.insert(nodeId).second)
-                    selection_.selectedNodes.erase(nodeId);
-            }
-        }
-    } else if (pickMode_ == PickMode::Part) {
-        std::unordered_set<int> hitParts;
-        int triCount = static_cast<int>(triToElem_.size());
-        for (int t = 0; t < triCount; ++t) {
-            bool anyInside = false;
-            for (int v = 0; v < 3; ++v) {
-                unsigned int vi = mesh_.indices[t * 3 + v];
-                glm::vec4 wp(mesh_.vertices[vi * 6], mesh_.vertices[vi * 6 + 1],
-                             mesh_.vertices[vi * 6 + 2], 1.0f);
-                glm::vec4 clip = mvp * wp;
-                if (clip.w <= 0) continue;
-                float sx = clip.x / clip.w;
-                float sy = clip.y / clip.w;
-                if (sx >= ndcL && sx <= ndcR && sy >= ndcB && sy <= ndcT) { anyInside = true; break; }
-            }
-            if (anyInside && t < static_cast<int>(triToPart_.size()))
-                hitParts.insert(triToPart_[t]);
-        }
-        for (int p : hitParts) deselectPart(p);
-    } else {
-        int triCount = static_cast<int>(triToElem_.size());
-        for (int t = 0; t < triCount; ++t) {
-            int elemId = triToElem_[t];
-            if (!selection_.isElementSelected(elemId)) continue;
-            bool anyInside = false;
-            for (int v = 0; v < 3; ++v) {
-                unsigned int vi = mesh_.indices[t * 3 + v];
-                glm::vec4 wp(mesh_.vertices[vi * 6], mesh_.vertices[vi * 6 + 1],
-                             mesh_.vertices[vi * 6 + 2], 1.0f);
-                glm::vec4 clip = mvp * wp;
-                if (clip.w <= 0) continue;
-                float sx = clip.x / clip.w;
-                float sy = clip.y / clip.w;
-                if (sx >= ndcL && sx <= ndcR && sy >= ndcB && sy <= ndcT) { anyInside = true; break; }
-            }
-            if (anyInside) selection_.selectedElements.erase(elemId);
-        }
-    }
-
-    selectionDirty_ = true;
-    {
-        std::vector<int> ids;
-        if (!selection_.selectedNodes.empty())
-            ids.assign(selection_.selectedNodes.begin(), selection_.selectedNodes.end());
-        else
-            ids.assign(selection_.selectedElements.begin(), selection_.selectedElements.end());
-        std::sort(ids.begin(), ids.end());
-        emit selectionChanged(pickMode_, static_cast<int>(ids.size()), ids);
-    }
-    if (pickMode_ == PickMode::Part) {
-        std::vector<int> pickedParts;
-        for (int pi = 0; pi < static_cast<int>(partElementIds_.size()); ++pi)
-            if (isPartFullySelected(pi)) pickedParts.push_back(pi);
-        emit partsPicked(pickedParts);
-    }
-}
 
 // ============================================================
 // 私有方法
@@ -1665,265 +1301,12 @@ void GLWidget::setPickMode(PickMode mode) {
     // 切换拾取模式时清除之前的选中状态
     if (selection_.hasSelection()) {
         selection_.clear();
-        selectionDirty_ = true;
-        partEdgeCacheValid_ = false;
-        selEdgeVertCount_ = 0;
+        selectionRenderer_->clearHighlight();
         emit selectionChanged(pickMode_, 0, {});
         if (mode == PickMode::Part)
             emit partsPicked({});
         update();
     }
-}
-
-void GLWidget::selectPart(int partIndex) {
-    if (partIndex < 0 || partIndex >= static_cast<int>(partElementIds_.size())) return;
-    for (int eid : partElementIds_[partIndex]) {
-        selection_.selectedElements.insert(eid);
-    }
-}
-
-void GLWidget::deselectPart(int partIndex) {
-    if (partIndex < 0 || partIndex >= static_cast<int>(partElementIds_.size())) return;
-    for (int eid : partElementIds_[partIndex]) {
-        selection_.selectedElements.erase(eid);
-    }
-}
-
-bool GLWidget::isPartFullySelected(int partIndex) const {
-    if (partIndex < 0 || partIndex >= static_cast<int>(partElementIds_.size())) return false;
-    const auto& elems = partElementIds_[partIndex];
-    if (elems.empty()) return false;
-    for (int eid : elems) {
-        if (!selection_.isElementSelected(eid)) return false;
-    }
-    return true;
-}
-
-void GLWidget::rebuildSelectionEdges() {
-    int edgeCount = static_cast<int>(mesh_.elemEdgeToElement.size());
-    std::vector<float> verts;
-
-    if (pickMode_ == PickMode::Part && !vertexToNode_.empty()) {
-        // 部件模式：使用缓存机制，避免每帧重建 edgeMap
-        if (!partEdgeCacheValid_) {
-            buildPartEdgeCache();
-        }
-        updateSilhouetteFromCache();
-        return;  // VBO 已在 updateSilhouetteFromCache 中上传
-    } else {
-        // 单元模式：显示所有选中单元的全部边线
-        for (int i = 0; i < edgeCount; ++i) {
-            if (!selection_.isElementSelected(mesh_.elemEdgeToElement[i])) continue;
-
-            int base = i * 6;
-            for (int j = 0; j < 6; ++j)
-                verts.push_back(mesh_.elemEdgeVertices[base + j]);
-        }
-    }
-
-    selEdgeVertCount_ = static_cast<int>(verts.size() / 3);
-
-    selEdgeVao_.bind();
-    {
-        ScopedBufferBind bind(selEdgeVbo_);
-        if (!verts.empty()) {
-            selEdgeVbo_.allocate(verts.data(), static_cast<int>(verts.size() * sizeof(float)));
-        }
-        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), nullptr);
-        glEnableVertexAttribArray(0);
-        glDisableVertexAttribArray(1);
-    }
-    selEdgeVao_.release();
-}
-
-void GLWidget::buildEdgeAdjacency() {
-    edgeAdjMap_.clear();
-    edgeAdjDirty_ = false;
-
-    int triCount = static_cast<int>(mesh_.indices.size() / 3);
-    if (triCount == 0) return;
-
-    // 预分配（每个三角形 3 条边，约 50% 共享 → ~1.5x triCount 条边）
-    edgeAdjMap_.reserve(triCount * 2);
-
-    for (int t = 0; t < triCount; ++t) {
-        for (int e = 0; e < 3; ++e) {
-            unsigned int vi_a = mesh_.indices[t * 3 + e];
-            unsigned int vi_b = mesh_.indices[t * 3 + (e + 1) % 3];
-            int na = (vi_a < vertexToNode_.size()) ? vertexToNode_[vi_a] : static_cast<int>(vi_a);
-            int nb = (vi_b < vertexToNode_.size()) ? vertexToNode_[vi_b] : static_cast<int>(vi_b);
-            int64_t key = (static_cast<int64_t>(std::min(na, nb)) << 32) | static_cast<uint32_t>(std::max(na, nb));
-
-            auto& pe = edgeAdjMap_[key];
-            if (pe.adjTris.empty()) { pe.va = vi_a; pe.vb = vi_b; }
-            pe.adjTris.push_back(t);
-        }
-    }
-}
-
-void GLWidget::buildPartEdgeCache() {
-    // 确保边邻接表已构建
-    if (edgeAdjDirty_) buildEdgeAdjacency();
-
-    cachedStaticEdgeVerts_.clear();
-    cachedSilhouettes_.clear();
-
-    // ── 1. 收集选中且可见的部件索引 ──
-    std::unordered_set<int> selectedParts;
-    int numParts = static_cast<int>(partElementIds_.size());
-    for (int p = 0; p < numParts; ++p) {
-        auto vit = partVisibility_.find(p);
-        if (vit != partVisibility_.end() && !vit->second) continue;
-        for (int eid : partElementIds_[p]) {
-            if (selection_.isElementSelected(eid)) {
-                selectedParts.insert(p);
-                break;
-            }
-        }
-    }
-
-    if (selectedParts.empty()) {
-        partEdgeCacheValid_ = true;
-        return;
-    }
-
-    // ── 2. 只遍历选中部件的三角形，收集边并分类 ──
-    const float featureAngleThreshold = 0.5f;  // cos(60°)
-
-    auto triNormal = [&](int t) -> glm::vec3 {
-        unsigned int i0 = mesh_.indices[t * 3];
-        unsigned int i1 = mesh_.indices[t * 3 + 1];
-        unsigned int i2 = mesh_.indices[t * 3 + 2];
-        glm::vec3 p0(mesh_.vertices[i0 * 6], mesh_.vertices[i0 * 6 + 1], mesh_.vertices[i0 * 6 + 2]);
-        glm::vec3 p1(mesh_.vertices[i1 * 6], mesh_.vertices[i1 * 6 + 1], mesh_.vertices[i1 * 6 + 2]);
-        glm::vec3 p2(mesh_.vertices[i2 * 6], mesh_.vertices[i2 * 6 + 1], mesh_.vertices[i2 * 6 + 2]);
-        glm::vec3 cr = glm::cross(p1 - p0, p2 - p0);
-        float len = glm::length(cr);
-        return (len > 1e-12f) ? cr / len : glm::vec3(0.0f);
-    };
-
-    auto pushEdgeVerts = [&](unsigned int a, unsigned int b, std::vector<float>& out) {
-        out.push_back(mesh_.vertices[a * 6]);
-        out.push_back(mesh_.vertices[a * 6 + 1]);
-        out.push_back(mesh_.vertices[a * 6 + 2]);
-        out.push_back(mesh_.vertices[b * 6]);
-        out.push_back(mesh_.vertices[b * 6 + 1]);
-        out.push_back(mesh_.vertices[b * 6 + 2]);
-    };
-
-    // 用 visited 集合确保每条边只处理一次
-    std::unordered_set<int64_t> visitedEdges;
-
-    // 预估容量（减少 rehash）
-    int totalSelectedTris = 0;
-    for (int p : selectedParts) totalSelectedTris += static_cast<int>(partTriangles_[p].size());
-    visitedEdges.reserve(totalSelectedTris * 2);
-    cachedStaticEdgeVerts_.reserve(totalSelectedTris * 6);
-
-    for (int p : selectedParts) {
-        for (int t : partTriangles_[p]) {
-            for (int e = 0; e < 3; ++e) {
-                unsigned int vi_a = mesh_.indices[t * 3 + e];
-                unsigned int vi_b = mesh_.indices[t * 3 + (e + 1) % 3];
-                int na = (vi_a < vertexToNode_.size()) ? vertexToNode_[vi_a] : static_cast<int>(vi_a);
-                int nb = (vi_b < vertexToNode_.size()) ? vertexToNode_[vi_b] : static_cast<int>(vi_b);
-                int64_t key = (static_cast<int64_t>(std::min(na, nb)) << 32) | static_cast<uint32_t>(std::max(na, nb));
-
-                if (!visitedEdges.insert(key).second) continue;  // 已处理
-
-                auto it = edgeAdjMap_.find(key);
-                if (it == edgeAdjMap_.end()) continue;
-
-                const PreEdge& pe = it->second;
-
-                // 分类邻接三角形
-                int selectedTriCount = 0;
-                int otherTriCount = 0;
-                int selTri0 = -1, selTri1 = -1;
-
-                for (int adjT : pe.adjTris) {
-                    int adjPart = (adjT < static_cast<int>(triToPart_.size())) ? triToPart_[adjT] : -1;
-                    if (adjPart >= 0 && selectedParts.count(adjPart)) {
-                        if (selectedTriCount == 0) selTri0 = adjT;
-                        else if (selectedTriCount == 1) selTri1 = adjT;
-                        selectedTriCount++;
-                    } else {
-                        otherTriCount++;
-                    }
-                }
-
-                // 边界边（与非选中部件共享）
-                if (otherTriCount > 0) {
-                    pushEdgeVerts(pe.va, pe.vb, cachedStaticEdgeVerts_);
-                    continue;
-                }
-                // 开放边（只有一个三角形）
-                if (selectedTriCount == 1) {
-                    pushEdgeVerts(pe.va, pe.vb, cachedStaticEdgeVerts_);
-                    continue;
-                }
-                // 特征边 or 轮廓边候选
-                if (selectedTriCount >= 2 && selTri0 >= 0 && selTri1 >= 0) {
-                    glm::vec3 n0 = triNormal(selTri0);
-                    glm::vec3 n1 = triNormal(selTri1);
-                    if (glm::dot(n0, n1) < featureAngleThreshold) {
-                        pushEdgeVerts(pe.va, pe.vb, cachedStaticEdgeVerts_);
-                    } else {
-                        SilhouetteCandidate sc;
-                        sc.ax = mesh_.vertices[pe.va * 6];
-                        sc.ay = mesh_.vertices[pe.va * 6 + 1];
-                        sc.az = mesh_.vertices[pe.va * 6 + 2];
-                        sc.bx = mesh_.vertices[pe.vb * 6];
-                        sc.by = mesh_.vertices[pe.vb * 6 + 1];
-                        sc.bz = mesh_.vertices[pe.vb * 6 + 2];
-                        sc.n0 = n0;
-                        sc.n1 = n1;
-                        cachedSilhouettes_.push_back(sc);
-                    }
-                }
-            }
-        }
-    }
-
-    partEdgeCacheValid_ = true;
-}
-
-void GLWidget::updateSilhouetteFromCache() {
-    // 预分配：静态边 + 最大可能的轮廓边
-    size_t staticSize = cachedStaticEdgeVerts_.size();
-    std::vector<float> verts;
-    verts.reserve(staticSize + cachedSilhouettes_.size() * 6);
-
-    // 复制静态边（边界/特征/开放）
-    verts.insert(verts.end(), cachedStaticEdgeVerts_.begin(), cachedStaticEdgeVerts_.end());
-
-    // 添加视角依赖的轮廓边
-    glm::vec3 eyePos = cam_.eye();
-    for (const auto& sc : cachedSilhouettes_) {
-        glm::vec3 edgeMid((sc.ax + sc.bx) * 0.5f,
-                          (sc.ay + sc.by) * 0.5f,
-                          (sc.az + sc.bz) * 0.5f);
-        glm::vec3 viewDir = eyePos - edgeMid;
-        float d0 = glm::dot(sc.n0, viewDir);
-        float d1 = glm::dot(sc.n1, viewDir);
-        if (d0 * d1 <= 0.0f) {
-            verts.push_back(sc.ax); verts.push_back(sc.ay); verts.push_back(sc.az);
-            verts.push_back(sc.bx); verts.push_back(sc.by); verts.push_back(sc.bz);
-        }
-    }
-
-    selEdgeVertCount_ = static_cast<int>(verts.size() / 3);
-
-    selEdgeVao_.bind();
-    {
-        ScopedBufferBind bind(selEdgeVbo_);
-        if (!verts.empty())
-            selEdgeVbo_.allocate(verts.data(), static_cast<int>(verts.size() * sizeof(float)));
-        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), nullptr);
-        glEnableVertexAttribArray(0);
-        glDisableVertexAttribArray(1);
-    }
-    selEdgeVao_.release();
 }
 
 void GLWidget::drawAxesIndicator() {
@@ -1962,39 +1345,8 @@ void GLWidget::drawAxesIndicator() {
     // 恢复主视口
     glViewport(0, 0, width() * dpr, height() * dpr);
 
-    // 保存投影参数，供 drawAxesLabels() 使用
-    axesMVP_ = axesMVP;
-}
-
-void GLWidget::drawAxesLabels(QPainter& painter) {
-    const int axesSize = 120;
-    const int margin = 8;
-
-    auto project = [&](glm::vec3 pt) -> QPointF {
-        glm::vec4 clip = axesMVP_ * glm::vec4(pt, 1.0f);
-        float sx = margin + (clip.x / clip.w * 0.5f + 0.5f) * axesSize;
-        float sy = height() - margin - (clip.y / clip.w * 0.5f + 0.5f) * axesSize;
-        return QPointF(sx, sy);
-    };
-
-    struct AxisLabel { glm::vec3 dir; QString name; QColor color; };
-    AxisLabel labels[] = {
-        {{1,0,0}, "X", QColor(240, 80, 80)},
-        {{0,1,0}, "Y", QColor(90, 220, 90)},
-        {{0,0,1}, "Z", QColor(90, 140, 255)},
-    };
-
-    QFont font = painter.font();
-    font.setBold(true);
-    font.setPixelSize(14);
-    painter.setFont(font);
-
-    for (const auto& l : labels) {
-        QPointF pos = project(l.dir * 1.15f);
-        painter.setPen(l.color);
-        painter.drawText(QRectF(pos.x() - 12, pos.y() - 12, 24, 24),
-                         Qt::AlignCenter, l.name);
-    }
+    // 保存投影参数，供 LabelOverlay 绘制 X/Y/Z 文字。
+    labelOverlay_->setAxesMvp(axesMVP);
 }
 
 void GLWidget::setShowLabels(bool show) {
@@ -2012,23 +1364,26 @@ void GLWidget::selectByIds(PickMode mode, const std::vector<int>& ids) {
         // 过滤：只保留网格中实际存在的节点 ID
         std::unordered_set<int> validNodes(vertexToNode_.begin(), vertexToNode_.end());
         for (int id : ids) {
-            if (validNodes.count(id))
+            if (validNodes.count(id) && isNodeVisible(id))
                 selection_.selectedNodes.insert(id);
         }
     } else if (mode == PickMode::Part) {
-        for (int pi : ids) selectPart(pi);
+        for (int pi : ids) {
+            if (isPartVisible(pi))
+                pickRenderer_->selectPart(pi);
+        }
     } else {
         // 过滤：只保留渲染网格中存在的单元 ID（含三角面和 1D 边线）
         std::unordered_set<int> validElems(triToElem_.begin(), triToElem_.end());
         for (int eid : mesh_.elemEdgeToElement)
             validElems.insert(eid);
         for (int id : ids) {
-            if (validElems.count(id))
+            if (validElems.count(id) && isElementVisible(id))
                 selection_.selectedElements.insert(id);
         }
     }
 
-    selectionDirty_ = true;
+    selectionRenderer_->markSelectionDirty();
 
     // 发射选中变更信号（只包含实际匹配的 ID）
     std::vector<int> matchedIds;
@@ -2045,177 +1400,11 @@ void GLWidget::selectByIds(PickMode mode, const std::vector<int>& ids) {
     if (mode == PickMode::Part) {
         std::vector<int> pickedParts;
         for (int pi = 0; pi < static_cast<int>(partElementIds_.size()); ++pi)
-            if (isPartFullySelected(pi)) pickedParts.push_back(pi);
+            if (pickRenderer_->isPartFullySelected(pi)) pickedParts.push_back(pi);
         emit partsPicked(pickedParts);
     }
 
     update();
-}
-
-void GLWidget::drawIdLabels(QPainter& painter, const glm::mat4& mvp) {
-    int w = width();
-    int h = height();
-
-    // 世界坐标 → 屏幕坐标
-    auto project = [&](const glm::vec3& pos) -> QPointF {
-        glm::vec4 clip = mvp * glm::vec4(pos, 1.0f);
-        if (clip.w <= 0.0f) return QPointF(-1, -1);
-        float nx = clip.x / clip.w;
-        float ny = clip.y / clip.w;
-        float sx = (nx * 0.5f + 0.5f) * w;
-        float sy = (1.0f - (ny * 0.5f + 0.5f)) * h;
-        return QPointF(sx, sy);
-    };
-
-    QFont font = painter.font();
-    font.setPixelSize(11);
-    font.setBold(true);
-    painter.setFont(font);
-
-    // 描边文字：深色轮廓 + 亮色正文（避免 drawRect 导致 GL 状态崩溃）
-    QColor outlineColor(0, 0, 0, 220);
-    QColor textColor(255, 200, 0);
-    const int offsetY = -14;  // 标签偏移到实体上方
-
-    // 绘制带描边的文字（4方向偏移描边 + 正文叠加）
-    auto drawOutlinedText = [&](int x, int y, const QString& text) {
-        painter.setPen(outlineColor);
-        for (int dx = -1; dx <= 1; ++dx)
-            for (int dy = -1; dy <= 1; ++dy)
-                if (dx != 0 || dy != 0)
-                    painter.drawText(x + dx, y + dy, text);
-        painter.setPen(textColor);
-        painter.drawText(x, y, text);
-    };
-
-    QFontMetrics fm(font);
-
-    // 屏幕剔除 + bin 去重：大模型选中几十万节点时，全画每帧 9*N 次 drawText
-    // 会爆性能。先用 bin (≈一个字号高的格子) 抑制重叠，每格只画第一个；
-    // 完全在屏幕外的标签直接跳过。
-    const int binPx = std::max(16, fm.height());
-    auto& usedBins = labelBinScratch_;
-    usedBins.clear();
-    const int wPx = width(), hPx = height();
-    auto reserveBin = [&](const QPointF& sp) -> bool {
-        if (sp.x() < -50.0 || sp.x() > wPx + 50.0 ||
-            sp.y() < -50.0 || sp.y() > hPx + 50.0)
-            return false;   // 屏外
-        int bx = static_cast<int>(sp.x()) / binPx;
-        int by = static_cast<int>(sp.y()) / binPx;
-        long long key = (static_cast<long long>(bx) << 32) ^ static_cast<unsigned int>(by);
-        if (!usedBins.insert(key).second) return false;   // 同格已占用
-        return true;
-    };
-
-    if (pickMode_ == PickMode::Node) {
-        // ── 节点标签 ──
-        if (!selection_.selectedNodes.empty() && !vertexToNode_.empty()) {
-            std::unordered_map<int, int> nodeToVert;
-            for (int i = 0; i < static_cast<int>(vertexToNode_.size()); ++i) {
-                int nid = vertexToNode_[i];
-                if (nid >= 0 && nodeToVert.find(nid) == nodeToVert.end())
-                    nodeToVert[nid] = i;
-            }
-
-            for (int nid : selection_.selectedNodes) {
-                auto it = nodeToVert.find(nid);
-                if (it == nodeToVert.end()) continue;
-                int vi = it->second;
-                if (vi * 6 + 2 >= static_cast<int>(mesh_.vertices.size())) continue;
-
-                glm::vec3 pos(mesh_.vertices[vi * 6],
-                              mesh_.vertices[vi * 6 + 1],
-                              mesh_.vertices[vi * 6 + 2]);
-                QPointF sp = project(pos);
-                if (sp.x() < 0) continue;
-                if (!reserveBin(sp)) continue;
-
-                QString text = QString::number(nid);
-                int tx = static_cast<int>(sp.x()) - fm.horizontalAdvance(text) / 2;
-                int ty = static_cast<int>(sp.y()) + offsetY;
-                drawOutlinedText(tx, ty, text);
-            }
-        }
-
-    } else if (pickMode_ == PickMode::Part) {
-        // ── 部件标签（在部件重心位置显示部件索引） ──
-        if (!selection_.selectedElements.empty() && !triToElem_.empty() && !triToPart_.empty()) {
-            // 收集选中的部件索引
-            std::set<int> selectedParts;
-            for (int pi = 0; pi < static_cast<int>(partElementIds_.size()); ++pi) {
-                if (isPartFullySelected(pi))
-                    selectedParts.insert(pi);
-            }
-
-            // 计算每个选中部件的重心
-            for (int pi : selectedParts) {
-                if (pi < 0 || pi >= static_cast<int>(partTriangles_.size())) continue;
-                float sx = 0, sy = 0, sz = 0;
-                int count = 0;
-                for (int t : partTriangles_[pi]) {
-                    if (t * 3 + 2 >= static_cast<int>(mesh_.indices.size())) continue;
-                    for (int k = 0; k < 3; ++k) {
-                        unsigned int vi = mesh_.indices[t * 3 + k];
-                        if (vi * 6 + 2 < mesh_.vertices.size()) {
-                            sx += mesh_.vertices[vi * 6];
-                            sy += mesh_.vertices[vi * 6 + 1];
-                            sz += mesh_.vertices[vi * 6 + 2];
-                            count++;
-                        }
-                    }
-                }
-                if (count == 0) continue;
-                glm::vec3 center(sx / count, sy / count, sz / count);
-                QPointF sp = project(center);
-                if (sp.x() < 0) continue;
-                if (!reserveBin(sp)) continue;
-
-                QString text = QString("Part %1").arg(pi + 1);
-                int tx = static_cast<int>(sp.x()) - fm.horizontalAdvance(text) / 2;
-                int ty = static_cast<int>(sp.y()) + offsetY;
-                drawOutlinedText(tx, ty, text);
-            }
-        }
-
-    } else {
-        // ── 单元标签（在单元重心位置显示） ──
-        if (!selection_.selectedElements.empty() && !triToElem_.empty()) {
-            struct ElemAccum { float sx = 0, sy = 0, sz = 0; int count = 0; };
-            std::unordered_map<int, ElemAccum> elemCentroids;
-
-            int triCount = static_cast<int>(triToElem_.size());
-            int idxCount = static_cast<int>(mesh_.indices.size());
-            for (int t = 0; t < triCount; ++t) {
-                if (t * 3 + 2 >= idxCount) break;
-                int eid = triToElem_[t];
-                if (selection_.selectedElements.count(eid) == 0) continue;
-                auto& acc = elemCentroids[eid];
-                for (int k = 0; k < 3; ++k) {
-                    unsigned int vi = mesh_.indices[t * 3 + k];
-                    if (vi * 6 + 2 < mesh_.vertices.size()) {
-                        acc.sx += mesh_.vertices[vi * 6];
-                        acc.sy += mesh_.vertices[vi * 6 + 1];
-                        acc.sz += mesh_.vertices[vi * 6 + 2];
-                        acc.count++;
-                    }
-                }
-            }
-
-            for (const auto& [eid, acc] : elemCentroids) {
-                if (acc.count == 0) continue;
-                glm::vec3 center(acc.sx / acc.count, acc.sy / acc.count, acc.sz / acc.count);
-                QPointF sp = project(center);
-                if (sp.x() < 0) continue;
-                if (!reserveBin(sp)) continue;
-
-                QString text = QString::number(eid);
-                int tx = static_cast<int>(sp.x()) - fm.horizontalAdvance(text) / 2;
-                int ty = static_cast<int>(sp.y()) + offsetY;
-                drawOutlinedText(tx, ty, text);
-            }
-        }
-    }
 }
 
 void GLWidget::setColorBarVisible(bool visible) {
@@ -2315,6 +1504,8 @@ void GLWidget::setTriangleToPartMap(const std::vector<int>& map) {
             elemToPart_[eid] = p;
         }
     }
+    selectionRenderer_->invalidatePartEdgeCache();
+    rebuildRenderEdgeMaps();
 
     // 上传 triToPart 到 texture buffer（供片段着色器用 gl_PrimitiveID 查表）
     triPartDirty_ = true;
@@ -2325,19 +1516,13 @@ void GLWidget::setTriangleToPartMap(const std::vector<int>& map) {
 void GLWidget::setEdgeToPartMap(const std::vector<int>& map) {
     edgeToPart_ = map;
     edgeVisibilityDirty_ = true;
+    rebuildRenderEdgeMaps();
     update();
 }
 
 void GLWidget::setPartVisibility(int partIndex, bool visible) {
     partVisibility_[partIndex] = visible;
-    partVisibilityDirty_ = true;
-    edgeVisibilityDirty_ = true;
-    // 可见性变化影响选中高亮（隐藏部件不显示高亮）
-    if (selection_.hasSelection()) {
-        partEdgeCacheValid_ = false;
-        selectionDirty_ = true;
-    }
-    update();
+    markVisibilityDirty();
 }
 
 void GLWidget::highlightParts(const std::vector<int>& partIndices) {
@@ -2347,11 +1532,10 @@ void GLWidget::highlightParts(const std::vector<int>& partIndices) {
 
     // 将指定部件的所有单元加入选中
     for (int pi : partIndices)
-        selectPart(pi);
+        pickRenderer_->selectPart(pi);
 
     // 触发高亮重建
-    partEdgeCacheValid_ = false;
-    selectionDirty_ = true;
+    selectionRenderer_->markSelectionDirty();
 
     // 切换到部件拾取模式以使用轮廓边高亮
     pickMode_ = PickMode::Part;
@@ -2392,19 +1576,9 @@ void GLWidget::rebuildEdgeIbo() {
     edgeVisibilityDirty_ = false;
     if (allEdgeIndices_.empty()) return;
 
-    std::vector<unsigned int> filtered;
-    filtered.reserve(allEdgeIndices_.size());
-    int edgeCount = static_cast<int>(allEdgeIndices_.size() / 2);
-    for (int e = 0; e < edgeCount; ++e) {
-        int part = (e < static_cast<int>(edgeToPart_.size())) ? edgeToPart_[e] : -1;
-        if (part >= 0) {
-            auto it = partVisibility_.find(part);
-            if (it != partVisibility_.end() && !it->second)
-                continue;   // 该部件不可见，跳过此边
-        }
-        filtered.push_back(allEdgeIndices_[e * 2]);
-        filtered.push_back(allEdgeIndices_[e * 2 + 1]);
-    }
+    std::vector<unsigned int> filtered = VisibilityFilter::filterEdges(
+        allEdgeIndices_, edgeToPart_, renderEdgeToElems_, renderEdgeNodeIds_,
+        partVisibility_, hiddenElements_, hiddenNodes_, elemToNodes_);
     activeEdgeIndexCount_ = static_cast<int>(filtered.size());
 
     edgeVao_.bind();

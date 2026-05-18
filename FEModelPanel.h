@@ -18,6 +18,7 @@
 #include <QComboBox>
 #include <QPushButton>
 #include <QString>
+#include <vector>
 
 #include "FEModel.h"
 #include "FERenderData.h"
@@ -87,6 +88,9 @@ signals:
     /** @brief 搜索选中请求（模式 + ID 列表） */
     void searchRequested(PickMode mode, const std::vector<int>& ids);
 
+    /** @brief 节点/单元可见性变更请求（true=显示，false=隐藏） */
+    void visibilityRequested(PickMode mode, const std::vector<int>& ids, bool visible);
+
 public slots:
     void updateSelectionInfo(PickMode mode, int count, const std::vector<int>& ids);
 
@@ -95,6 +99,11 @@ private:
     QGroupBox* createSelectionGroup();  // 选中信息分组
     QGroupBox* createSearchGroup();     // 搜索分组
     void onSearchTriggered();           // 执行搜索
+    void onShowTriggered();             // 显示指定节点/单元
+    void onHideTriggered();             // 隐藏指定节点/单元
+    std::vector<int> parseSearchIds() const;
+    std::vector<int> visibilityTargetIds(PickMode& mode) const;
+    void updateVisibilityActionState();
 
     // 解析逻辑已移至 FEParser 静态工具类
 
@@ -121,8 +130,14 @@ private:
     FEScalarField activeField_;
     bool hasActiveField_ = false;
 
+    // ── 当前选中缓存（搜索框为空时，显隐按钮作用于这里） ──
+    PickMode currentSelectionMode_ = PickMode::Node;
+    std::vector<int> currentSelectionIds_;
+
     // ── 搜索 ──
     QComboBox* searchTypeCombo_ = nullptr;
     QLineEdit* searchInput_     = nullptr;
     QPushButton* searchBtn_     = nullptr;
+    QPushButton* showBtn_       = nullptr;
+    QPushButton* hideBtn_       = nullptr;
 };

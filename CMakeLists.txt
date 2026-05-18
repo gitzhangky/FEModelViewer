@@ -117,6 +117,9 @@ set(RENDER_SOURCES
     ColorBarOverlay.cpp
     Geometry.cpp
     GLWidget.cpp
+    LabelOverlay.cpp
+    PickRenderer.cpp
+    SelectionRenderer.cpp
     FEModel.cpp
     FEField.cpp
     FEMeshConverter.cpp
@@ -313,6 +316,26 @@ if(BUILD_TESTING)
         COMMAND test_import_path_state
     )
 
+    add_executable(test_visibility_filter
+        tests/test_visibility_filter.cpp
+    )
+    target_include_directories(test_visibility_filter PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+    add_test(NAME visibility_filter
+        COMMAND test_visibility_filter
+    )
+
+    add_executable(test_node_vertex_lookup
+        tests/test_node_vertex_lookup.cpp
+    )
+    target_include_directories(test_node_vertex_lookup PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+    add_test(NAME node_vertex_lookup
+        COMMAND test_node_vertex_lookup
+    )
+
     add_executable(test_iso_cube_data
         tests/test_iso_cube_data.cpp
     )
@@ -357,6 +380,18 @@ if(BUILD_TESTING)
     target_link_libraries(test_parts_panel PRIVATE FERender Qt5::Core Qt5::Gui Qt5::Widgets)
     add_test(NAME parts_panel
         COMMAND test_parts_panel
+    )
+
+    qt5_wrap_cpp(TEST_FE_MODEL_PANEL_MOC_SRCS FEModelPanel.h)
+    add_executable(test_fe_model_panel
+        tests/test_fe_model_panel.cpp
+        FEModelPanel.cpp
+        ${TEST_FE_MODEL_PANEL_MOC_SRCS}
+    )
+    set_target_properties(test_fe_model_panel PROPERTIES AUTOMOC OFF)
+    target_link_libraries(test_fe_model_panel PRIVATE FERender Qt5::Core Qt5::Gui Qt5::Widgets)
+    add_test(NAME fe_model_panel
+        COMMAND test_fe_model_panel
     )
 
     add_test(NAME ferender_public_headers

@@ -8,9 +8,17 @@
 #include <cassert>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 
 static void requireNear(double actual, double expected) {
     assert(std::fabs(actual - expected) < 1.0e-3);
+}
+
+static void require(bool condition, const char* message) {
+    if (!condition) {
+        std::fprintf(stderr, "FAIL: %s\n", message);
+        std::exit(1);
+    }
 }
 
 static void testPlaneControlsUseModelBounds() {
@@ -71,12 +79,37 @@ static void testPlaneControlsUseModelBounds() {
     printf("  PASS: plane controls use model bounds\n");
 }
 
+static void testClearResultsResetsPlaneFilterPreview() {
+    ResultPanel panel;
+    auto* filterType = panel.findChild<QComboBox*>("filterTypeCombo");
+    require(filterType != nullptr, "filter type combo exists");
+
+    int previewCount = 0;
+    QObject::connect(&panel, &ResultPanel::planePreviewChanged,
+                     [&](const glm::vec3&, const glm::vec3&) {
+        ++previewCount;
+    });
+
+    filterType->setCurrentIndex(2);
+    panel.setPlaneBounds(glm::vec3(0.0f), glm::vec3(10.0f));
+    require(previewCount > 0, "slice mode emits preview before reset");
+
+    previewCount = 0;
+    panel.clearResults();
+    panel.setPlaneBounds(glm::vec3(0.0f), glm::vec3(20.0f));
+
+    require(previewCount == 0, "clearResults prevents stale plane preview on next model");
+    require(filterType->currentIndex() == 0, "clearResults resets filter type");
+    printf("  PASS: clear results resets plane filter preview\n");
+}
+
 int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication app(argc, argv);
 
     printf("=== ResultPanel Tests ===\n");
     testPlaneControlsUseModelBounds();
+    testClearResultsResetsPlaneFilterPreview();
     printf("All ResultPanel tests passed!\n");
     return 0;
 }

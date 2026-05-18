@@ -363,6 +363,10 @@ void ResultPanel::clearResults()
     componentCombo_->setEnabled(false);
     applyBtn_->setEnabled(false);
     clearBtn_->setEnabled(false);
+    if (filterTypeCombo_)
+        filterTypeCombo_->setCurrentIndex(0);
+    if (filterClearBtn_)
+        filterClearBtn_->setEnabled(false);
     infoLabel_->setText("");
 }
 
