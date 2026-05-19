@@ -430,6 +430,15 @@ if(BUILD_TESTING)
         COMMAND test_fe_model_panel
     )
 
+    add_executable(test_pivot_interaction
+        tests/test_pivot_interaction.cpp
+    )
+    set_target_properties(test_pivot_interaction PROPERTIES AUTOMOC OFF)
+    target_link_libraries(test_pivot_interaction PRIVATE FERender Qt5::Core Qt5::Gui Qt5::Widgets)
+    add_test(NAME pivot_interaction
+        COMMAND test_pivot_interaction
+    )
+
     add_test(NAME ferender_public_headers
         COMMAND ${CMAKE_COMMAND}
             "-DINSTALLED_HEADERS=${RENDER_HEADERS}"

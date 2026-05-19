@@ -19,6 +19,7 @@
 #include <QOpenGLBuffer>
 #include <QOpenGLVertexArrayObject>
 #include <QElapsedTimer>
+#include <QTimer>
 #include <QRubberBand>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -178,6 +179,7 @@ protected:
     void mousePressEvent(QMouseEvent* e) override;
     void mouseMoveEvent(QMouseEvent* e) override;
     void mouseReleaseEvent(QMouseEvent* e) override;
+    void mouseDoubleClickEvent(QMouseEvent* e) override;
     void wheelEvent(QWheelEvent* e) override;
     void keyPressEvent(QKeyEvent* e) override;
 
@@ -200,6 +202,7 @@ private:
     void updateFpsStats();
     void bindWidgetFramebuffer();
     void cleanupGLResources();
+    void orbitAroundPivot(float dx, float dy);
     void rebuildElementNodeMap();
     void rebuildNodeVertexLookup();
     void rebuildRenderEdgeMaps();
@@ -306,6 +309,23 @@ private:
     bool isBoxDeselecting_ = false;     // 是否正在框选（取消）
     QRubberBand* rubberBand_ = nullptr; // 框选矩形
     QPoint boxOrigin_;                  // 框选起始点
+
+    // ── 双击设置旋转中心 ──
+    QPoint pendingPivotPos_;            // 待处理的双击屏幕位置
+    bool pivotPending_ = false;         // 是否有待处理的旋转中心请求
+    glm::vec3 pivotMarkerPos_{0.0f};    // 标记的世界坐标
+    QElapsedTimer pivotMarkerClock_;    // 标记出现时间
+    QTimer* pivotFadeTimer_ = nullptr;  // 淡出动画驱动定时器
+    bool pivotMarkerActive_ = false;    // 标记是否正在显示
+    GLuint depthResolveFbo_ = 0;        // MSAA 深度 resolve 用 FBO
+    GLuint depthResolveTex_ = 0;        // resolve FBO 的深度纹理
+    int depthResolveW_ = 0, depthResolveH_ = 0;
+    glm::vec3 orbitPivot_{0.0f};        // 自定义轨道旋转轴心（世界坐标）
+    bool hasCustomPivot_ = false;       // 是否启用自定义轴心
+    glm::vec3 modelCenter_{0.0f};       // 模型几何中心（fitToModel 记录），用于 Space 重置旋转中心
+    bool hasModelCenter_ = false;       // 是否已记录过模型中心
+    QElapsedTimer pivotResetHintClock_;
+    bool pivotResetHintActive_ = false;
 
     glm::vec3 color_{0.55f, 0.75f, 0.73f};
 

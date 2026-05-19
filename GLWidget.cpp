@@ -17,9 +17,11 @@
 #include <QMouseEvent>
 #include <QWheelEvent>
 #include <QPainter>
+#include <QShortcut>
 #include <QCoreApplication>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
+#include <glm/ext/matrix_projection.hpp>
 #include <algorithm>
 #include <cmath>
 #include <memory>
@@ -123,6 +125,20 @@ GLWidget::GLWidget(QWidget* parent)
 
     // 创建色标覆盖层（raster 绘制，不受 GL 状态影响）
     colorBarOverlay_ = new ColorBarOverlay(this);
+
+    // 注册 Space 快捷键重置旋转中心（窗口级，避免焦点丢失导致无响应）
+    auto* resetPivotShortcut = new QShortcut(QKeySequence(Qt::Key_Space), this);
+    resetPivotShortcut->setContext(Qt::WindowShortcut);
+    connect(resetPivotShortcut, &QShortcut::activated, this, [this]() {
+        hasCustomPivot_ = false;
+        pivotMarkerActive_ = false;
+        if (hasModelCenter_) {
+            cam_.target = modelCenter_;
+        }
+        pivotResetHintClock_.start();
+        pivotResetHintActive_ = true;
+        update();
+    });
 
     // 应用退出时先于 QOpenGLContext 销毁释放 GL 对象，避免 Qt 在析构阶段报警。
     connect(QCoreApplication::instance(), &QCoreApplication::aboutToQuit,
@@ -291,6 +307,9 @@ void GLWidget::fitToModel(const glm::vec3& center, float size) {
     cam_.panSensitivity = 0.001f;
     cam_.yaw = 30.0f;
     cam_.pitch = 25.0f;
+    hasCustomPivot_ = false;
+    modelCenter_ = center;
+    hasModelCenter_ = true;
     update();
 }
 
@@ -777,6 +796,9 @@ void GLWidget::cleanupGLResources() {
     delete axesShader_;
     axesShader_ = nullptr;
 
+    if (depthResolveFbo_) { glDeleteFramebuffers(1, &depthResolveFbo_); depthResolveFbo_ = 0; }
+    if (depthResolveTex_) { glDeleteTextures(1, &depthResolveTex_); depthResolveTex_ = 0; }
+
     glResourcesCleaned_ = true;
     doneCurrent();
 }
@@ -858,6 +880,96 @@ void GLWidget::paintGL() {
     selectionRenderer_->render(*shader_);
 
     shader_->release();
+
+    // ── 延迟处理双击设置旋转中心 ──
+    if (pivotPending_) {
+        pivotPending_ = false;
+        int dpr = devicePixelRatio();
+        int fbW = width() * dpr, fbH = height() * dpr;
+
+        // 懒创建 / 重建深度专用非 MSAA FBO
+        if (depthResolveFbo_ == 0 || depthResolveW_ != fbW || depthResolveH_ != fbH) {
+            if (depthResolveFbo_) { glDeleteFramebuffers(1, &depthResolveFbo_); glDeleteTextures(1, &depthResolveTex_); }
+            glGenFramebuffers(1, &depthResolveFbo_);
+            glGenTextures(1, &depthResolveTex_);
+            glBindTexture(GL_TEXTURE_2D, depthResolveTex_);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32F, fbW, fbH, 0,
+                         GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
+            glBindFramebuffer(GL_FRAMEBUFFER, depthResolveFbo_);
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, depthResolveTex_, 0);
+            glDrawBuffer(GL_NONE);
+            glReadBuffer(GL_NONE);
+            depthResolveW_ = fbW;
+            depthResolveH_ = fbH;
+        }
+
+        // 渲染深度到非 MSAA FBO（轻量级：仅主网格，无颜色写入）
+        glBindFramebuffer(GL_FRAMEBUFFER, depthResolveFbo_);
+        glViewport(0, 0, fbW, fbH);
+        glClear(GL_DEPTH_BUFFER_BIT);
+        glEnable(GL_DEPTH_TEST);
+        glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+
+        shader_->bind();
+        shader_->setUniformValue("uMVP", QMatrix4x4(glm::value_ptr(glm::transpose(mvp))));
+        vao_.bind();
+        glDrawElements(GL_TRIANGLES, activeIndexCount_, GL_UNSIGNED_INT, nullptr);
+        vao_.release();
+        shader_->release();
+
+        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+
+        // 读深度
+        int px = std::clamp(pendingPivotPos_.x() * dpr, 0, std::max(0, fbW - 1));
+        int py = std::clamp((height() - pendingPivotPos_.y()) * dpr, 0, std::max(0, fbH - 1));
+        float depth = 1.0f;
+        glReadPixels(px, py, 1, 1, GL_DEPTH_COMPONENT, GL_FLOAT, &depth);
+
+        // 恢复 widget FBO 和 viewport
+        bindWidgetFramebuffer();
+        glViewport(0, 0, fbW, fbH);
+
+        glm::vec3 newTarget;
+        glm::vec4 vp(0, 0, fbW, fbH);
+        if (depth > 0.0f && depth < 1.0f) {
+            // 点击到模型上：直接 unproject
+            newTarget = glm::unProject(glm::vec3(px, py, depth), view, projection, vp);
+        } else {
+            // 点击到背景：沿点击射线投射到与当前 target 同深度的平面
+            glm::vec3 nearPt = glm::unProject(glm::vec3(px, py, 0.0f), view, projection, vp);
+            glm::vec3 farPt  = glm::unProject(glm::vec3(px, py, 1.0f), view, projection, vp);
+            glm::vec3 ray = glm::normalize(farPt - nearPt);
+            glm::vec3 eyePos = cam_.eye();
+            glm::vec3 viewDir = glm::normalize(cam_.target - eyePos);
+            // 射线与经过当前 target 且法线为 viewDir 的平面求交
+            float denom = glm::dot(ray, viewDir);
+            if (std::abs(denom) < 1e-6f) goto skipPivot;
+            float t = glm::dot(cam_.target - nearPt, viewDir) / denom;
+            newTarget = nearPt + ray * t;
+        }
+
+        {
+            orbitPivot_ = newTarget;
+            hasCustomPivot_ = true;
+
+            pivotMarkerPos_ = newTarget;
+            pivotMarkerActive_ = true;
+            pivotMarkerClock_.start();
+            if (!pivotFadeTimer_) {
+                pivotFadeTimer_ = new QTimer(this);
+                pivotFadeTimer_->setInterval(16);
+                connect(pivotFadeTimer_, &QTimer::timeout, this, [this]() {
+                    if (pivotMarkerClock_.elapsed() > 2000) {
+                        pivotMarkerActive_ = false;
+                        pivotFadeTimer_->stop();
+                    }
+                    update();
+                });
+            }
+            pivotFadeTimer_->start();
+        }
+        skipPivot:;
+    }
 
     drawAxesIndicator();
     render2DOverlays(mvp);
@@ -1127,6 +1239,74 @@ void GLWidget::render2DOverlays(const glm::mat4& mvp) {
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing);
     labelOverlay_->render(painter, mvp);
+
+    // 旋转中心标记（双击设置后淡出）
+    if (pivotMarkerActive_) {
+        glm::vec4 clip = mvp * glm::vec4(pivotMarkerPos_, 1.0f);
+        if (clip.w > 0.0f) {
+            glm::vec3 ndc = glm::vec3(clip) / clip.w;
+            float sx = (ndc.x * 0.5f + 0.5f) * width();
+            float sy = (1.0f - (ndc.y * 0.5f + 0.5f)) * height();
+
+            float elapsed = pivotMarkerClock_.elapsed();
+            float t = elapsed / 2000.0f;
+            if (t > 1.0f) t = 1.0f;
+            // 前 800ms 保持不透明，之后淡出
+            float fadeT = (elapsed < 800) ? 0.0f : (elapsed - 800) / 1200.0f;
+            if (fadeT > 1.0f) fadeT = 1.0f;
+            int alpha = static_cast<int>(255 * (1.0f - fadeT));
+
+            // 外圈扩散
+            float radius = 10.0f + 16.0f * t;
+            QPen pen(QColor(255, 100, 30, alpha), 2.5f);
+            painter.setPen(pen);
+            painter.setBrush(Qt::NoBrush);
+            painter.drawEllipse(QPointF(sx, sy), radius, radius);
+
+            // 内圈实心圆点
+            int dotAlpha = static_cast<int>(220 * (1.0f - fadeT));
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(QColor(255, 140, 50, dotAlpha));
+            painter.drawEllipse(QPointF(sx, sy), 4.0, 4.0);
+
+            // 十字线
+            float cross = 8.0f;
+            painter.setPen(QPen(QColor(255, 100, 30, alpha), 2.0f));
+            painter.drawLine(QPointF(sx - cross, sy), QPointF(sx + cross, sy));
+            painter.drawLine(QPointF(sx, sy - cross), QPointF(sx, sy + cross));
+
+            // 文字提示
+            if (elapsed < 1400) {
+                QFont font = painter.font();
+                font.setPixelSize(11);
+                font.setBold(true);
+                painter.setFont(font);
+                painter.setPen(QColor(255, 200, 150, alpha));
+                painter.drawText(QPointF(sx + 14, sy - 10), "旋转中心");
+            }
+        }
+    }
+
+    if (pivotResetHintActive_) {
+        float elapsed = pivotResetHintClock_.elapsed();
+        if (elapsed > 1000) {
+            pivotResetHintActive_ = false;
+        } else {
+            float fadeT = (elapsed < 500) ? 0.0f : (elapsed - 500) / 500.0f;
+            int alpha = static_cast<int>(200 * (1.0f - fadeT));
+            QFont font = painter.font();
+            font.setPixelSize(13);
+            font.setBold(true);
+            painter.setFont(font);
+            painter.setPen(QColor(200, 200, 200, alpha));
+            QString text = QStringLiteral("已重置旋转中心");
+            QFontMetrics fm(font);
+            int tw = fm.horizontalAdvance(text);
+            painter.drawText(QPointF((width() - tw) / 2.0, height() / 2.0), text);
+            update();
+        }
+    }
+
     painter.end();
 }
 
@@ -1166,6 +1346,7 @@ void GLWidget::resizeGL(int w, int h) {
 // ============================================================
 
 void GLWidget::mousePressEvent(QMouseEvent* e) {
+    setFocus();
     pressPos_ = e->pos();
     lastPos_ = e->pos();
     isDragging_ = false;
@@ -1217,12 +1398,20 @@ void GLWidget::mouseMoveEvent(QMouseEvent* e) {
 
     // Ctrl/Shift + 左键用于拾取，不旋转
     if ((e->buttons() & Qt::LeftButton) &&
-        !(e->modifiers() & (Qt::ControlModifier | Qt::ShiftModifier)))
-        cam_.rotate(dx, dy);
+        !(e->modifiers() & (Qt::ControlModifier | Qt::ShiftModifier))) {
+        if (hasCustomPivot_)
+            orbitAroundPivot(dx, dy);
+        else
+            cam_.rotate(dx, dy);
+    }
     // Ctrl/Shift + 右键用于取消拾取，不平移
     if ((e->buttons() & (Qt::RightButton | Qt::MiddleButton)) &&
-        !(e->modifiers() & (Qt::ControlModifier | Qt::ShiftModifier)))
+        !(e->modifiers() & (Qt::ControlModifier | Qt::ShiftModifier))) {
+        glm::vec3 oldTarget = cam_.target;
         cam_.pan(dx, dy);
+        if (hasCustomPivot_)
+            orbitPivot_ += (cam_.target - oldTarget);
+    }
 
     // 部件模式轮廓边依赖视角，相机变化时需要刷新
     if (pickMode_ == PickMode::Part && selection_.hasSelection())
@@ -1264,6 +1453,37 @@ void GLWidget::mouseReleaseEvent(QMouseEvent* e) {
     }
 
     isDragging_ = false;
+}
+
+void GLWidget::orbitAroundPivot(float dx, float dy)
+{
+    float cp = cos(glm::radians(cam_.pitch));
+    float yawSign = (cp >= 0.0f) ? 1.0f : -1.0f;
+    float dYaw   = -dx * cam_.rotateSensitivity * yawSign;
+    float dPitch = -dy * cam_.rotateSensitivity;
+
+    glm::mat4 viewMat = cam_.viewMatrix();
+    glm::vec3 right(viewMat[0][0], viewMat[1][0], viewMat[2][0]);
+
+    glm::mat4 rotYaw = glm::rotate(glm::mat4(1.0f),
+                                     glm::radians(dYaw), glm::vec3(0, 1, 0));
+    glm::mat4 rotPitch = glm::rotate(glm::mat4(1.0f),
+                                       glm::radians(dPitch), right);
+    glm::mat4 rot = rotPitch * rotYaw;
+
+    glm::vec3 newTarget = glm::vec3(rot * glm::vec4(cam_.target - orbitPivot_, 0.0f)) + orbitPivot_;
+
+    cam_.rotate(dx, dy);
+    cam_.target = newTarget;
+}
+
+void GLWidget::mouseDoubleClickEvent(QMouseEvent* e) {
+    if (e->button() != Qt::LeftButton) return;
+    if (mesh_.indices.empty()) return;
+
+    pendingPivotPos_ = e->pos();
+    pivotPending_ = true;
+    update();
 }
 
 void GLWidget::wheelEvent(QWheelEvent* e) {
