@@ -115,6 +115,25 @@ static void testPartTreeSelectionSyncsToolbar()
     std::printf("  PASS: part tree selection syncs GL pick mode and toolbar\n");
 }
 
+static void testPartGroupSelectionSyncsToolbar()
+{
+    MainWindow window;
+    prepareModelTree(window);
+
+    auto* gl = window.findChild<GLWidget*>();
+    require(gl != nullptr, "GLWidget exists");
+
+    auto* partAction = findPickAction(window, PickMode::Part);
+    require(partAction != nullptr, "part toolbar action exists");
+
+    selectTreeItem(window, "部件");
+
+    require(gl->pickMode() == PickMode::Part, "part group selection switches GL pick mode to part");
+    require(partAction->isChecked(), "part group selection checks the part toolbar action");
+
+    std::printf("  PASS: part group selection syncs GL pick mode and toolbar\n");
+}
+
 static void testSetTreeSelectionSyncsToolbarEvenWhenGLModeAlreadyChanged()
 {
     MainWindow window;
@@ -148,6 +167,7 @@ int main(int argc, char** argv)
 
     std::printf("=== MainWindow Linkage Tests ===\n");
     testPartTreeSelectionSyncsToolbar();
+    testPartGroupSelectionSyncsToolbar();
     testSetTreeSelectionSyncsToolbarEvenWhenGLModeAlreadyChanged();
     std::printf("All MainWindow linkage tests passed!\n");
     return 0;

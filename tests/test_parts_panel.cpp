@@ -54,6 +54,17 @@ static QTreeWidgetItem* findItemByText(QTreeWidgetItem* root, const QString& tex
     return nullptr;
 }
 
+static QTreeWidgetItem* findItemByExactText(QTreeWidgetItem* root, const QString& text)
+{
+    if (!root) return nullptr;
+    if (root->text(0) == text) return root;
+    for (int i = 0; i < root->childCount(); ++i) {
+        if (auto* found = findItemByExactText(root->child(i), text))
+            return found;
+    }
+    return nullptr;
+}
+
 static void testProgrammaticPartSyncDoesNotEmitTreeSelection()
 {
     PartsPanel panel;
@@ -182,6 +193,77 @@ static void testSetGroupSelectionRequestsAllChildSetIds()
     std::printf("  PASS: set group selection requests all child set ids\n");
 }
 
+static void testPartGroupSelectionRequestsAllParts()
+{
+    PartsPanel panel;
+    panel.setParts("model", makeParts(), makeNodeSets(), makeElementSets(),
+                   {glm::vec3(1.0f, 0.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f)});
+
+    auto* tree = panel.findChild<QTreeWidget*>();
+    require(tree != nullptr, "tree exists");
+    auto* root = tree->topLevelItem(0);
+    require(root != nullptr, "root item exists");
+
+    int setSelectionCount = 0;
+    QObject::connect(&panel, &PartsPanel::setSelectionRequested,
+                     [&](PickMode, const std::vector<int>&) {
+        ++setSelectionCount;
+    });
+
+    std::vector<int> selectedParts;
+    int partSelectionCount = 0;
+    QObject::connect(&panel, &PartsPanel::partSelectionChanged,
+                     [&](const std::vector<int>& parts) {
+        selectedParts = parts;
+        ++partSelectionCount;
+    });
+
+    auto* partGroup = findItemByText(root, "部件");
+    require(partGroup != nullptr, "part group exists");
+    tree->setCurrentItem(partGroup);
+    partGroup->setSelected(true);
+    QApplication::processEvents();
+
+    require(partSelectionCount == 1, "part group emits part selection");
+    require(selectedParts == std::vector<int>({0, 1}), "part group emits all child part indices");
+    require(setSelectionCount == 0, "part group does not emit set selection");
+
+    std::printf("  PASS: part group selection requests all parts\n");
+}
+
+static void testSetLabelsDisambiguateNameParenthesesFromCounts()
+{
+    FEPart part;
+    part.name = "Part(2)";
+    part.elementIds = {1, 2, 3, 4};
+
+    FENodeSet nodeSet;
+    nodeSet.name = "Nodes(2)";
+    nodeSet.nodeIds = {10, 20, 30, 40};
+
+    FEElementSet elemSet;
+    elemSet.name = "Elems(2)";
+    elemSet.elementIds = {100, 200, 300};
+
+    PartsPanel panel;
+    panel.setParts("model", {part}, {nodeSet}, {elemSet},
+                   {glm::vec3(1.0f, 0.0f, 0.0f)});
+
+    auto* tree = panel.findChild<QTreeWidget*>();
+    require(tree != nullptr, "tree exists");
+    auto* root = tree->topLevelItem(0);
+    require(root != nullptr, "root item exists");
+
+    require(findItemByExactText(root, "Part(2)  | 4单元") != nullptr,
+            "part label shows explicit element count suffix");
+    require(findItemByExactText(root, "Nodes(2)  | 4节点") != nullptr,
+            "node set label shows explicit node count suffix");
+    require(findItemByExactText(root, "Elems(2)  | 3单元") != nullptr,
+            "element set label shows explicit element count suffix");
+
+    std::printf("  PASS: labels disambiguate parentheses in names from counts\n");
+}
+
 int main(int argc, char** argv)
 {
     qputenv("QT_QPA_PLATFORM", "offscreen");
@@ -191,6 +273,8 @@ int main(int argc, char** argv)
     testProgrammaticPartSyncDoesNotEmitTreeSelection();
     testSetSelectionAndVisibilityRequests();
     testSetGroupSelectionRequestsAllChildSetIds();
+    testPartGroupSelectionRequestsAllParts();
+    testSetLabelsDisambiguateNameParenthesesFromCounts();
     printf("All PartsPanel tests passed!\n");
     return 0;
 }

@@ -40,10 +40,10 @@ void setItemMeta(QTreeWidgetItem* item, ItemKind kind, int index = -1) {
     item->setData(0, kIndexRole, index);
 }
 
-QString countLabel(const std::string& name, size_t count) {
+QString countLabel(const std::string& name, size_t count, const QString& unit) {
     QString label = QString::fromStdString(name);
     if (label.isEmpty()) label = "未命名";
-    label += QString("  (%1)").arg(count);
+    label += QString("  | %1%2").arg(count).arg(unit);
     return label;
 }
 
@@ -164,7 +164,7 @@ void PartsPanel::setParts(const QString& modelName,
             QString label = QString::fromStdString(part.name);
             if (label.isEmpty()) label = QString("Part %1").arg(i + 1);
             if (!part.elementIds.empty())
-                label += QString("  (%1)").arg(part.elementIds.size());
+                label += QString("  | %1单元").arg(part.elementIds.size());
 
             auto* item = new QTreeWidgetItem(partGroupItem_, {label});
             item->setCheckState(0, part.visible ? Qt::Checked : Qt::Unchecked);
@@ -186,7 +186,7 @@ void PartsPanel::setParts(const QString& modelName,
         setItemMeta(nodeSetGroupItem_, NodeSetGroupItem);
         for (int i = 0; i < static_cast<int>(nodeSets.size()); ++i) {
             auto* item = new QTreeWidgetItem(nodeSetGroupItem_,
-                                             {countLabel(nodeSets[i].name, nodeSets[i].nodeIds.size())});
+                                             {countLabel(nodeSets[i].name, nodeSets[i].nodeIds.size(), "节点")});
             item->setCheckState(0, Qt::Checked);
             item->setFlags(item->flags() | Qt::ItemIsUserCheckable | Qt::ItemIsEnabled);
             setItemMeta(item, NodeSetItem, i);
@@ -201,7 +201,7 @@ void PartsPanel::setParts(const QString& modelName,
         setItemMeta(elementSetGroupItem_, ElementSetGroupItem);
         for (int i = 0; i < static_cast<int>(elementSets.size()); ++i) {
             auto* item = new QTreeWidgetItem(elementSetGroupItem_,
-                                             {countLabel(elementSets[i].name, elementSets[i].elementIds.size())});
+                                             {countLabel(elementSets[i].name, elementSets[i].elementIds.size(), "单元")});
             item->setCheckState(0, Qt::Checked);
             item->setFlags(item->flags() | Qt::ItemIsUserCheckable | Qt::ItemIsEnabled);
             setItemMeta(item, ElementSetItem, i);
@@ -248,6 +248,16 @@ void PartsPanel::onSelectionChanged() {
     if (!current) current = selectedItems.front();
 
     ItemKind currentKind = itemKind(current);
+    if (currentKind == PartGroupItem) {
+        std::vector<int> selectedParts;
+        selectedParts.reserve(parts_.size());
+        for (int i = 0; i < static_cast<int>(parts_.size()); ++i)
+            selectedParts.push_back(i);
+        if (!selectedParts.empty())
+            emit partSelectionChanged(selectedParts);
+        return;
+    }
+
     if (currentKind == NodeSetGroupItem) {
         std::vector<int> ids;
         for (const auto& set : nodeSets_)
