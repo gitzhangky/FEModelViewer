@@ -1489,7 +1489,41 @@ void GLWidget::mouseDoubleClickEvent(QMouseEvent* e) {
 void GLWidget::wheelEvent(QWheelEvent* e) {
     // 按住中键或右键拖动时忽略滚轮，防止平移与缩放同时触发
     if (e->buttons() & (Qt::MiddleButton | Qt::RightButton)) return;
+
+    // 鼠标位置作为缩放焦点：保持鼠标下的世界点不动
+    // 通过射线-平面相交求出鼠标当前对应的世界点 P，然后以 P 为中心按缩放比例 f 缩放
+    // target/eye 都会被 P + f*(X - P) 拉近/推远，方向不变（yaw/pitch 保持）
+    int dpr = devicePixelRatio();
+    int fbW = width() * dpr, fbH = height() * dpr;
+    int px = e->position().x() * dpr;
+    int py = (height() - e->position().y()) * dpr;
+
+    float aspect = (height() > 0) ? static_cast<float>(width()) / height() : 1.0f;
+    float nearPlane = cam_.distance * 0.01f;
+    float farPlane  = cam_.distance * 10.0f;
+    glm::mat4 projection = glm::perspective(glm::radians(45.0f), aspect, nearPlane, farPlane);
+    glm::mat4 view = cam_.viewMatrix();
+    glm::vec4 vp(0, 0, fbW, fbH);
+
+    glm::vec3 nearPt = glm::unProject(glm::vec3(px, py, 0.0f), view, projection, vp);
+    glm::vec3 farPt  = glm::unProject(glm::vec3(px, py, 1.0f), view, projection, vp);
+    glm::vec3 ray = glm::normalize(farPt - nearPt);
+    glm::vec3 viewDir = glm::normalize(cam_.target - cam_.eye());
+    float denom = glm::dot(ray, viewDir);
+
+    float oldDist = cam_.distance;
     cam_.zoom(e->angleDelta().y() / 120.0f);
+
+    if (std::abs(denom) > 1e-6f && oldDist > 1e-6f) {
+        float t = glm::dot(cam_.target - nearPt, viewDir) / denom;
+        glm::vec3 mouseWorld = nearPt + ray * t;
+        float f = cam_.distance / oldDist;
+        cam_.target = mouseWorld + f * (cam_.target - mouseWorld);
+        if (hasCustomPivot_) {
+            orbitPivot_ = mouseWorld + f * (orbitPivot_ - mouseWorld);
+        }
+    }
+
     if (pickMode_ == PickMode::Part && selection_.hasSelection())
         selectionRenderer_->markSilhouetteDirty();
     update();
