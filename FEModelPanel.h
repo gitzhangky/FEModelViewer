@@ -71,6 +71,8 @@ signals:
                        const std::vector<int>& vertexToNode);
 
     void partsChanged(const QString& modelName, const std::vector<FEPart>& parts,
+                      const std::vector<FENodeSet>& nodeSets,
+                      const std::vector<FEElementSet>& elementSets,
                       const std::vector<int>& triToPart, const std::vector<int>& edgeToPart);
 
     /** @brief 加载进度更新 (0-100, 描述文字) */

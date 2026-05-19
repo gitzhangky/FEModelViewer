@@ -271,6 +271,10 @@ struct FEElementSet {
 };
 ```
 
+`FEPart` 表示渲染侧的部件分组，通常用于颜色、显隐和部件拾取；`FENodeSet` / `FEElementSet`
+保留求解文件中的命名集合，常用于边界条件、载荷、输出范围等语义分组。二者可以来自同一个
+`ELSET` 名称，但含义不同，调用方应按业务需要分别使用。
+
 ---
 
 ### 2.5 FEModel — 有限元模型容器
@@ -678,9 +682,18 @@ public:
 | 参数 | 说明 |
 |------|------|
 | `filePath` | 文件绝对路径 |
-| `model` | 输出：填充节点、单元、部件数据 |
+| `model` | 输出：填充节点、单元、部件、节点集/单元集数据 |
 | `results` | 输出：填充多工况位移/应力结果 |
 | `progress` | 可选回调，参数为 0-100 的进度百分比 |
+
+**INP 集合解析说明**：
+
+- `parseAbaqusInp()` 会解析 `*NSET` / `*ELSET`，填充 `FEModel::nodeSets` 和 `FEModel::elementSets`。
+- 支持 `GENERATE` 写法，例如 `1, 9, 2` 会展开为 `1, 3, 5, 7, 9`。
+- `*Element, ELSET=name` 会继续生成同名 `FEPart`，同时也会生成/填充同名 `FEElementSet`。
+- 如果文件没有通过 `*Element, ELSET=name` 提供部件来源，解析器会把显式 `*ELSET` 作为
+  `FEPart` 兜底，用于模型树部件显隐。
+- 当前版本只解析显式 ID 和 `GENERATE` 范围；set 引用嵌套会被跳过，后续可按格式需求扩展。
 
 **支持的 OP2 应力单元类型**：
 
@@ -724,6 +737,7 @@ struct Mesh {
     // ── 边线数据 ──
     std::vector<float>        edgeVertices; // 边线顶点（仅位置，GL_LINES 用）
     std::vector<unsigned int> edgeIndices;  // 边线索引（每 2 个一组）
+    std::vector<int>          edgeToElement; // 可渲染边线 → 单元 ID
 
     // ── 单元完整边线（用于选中高亮）──
     std::vector<float>              elemEdgeVertices;   // 边顶点坐标
@@ -1060,6 +1074,8 @@ void selectByIds(PickMode mode, const std::vector<int>& ids);
 ```
 
 按指定模式和 ID 列表选中节点/单元/部件，自动切换拾取模式、高亮选中项并显示 ID 标签。供搜索框等外部调用。
+节点/单元 ID 会被过滤到当前渲染数据中可显示、可拾取的实体：例如实体网格中的内部单元不会因为
+单元集包含它而进入视图选中状态，避免出现已选中但无法通过视图点击取消的内部单元。
 
 #### 部件可见性（Slot）
 

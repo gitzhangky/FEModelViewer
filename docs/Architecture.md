@@ -646,7 +646,7 @@ QPoint pendingPickPos_;
 
 信号：
 - `meshGenerated(mesh, center, size, triToElem, vertexToNode)` — 网格转换完成
-- `partsChanged(modelName, parts, triToPart, edgeToPart)` — 部件数据就绪
+- `partsChanged(modelName, parts, nodeSets, elementSets, triToPart, edgeToPart)` — 部件与 set 集数据就绪
 - `loadProgress(percent, text)` — 加载进度
 - `resultsLoaded(results)` — 结果数据加载完成
 
@@ -654,16 +654,22 @@ QPoint pendingPickPos_;
 
 **文件**: `PartsPanel.h`
 
-以树形结构显示模型部件：
+以树形结构显示模型部件和可选 set 集：
 ```
 模型名称 (根节点)
-  ├── [■] Part-1 (210 个单元)    ← 颜色色块 + 复选框
-  ├── [■] Part-2 (156 个单元)
-  └── [■] Part-3 (89 个单元)
+  ├── 部件
+  │   ├── [■] Part-1 (210 个单元)    ← 颜色色块 + 复选框
+  │   └── [■] Part-2 (156 个单元)
+  ├── 节点集
+  │   └── Fixed (32 个节点)
+  └── 单元集
+      └── Output (89 个单元)
 ```
 
 - 复选框控制部件显隐 → `partVisibilityChanged` 信号 → GLWidget
+- 复选框控制节点集/单元集显隐 → `setVisibilityRequested` 信号 → GLWidget
 - 多选高亮 → `partSelectionChanged` → GLWidget::highlightParts
+- 选中节点集/单元集 → `setSelectionRequested` → GLWidget::selectByIds
 - GLWidget 部件拾取 → `selectParts(indices)` 同步选中状态
 
 ### 8.4 ResultPanel — 结果面板
@@ -817,7 +823,7 @@ FEModelPanel::loadModelFromPath(path)
   │
   └── 发射 partsChanged 信号
       ├── GLWidget::setTriangleToPartMap(map)
-      └── PartsPanel::setParts(name, parts, colors)
+      └── PartsPanel::setParts(name, parts, nodeSets, elementSets, colors)
 ```
 
 ### 云图显示流程

@@ -288,6 +288,7 @@ void FEModelPanel::loadModelFromPath(const QString& path) {
                        currentModel_.computeSize(), currentRenderData_.triangleToElement,
                        currentRenderData_.vertexToNode);
     emit partsChanged(QString::fromStdString(currentModel_.name), currentModel_.parts,
+                      currentModel_.nodeSets, currentModel_.elementSets,
                       currentRenderData_.triangleToPart, currentRenderData_.edgeToPart);
 
     emit loadProgress(0, "");
@@ -323,7 +324,7 @@ void FEModelPanel::clearModel() {
     updateInfoLabels();
     updateVisibilityActionState();
     emit meshGenerated(Mesh{}, glm::vec3(0), 0, {}, {});
-    emit partsChanged(QString(), {}, {}, {});
+    emit partsChanged(QString(), {}, {}, {}, {}, {});
 }
 
 

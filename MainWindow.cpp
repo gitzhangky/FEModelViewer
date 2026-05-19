@@ -137,10 +137,12 @@ MainWindow::MainWindow() {
 
     connect(feModelPanel_, &FEModelPanel::partsChanged,
             this, [this](const QString& modelName, const std::vector<FEPart>& parts,
+                         const std::vector<FENodeSet>& nodeSets,
+                         const std::vector<FEElementSet>& elementSets,
                          const std::vector<int>& triToPart, const std::vector<int>& edgeToPart) {
         glWidget_->setTriangleToPartMap(triToPart);
         glWidget_->setEdgeToPartMap(edgeToPart);
-        partsPanel_->setParts(modelName, parts, glWidget_->partColors());
+        partsPanel_->setParts(modelName, parts, nodeSets, elementSets, glWidget_->partColors());
     });
 
     // 加载进度 → 状态栏进度条
@@ -173,6 +175,18 @@ MainWindow::MainWindow() {
 
     connect(partsPanel_, &PartsPanel::partVisibilityChanged,
             glWidget_, &GLWidget::setPartVisibility);
+
+    // 模型树中的 set 集 → 按节点/单元 ID 选中或显隐
+    connect(partsPanel_, &PartsPanel::setSelectionRequested,
+            glWidget_, &GLWidget::selectByIds);
+    connect(partsPanel_, &PartsPanel::setVisibilityRequested,
+            this, [this](PickMode mode, const std::vector<int>& ids, bool visible) {
+        if (mode == PickMode::Node) {
+            glWidget_->setNodesVisibility(ids, visible);
+        } else if (mode == PickMode::Element) {
+            glWidget_->setElementsVisibility(ids, visible);
+        }
+    });
 
     // 用户在模型树里选中部件 → 自动切到部件拾取模式（同步 toolbar 按钮和 GLWidget），
     // 然后把这些部件在 3D 视图中高亮。selectParts() 自己用 updating_ 标志抑制

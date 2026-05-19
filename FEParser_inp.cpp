@@ -13,6 +13,7 @@
 #include <QDebug>
 #include <glm/glm.hpp>
 
+#include <algorithm>
 #include <map>
 #include <vector>
 
@@ -70,6 +71,61 @@ bool FEParser::parseAbaqusInp(const QString& filePath, FEModel& model, const std
             if (!t.isEmpty()) result.append(t);
         }
         return result;
+    };
+
+    auto keywordValue = [&](const QString& keyword, const QString& key) -> QString {
+        QStringList tokens = splitLine(keyword);
+        for (const QString& token : tokens) {
+            int eq = token.indexOf('=');
+            if (eq < 0) continue;
+            QString name = token.left(eq).trimmed();
+            if (name.startsWith('*')) name = name.mid(1).trimmed();
+            if (name.compare(key, Qt::CaseInsensitive) != 0) continue;
+            QString value = token.mid(eq + 1).trimmed();
+            if (value.size() >= 2 && value.startsWith('"') && value.endsWith('"'))
+                value = value.mid(1, value.size() - 2);
+            return value;
+        }
+        return QString();
+    };
+
+    auto keywordHasFlag = [&](const QString& keyword, const QString& flag) -> bool {
+        QStringList tokens = splitLine(keyword);
+        for (QString token : tokens) {
+            token = token.trimmed();
+            if (token.startsWith('*')) token = token.mid(1).trimmed();
+            if (token.compare(flag, Qt::CaseInsensitive) == 0)
+                return true;
+        }
+        return false;
+    };
+
+    auto appendSetIds = [](std::vector<int>& ids, const QStringList& parts, bool generate) {
+        std::vector<int> values;
+        for (const QString& part : parts) {
+            bool ok = false;
+            int value = part.toInt(&ok);
+            if (ok) values.push_back(value);
+        }
+
+        if (!generate) {
+            ids.insert(ids.end(), values.begin(), values.end());
+            return;
+        }
+
+        if (values.size() < 2) return;
+        int start = values[0];
+        int end = values[1];
+        int step = (values.size() >= 3) ? values[2] : 1;
+        if (step == 0) return;
+
+        if (step > 0) {
+            for (int id = start; id <= end; id += step)
+                ids.push_back(id);
+        } else {
+            for (int id = start; id >= end; id += step)
+                ids.push_back(id);
+        }
     };
 
     // ── 解析 INCLUDE 路径：尝试在主文件目录下查找 ──
@@ -149,18 +205,50 @@ bool FEParser::parseAbaqusInp(const QString& filePath, FEModel& model, const std
     if (progress) progress(40);
 
     // ── 解析（40-100%）──
-    enum Section { None, Node, Element } section = None;
+    enum Section { None, Node, Element, NodeSet, ElementSet } section = None;
     ElementType currentElemType = ElementType::HEX8;
     int expectedNodeCount = 8;
     int pendingElemId = -1;
     std::vector<int> pendingNodeIds;
     QString currentElset;                               // 当前 *Element 关键字上的 ELSET= 值
+    QString currentSetName;                             // 当前 *Nset/*Elset 的名称
+    bool currentSetGenerate = false;                    // 当前 set 是否使用 GENERATE 语法
     std::map<QString, int> elsetToPartIndex;            // ELSET 名 → model.parts 索引
+    std::map<QString, int> nsetToIndex;                 // NSET 名 → model.nodeSets 索引
+    std::map<QString, int> elementSetToIndex;           // ELSET 名 → model.elementSets 索引
+
+    auto getOrCreateNodeSetIndex = [&](const QString& name) -> int {
+        QString setName = name.trimmed();
+        if (setName.isEmpty()) return -1;
+        auto it = nsetToIndex.find(setName);
+        if (it == nsetToIndex.end()) {
+            FENodeSet set;
+            set.name = setName.toStdString();
+            model.nodeSets.push_back(set);
+            nsetToIndex[setName] = static_cast<int>(model.nodeSets.size()) - 1;
+            it = nsetToIndex.find(setName);
+        }
+        return it->second;
+    };
+
+    auto getOrCreateElementSetIndex = [&](const QString& name) -> int {
+        QString setName = name.trimmed();
+        if (setName.isEmpty()) return -1;
+        auto it = elementSetToIndex.find(setName);
+        if (it == elementSetToIndex.end()) {
+            FEElementSet set;
+            set.name = setName.toStdString();
+            model.elementSets.push_back(set);
+            elementSetToIndex[setName] = static_cast<int>(model.elementSets.size()) - 1;
+            it = elementSetToIndex.find(setName);
+        }
+        return it->second;
+    };
 
     auto flushPendingElement = [&]() {
         if (pendingElemId >= 0 && !pendingNodeIds.empty()) {
             model.addElement(pendingElemId, currentElemType, pendingNodeIds);
-            // 如果该 *Element 段指定了 ELSET，将单元 ID 归入对应部件
+            // 如果该 *Element 段指定了 ELSET，将单元 ID 归入对应部件和单元集
             if (!currentElset.isEmpty()) {
                 auto it = elsetToPartIndex.find(currentElset);
                 if (it == elsetToPartIndex.end()) {
@@ -172,6 +260,10 @@ bool FEParser::parseAbaqusInp(const QString& filePath, FEModel& model, const std
                     it = elsetToPartIndex.find(currentElset);
                 }
                 model.parts[it->second].elementIds.push_back(pendingElemId);
+
+                int setIndex = getOrCreateElementSetIndex(currentElset);
+                if (setIndex >= 0)
+                    model.elementSets[setIndex].elementIds.push_back(pendingElemId);
             }
             pendingElemId = -1;
             pendingNodeIds.clear();
@@ -196,22 +288,25 @@ bool FEParser::parseAbaqusInp(const QString& filePath, FEModel& model, const std
             flushPendingElement();
             QString upper = line.toUpper();
 
-            if (upper.startsWith("*NODE") && !upper.startsWith("*NSET")
-                && !upper.contains("OUTPUT")) {
+            if (upper.startsWith("*NSET")) {
+                currentSetName = keywordValue(line, "NSET");
+                currentSetGenerate = keywordHasFlag(line, "GENERATE");
+                section = currentSetName.isEmpty() ? None : NodeSet;
+            } else if (upper.startsWith("*ELSET")) {
+                currentSetName = keywordValue(line, "ELSET");
+                currentSetGenerate = keywordHasFlag(line, "GENERATE");
+                section = currentSetName.isEmpty() ? None : ElementSet;
+            } else if (upper.startsWith("*NODE") && !upper.contains("OUTPUT")) {
                 section = Node;
             } else if (upper.startsWith("*ELEMENT") && upper.contains("TYPE")
                        && !upper.contains("OUTPUT")) {
                 section = Element;
-                QRegExp rx("TYPE\\s*=\\s*([A-Za-z0-9]+)");
-                rx.setCaseSensitivity(Qt::CaseInsensitive);
-                if (rx.indexIn(line) >= 0) {
-                    currentElemType = mapElemType(rx.cap(1));
-                }
+                QString typeName = keywordValue(line, "TYPE");
+                if (!typeName.isEmpty())
+                    currentElemType = mapElemType(typeName);
                 expectedNodeCount = nodeCountForType(currentElemType);
                 // 提取可选的 ELSET= 参数（用于部件归属）
-                QRegExp rxElset("ELSET\\s*=\\s*([A-Za-z0-9_\\-\\.]+)");
-                rxElset.setCaseSensitivity(Qt::CaseInsensitive);
-                currentElset = (rxElset.indexIn(line) >= 0) ? rxElset.cap(1).trimmed() : QString();
+                currentElset = keywordValue(line, "ELSET");
             } else {
                 section = None;
             }
@@ -245,10 +340,73 @@ bool FEParser::parseAbaqusInp(const QString& filePath, FEModel& model, const std
 
             if (static_cast<int>(pendingNodeIds.size()) >= expectedNodeCount)
                 flushPendingElement();
+        } else if (section == NodeSet) {
+            int setIndex = getOrCreateNodeSetIndex(currentSetName);
+            if (setIndex < 0) continue;
+            QStringList tokens = splitLine(line);
+            if (currentSetGenerate) {
+                appendSetIds(model.nodeSets[setIndex].nodeIds, tokens, true);
+            } else {
+                for (const QString& tok : tokens) {
+                    bool ok = false;
+                    int id = tok.toInt(&ok);
+                    if (ok) {
+                        model.nodeSets[setIndex].nodeIds.push_back(id);
+                    } else {
+                        // 名称引用：查找同名节点集，展开其 ID
+                        QString refName = tok.trimmed();
+                        auto refIt = nsetToIndex.find(refName);
+                        if (refIt != nsetToIndex.end() && refIt->second != setIndex) {
+                            const auto& refIds = model.nodeSets[refIt->second].nodeIds;
+                            model.nodeSets[setIndex].nodeIds.insert(
+                                model.nodeSets[setIndex].nodeIds.end(),
+                                refIds.begin(), refIds.end());
+                        }
+                    }
+                }
+            }
+        } else if (section == ElementSet) {
+            int setIndex = getOrCreateElementSetIndex(currentSetName);
+            if (setIndex < 0) continue;
+            QStringList tokens = splitLine(line);
+            if (currentSetGenerate) {
+                appendSetIds(model.elementSets[setIndex].elementIds, tokens, true);
+            } else {
+                for (const QString& tok : tokens) {
+                    bool ok = false;
+                    int id = tok.toInt(&ok);
+                    if (ok) {
+                        model.elementSets[setIndex].elementIds.push_back(id);
+                    } else {
+                        // 名称引用：查找同名单元集，展开其 ID
+                        QString refName = tok.trimmed();
+                        auto refIt = elementSetToIndex.find(refName);
+                        if (refIt != elementSetToIndex.end() && refIt->second != setIndex) {
+                            const auto& refIds = model.elementSets[refIt->second].elementIds;
+                            model.elementSets[setIndex].elementIds.insert(
+                                model.elementSets[setIndex].elementIds.end(),
+                                refIds.begin(), refIds.end());
+                        }
+                    }
+                }
+            }
         }
     }
 
     flushPendingElement();
+
+    // 有些 INP（如 solid2.inp）在 *Element 段不写 ELSET，而是在后面用
+    // 显式 *ELSET 定义属性/截面分组。此时没有更明确的部件来源，使用
+    // elementSets 作为渲染部件兜底，保证模型树仍有可按部件显隐的分组。
+    if (model.parts.empty()) {
+        for (const auto& set : model.elementSets) {
+            if (set.elementIds.empty()) continue;
+            FEPart part;
+            part.name = set.name;
+            part.elementIds = set.elementIds;
+            model.parts.push_back(part);
+        }
+    }
 
     qDebug("parseAbaqusInp: nodes=%d, elements=%d",
            (int)model.nodes.size(),

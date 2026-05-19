@@ -316,6 +316,22 @@ if(BUILD_TESTING)
         COMMAND test_import_path_state
     )
 
+    add_executable(test_inp_sets
+        tests/test_inp_sets.cpp
+    )
+    target_link_libraries(test_inp_sets PRIVATE FERender Qt5::Core)
+    add_test(NAME inp_sets
+        COMMAND test_inp_sets
+    )
+
+    add_executable(test_complex_sets
+        tests/test_complex_sets.cpp
+    )
+    target_link_libraries(test_complex_sets PRIVATE FERender Qt5::Core)
+    add_test(NAME complex_sets
+        COMMAND test_complex_sets
+    )
+
     add_executable(test_visibility_filter
         tests/test_visibility_filter.cpp
     )
@@ -334,6 +350,16 @@ if(BUILD_TESTING)
     )
     add_test(NAME node_vertex_lookup
         COMMAND test_node_vertex_lookup
+    )
+
+    add_executable(test_selection_id_filter
+        tests/test_selection_id_filter.cpp
+    )
+    target_include_directories(test_selection_id_filter PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+    add_test(NAME selection_id_filter
+        COMMAND test_selection_id_filter
     )
 
     add_executable(test_label_layout

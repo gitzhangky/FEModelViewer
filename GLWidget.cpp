@@ -9,6 +9,7 @@
 #include "NodeVertexLookup.h"
 #include "PickRenderer.h"
 #include "SelectionRenderer.h"
+#include "SelectionIdFilter.h"
 #include "Theme.h"
 #include "ColorBarOverlay.h"
 #include "VisibilityFilter.h"
@@ -1361,8 +1362,8 @@ void GLWidget::selectByIds(PickMode mode, const std::vector<int>& ids) {
     selection_.clear();
 
     if (mode == PickMode::Node) {
-        // 过滤：只保留网格中实际存在的节点 ID
-        std::unordered_set<int> validNodes(vertexToNode_.begin(), vertexToNode_.end());
+        // 过滤：只保留当前渲染数据中能显示/拾取到的节点 ID
+        auto validNodes = SelectionIdFilter::buildSelectableNodes(vertexToNode_, renderEdgeNodeIds_);
         for (int id : ids) {
             if (validNodes.count(id) && isNodeVisible(id))
                 selection_.selectedNodes.insert(id);
@@ -1373,10 +1374,9 @@ void GLWidget::selectByIds(PickMode mode, const std::vector<int>& ids) {
                 pickRenderer_->selectPart(pi);
         }
     } else {
-        // 过滤：只保留渲染网格中存在的单元 ID（含三角面和 1D 边线）
-        std::unordered_set<int> validElems(triToElem_.begin(), triToElem_.end());
-        for (int eid : mesh_.elemEdgeToElement)
-            validElems.insert(eid);
+        // 过滤：只保留实际渲染出的单元。完整单元边线包含内部单元，
+        // 不能作为可拾取依据，否则 set 选中会出现不可点击取消的内部单元。
+        auto validElems = SelectionIdFilter::buildSelectableElements(triToElem_, mesh_.edgeToElement);
         for (int id : ids) {
             if (validElems.count(id) && isElementVisible(id))
                 selection_.selectedElements.insert(id);

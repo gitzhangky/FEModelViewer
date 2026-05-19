@@ -240,7 +240,6 @@ FERenderData FEMeshConverter::toRenderData(const FEModel& model, const std::vect
     if (progress) progress(70);
 
     // ── 第四遍：生成外表面边线数据（去重，用于普通线框渲染）──（占 70-85%）
-    std::vector<int> edgeElemIds;   // 每条边归属的单元 ID（与 edgeIndices 对应，每条边一项）
     {
         // 使用 map 代替 set，同时记录每条边来自哪个单元（用于 edgeToPart 填充）
         std::map<std::pair<int, int>, int> edgeToElemMap;
@@ -291,7 +290,7 @@ FERenderData FEMeshConverter::toRenderData(const FEModel& model, const std::vect
             result.mesh.edgeVertices.push_back(pb->z);
             result.mesh.edgeIndices.push_back(idx);
             result.mesh.edgeIndices.push_back(idx + 1);
-            edgeElemIds.push_back(elemId);
+            result.mesh.edgeToElement.push_back(elemId);
         }
     }
     if (progress) progress(85);
@@ -371,10 +370,10 @@ FERenderData FEMeshConverter::toRenderData(const FEModel& model, const std::vect
             if (it != elemToPart.end())
                 result.triangleToPart[t] = it->second;
         }
-        int edgeCount = static_cast<int>(edgeElemIds.size());
+        int edgeCount = static_cast<int>(result.mesh.edgeToElement.size());
         result.edgeToPart.resize(edgeCount, -1);
         for (int e = 0; e < edgeCount; ++e) {
-            auto it = elemToPart.find(edgeElemIds[e]);
+            auto it = elemToPart.find(result.mesh.edgeToElement[e]);
             if (it != elemToPart.end())
                 result.edgeToPart[e] = it->second;
         }
