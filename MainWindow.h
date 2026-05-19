@@ -27,6 +27,7 @@
 #include "FERenderData.h"
 #include "FEModel.h"
 #include "FEField.h"
+#include "FEPickResult.h"
 #include "ImportPathState.h"
 #include "PostState.h"
 
@@ -74,6 +75,7 @@ private:
     void pushRenderDataToGL(const FERenderData& rd);
     void beginPostEffect(PostEffectMode mode);
     void reapplyContourIfNeeded();
+    void syncPickMode(PickMode mode);  // 同步工具栏按钮 + GLWidget 拾取模式
 
     GLWidget*              glWidget_        = nullptr;
     MonitorPanel*          monitorPanel_    = nullptr;

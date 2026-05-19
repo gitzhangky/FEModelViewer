@@ -430,6 +430,30 @@ if(BUILD_TESTING)
         COMMAND test_fe_model_panel
     )
 
+    qt5_wrap_cpp(TEST_MAIN_WINDOW_LINKAGE_MOC_SRCS
+        MainWindow.h
+        FEModelPanel.h
+        PartsPanel.h
+        ResultPanel.h
+        ControlPanel.h
+        MonitorPanel.h
+    )
+    add_executable(test_main_window_linkage
+        tests/test_main_window_linkage.cpp
+        MainWindow.cpp
+        FEModelPanel.cpp
+        PartsPanel.cpp
+        ResultPanel.cpp
+        ControlPanel.cpp
+        MonitorPanel.cpp
+        ${TEST_MAIN_WINDOW_LINKAGE_MOC_SRCS}
+    )
+    set_target_properties(test_main_window_linkage PROPERTIES AUTOMOC OFF)
+    target_link_libraries(test_main_window_linkage PRIVATE FERender Qt5::Core Qt5::Gui Qt5::Widgets)
+    add_test(NAME main_window_linkage
+        COMMAND test_main_window_linkage
+    )
+
     add_executable(test_pivot_interaction
         tests/test_pivot_interaction.cpp
     )

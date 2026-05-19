@@ -176,9 +176,12 @@ MainWindow::MainWindow() {
     connect(partsPanel_, &PartsPanel::partVisibilityChanged,
             glWidget_, &GLWidget::setPartVisibility);
 
-    // 模型树中的 set 集 → 按节点/单元 ID 选中或显隐
+    // 模型树中的 set 集 → 自动切到节点/单元拾取模式 + 按 ID 选中
     connect(partsPanel_, &PartsPanel::setSelectionRequested,
-            glWidget_, &GLWidget::selectByIds);
+            this, [this](PickMode mode, const std::vector<int>& ids) {
+        syncPickMode(mode);
+        glWidget_->selectByIds(mode, ids);
+    });
     connect(partsPanel_, &PartsPanel::setVisibilityRequested,
             this, [this](PickMode mode, const std::vector<int>& ids, bool visible) {
         if (mode == PickMode::Node) {
@@ -193,15 +196,7 @@ MainWindow::MainWindow() {
     // 回环，所以来自 GLWidget partsPicked 的程序性同步不会触发此 lambda。
     connect(partsPanel_, &PartsPanel::partSelectionChanged,
             this, [this](const std::vector<int>& parts) {
-        if (!parts.empty() && glWidget_->pickMode() != PickMode::Part) {
-            for (QAction* a : pickGroup_->actions()) {
-                if (a->data().toInt() == static_cast<int>(PickMode::Part)) {
-                    a->setChecked(true);
-                    break;
-                }
-            }
-            glWidget_->setPickMode(PickMode::Part);
-        }
+        if (!parts.empty()) syncPickMode(PickMode::Part);
         glWidget_->highlightParts(parts);
     });
 
@@ -849,6 +844,20 @@ void MainWindow::reapplyContourIfNeeded()
 {
     if (contour_.active)
         applyContour(contour_.field, contour_.title);
+}
+
+void MainWindow::syncPickMode(PickMode mode)
+{
+    if (pickGroup_) {
+        for (QAction* a : pickGroup_->actions()) {
+            if (a->data().toInt() == static_cast<int>(mode)) {
+                a->setChecked(true);
+                break;
+            }
+        }
+    }
+    if (glWidget_->pickMode() != mode)
+        glWidget_->setPickMode(mode);
 }
 
 void MainWindow::beginPostEffect(PostEffectMode mode)
