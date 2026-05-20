@@ -106,7 +106,7 @@ void SelectionRenderer::render(QOpenGLShaderProgram& shader) {
         glPointSize(8.0f);
         w_.glDrawArrays(GL_POINTS, 0, selEdgeVertCount_);
     } else {
-        glLineWidth(2.5f);
+        w_.setLineWidthClamped(2.5f);
         w_.glDrawArrays(GL_LINES, 0, selEdgeVertCount_);
         glLineWidth(1.0f);
     }

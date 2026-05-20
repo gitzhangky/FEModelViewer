@@ -61,4 +61,5 @@ private:
     QLabel* vendorLabel_ = nullptr;      // GPU 厂商
     QLabel* glVersionLabel_ = nullptr;   // OpenGL 版本
     QLabel* glslLabel_ = nullptr;        // GLSL 版本
+    QLabel* lineWidthLabel_ = nullptr;   // 驱动支持的最大线宽
 };

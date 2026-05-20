@@ -1104,6 +1104,7 @@ void setElementsVisibility(const std::vector<int>& elementIds, bool visible);
 | `glVersion()` | `QString` | OpenGL 版本 |
 | `glslVersion()` | `QString` | GLSL 版本 |
 | `gpuVendor()` | `QString` | GPU 厂商 |
+| `maxLineWidth()` | `float` | 驱动支持的最大 aliased 线宽 (px)。macOS Core Profile 通常为 1.0 |
 | `vertexCount()` | `int` | 当前渲染顶点数 |
 | `triangleCount()` | `int` | 当前渲染三角形数 |
 | `currentFps()` | `float` | 当前帧率 |

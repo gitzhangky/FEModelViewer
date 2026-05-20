@@ -26,6 +26,7 @@ MonitorPanel::MonitorPanel(QWidget* parent) : QGroupBox("监控", parent) {
     vendorLabel_    = makeRow(layout, "厂商");
     glVersionLabel_ = makeRow(layout, "OpenGL");
     glslLabel_      = makeRow(layout, "GLSL");
+    lineWidthLabel_ = makeRow(layout, "线宽上限");
 }
 
 void MonitorPanel::bindToWidget(GLWidget* gl) {
@@ -37,6 +38,8 @@ void MonitorPanel::bindToWidget(GLWidget* gl) {
         vendorLabel_->setText("厂商: "      + gl_->gpuVendor());
         glVersionLabel_->setText("OpenGL: " + gl_->glVersion());
         glslLabel_->setText("GLSL: "        + gl_->glslVersion());
+        lineWidthLabel_->setText(QString("线宽上限: %1 px")
+                                 .arg(gl_->maxLineWidth(), 0, 'f', 1));
     });
 
     // 启动定时器，每 200ms 刷新一次动态数据（FPS、网格统计）

@@ -724,6 +724,14 @@ void GLWidget::initializeGL() {
     glEnable(GL_LINE_SMOOTH);
     glHint(GL_LINE_SMOOTH_HINT, GL_NICEST);
 
+    // 查询驱动支持的最大线宽，后续所有 glLineWidth 走 setLineWidthClamped 钳制，
+    // 避免在严格 Core Profile（如 macOS，仅支持 1.0）上请求非法线宽。
+    {
+        GLfloat range[2] = {1.0f, 1.0f};
+        glGetFloatv(GL_ALIASED_LINE_WIDTH_RANGE, range);
+        maxLineWidth_ = (range[1] >= 1.0f) ? range[1] : 1.0f;
+    }
+
     // 启动 FPS 计时器
     fpsTimer_.start();
 
@@ -980,6 +988,10 @@ void GLWidget::paintGL() {
 // paintGL 渲染子步骤
 // ============================================================
 
+void GLWidget::setLineWidthClamped(float width) {
+    glLineWidth(std::clamp(width, 1.0f, maxLineWidth_));
+}
+
 void GLWidget::rebuildPartVisibilityIbo() {
     if (!partVisibilityDirty_ || allTriIndices_.empty()) return;
     partVisibilityDirty_ = false;
@@ -1055,7 +1067,7 @@ void GLWidget::renderMeshEdges() {
             ? QVector3D(color_.x, color_.y, color_.z)
             : QVector3D(0.2f, 0.2f, 0.22f));
         shader_->setUniformValue("uWireAlpha", alpha);
-        glLineWidth(lineW);
+        setLineWidthClamped(lineW);
         if (alpha < 1.0f) {
             glEnable(GL_BLEND);
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -1166,7 +1178,7 @@ void GLWidget::renderClipPreview() {
     shader_->setUniformValue("uWireframe", true);
     shader_->setUniformValue("uWireAlpha", 0.8f);
     clipPreviewEdgeVao_.bind();
-    glLineWidth(2.0f);
+    setLineWidthClamped(2.0f);
     glDrawArrays(GL_LINES, 0, clipPreviewEdgeVertCount_);
     glLineWidth(1.0f);
     clipPreviewEdgeVao_.release();
@@ -1185,7 +1197,7 @@ void GLWidget::renderSliceLines() {
     shader_->setUniformValue("uWireAlpha", 1.0f);
     glDisable(GL_DEPTH_TEST);
     sliceVao_.bind();
-    glLineWidth(2.0f);
+    setLineWidthClamped(2.0f);
     glDrawArrays(GL_LINES, 0, sliceVertCount_);
     glLineWidth(1.0f);
     sliceVao_.release();
@@ -1589,7 +1601,7 @@ void GLWidget::drawAxesIndicator() {
 
     // 绘制实心几何体（圆柱轴杆 + 圆锥箭头 + 球心）
     if (axesLineCount_ > 0) {
-        glLineWidth(2.5f);
+        setLineWidthClamped(2.5f);
         glDrawArrays(GL_LINES, 0, axesLineCount_);
     }
     glDrawArrays(GL_TRIANGLES, axesLineCount_, axesTriCount_);

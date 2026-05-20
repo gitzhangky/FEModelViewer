@@ -157,6 +157,7 @@ public slots:
     QString glVersion()   const { return glVersion_; }
     QString glslVersion() const { return glslVersion_; }
     QString gpuVendor()   const { return gpuVendor_; }
+    float   maxLineWidth() const { return maxLineWidth_; }
 
     // ── 网格统计 ──
     int vertexCount()     const;
@@ -188,6 +189,10 @@ private:
     void drawAxesIndicator();
     void uploadColors();      // 将部件颜色上传到 colorVbo_
     void rebuildEdgeIbo();    // 根据部件可见性重建边线 IBO
+
+    // 按驱动支持范围设置线宽。macOS Core Profile 只支持 1.0，超出会被钳制或在
+    // 严格驱动上触发 GL_INVALID_VALUE，故统一走此包装。
+    void setLineWidthClamped(float width);
 
     // ── paintGL 渲染子步骤 ──
     void rebuildPartVisibilityIbo();
@@ -372,6 +377,10 @@ private:
 
     // ── 硬件信息 ──
     QString glRenderer_, glVersion_, glslVersion_, gpuVendor_;
+
+    // 驱动支持的最大 aliased 线宽（initializeGL 中查询 GL_ALIASED_LINE_WIDTH_RANGE）。
+    // macOS Core Profile 通常为 1.0；Windows 桌面驱动多为 10+。
+    float maxLineWidth_ = 1.0f;
 
     // ── FPS 统计 ──
     QElapsedTimer fpsTimer_;
