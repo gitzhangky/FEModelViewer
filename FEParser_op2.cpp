@@ -293,6 +293,37 @@ bool FEParser::parseNastranOp2(const QString& filePath, FEModel& model,
 
                 const ElemInfo& info = it->second;
 
+                // ── 已知固定记录格式（按 OP2 规范），绕开不可靠的"猜步长"启发式 ──
+                // CTETRA(5508)：记录头后每个单元固定 12 字 = eid, pid, g1..g10。
+                // 线性四面体 g5..g10 为 0；二次(TET10)非 0。启发式会被节点值（小整数）
+                // 误判步长导致大模型解析错位，这里对其用固定步长 + 类型自动判别。
+                if (key1 == 5508) {
+                    const int kStride = 12;        // eid + pid + 10 节点槽
+                    const int kDataStart = 3;      // 跳过 5508 55 217
+                    int count = 0;
+                    int maxEntries = (nWords - kDataStart) / kStride;
+                    for (int e = 0; e < maxEntries; ++e) {
+                        int base = kDataStart + e * kStride;
+                        if (base + kStride > nWords) break;
+                        qint32 eid = words[base];
+                        qint32 pid = words[base + 1];
+                        if (eid <= 0) break;
+                        bool isTet10 = false;
+                        for (int k = 6; k < 12; ++k)
+                            if (words[base + k] != 0) { isTet10 = true; break; }
+                        int nn = isTet10 ? 10 : 4;
+                        std::vector<int> nodeIds(nn);
+                        for (int ni = 0; ni < nn; ++ni)
+                            nodeIds[ni] = words[base + 2 + ni];
+                        model.addElement(eid, isTet10 ? ElementType::TET10 : ElementType::TET4, nodeIds);
+                        elemPid[eid] = pid;
+                        propertyIds.insert(pid);
+                        count++;
+                    }
+                    qDebug("parseNastranOp2: parsed %d CTETRA (key=5508, fixed stride=12)", count);
+                    continue;  // 处理完该子表，进入下一个
+                }
+
                 int dataStart = 0;
                 int stride = 0;
 
