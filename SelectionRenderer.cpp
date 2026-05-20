@@ -74,6 +74,14 @@ void SelectionRenderer::update() {
                     hlVerts.push_back(w_.mesh_.vertices[vi * 6]);
                     hlVerts.push_back(w_.mesh_.vertices[vi * 6 + 1]);
                     hlVerts.push_back(w_.mesh_.vertices[vi * 6 + 2]);
+                } else if (w_.hasSurfaceCache_) {
+                    // 内部节点不在渲染网格里，退回到表面缓存坐标，保证高亮点可见
+                    auto cit = w_.surfaceCache_.coords.find(nid);
+                    if (cit != w_.surfaceCache_.coords.end()) {
+                        hlVerts.push_back(cit->second.x);
+                        hlVerts.push_back(cit->second.y);
+                        hlVerts.push_back(cit->second.z);
+                    }
                 }
             }
             uploadHighlightVertices(hlVerts);

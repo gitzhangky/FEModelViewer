@@ -171,14 +171,22 @@ void LabelOverlay::drawIdLabels(QPainter& painter, const glm::mat4& mvp) {
                 if (!w_.isNodeVisible(nid)) continue;
                 if (filterNodesByVisibility && visibleNodes.count(nid) == 0)
                     continue;
+                // 优先用渲染顶点定位；内部节点不在渲染网格里时退回到表面缓存坐标
+                glm::vec3 pos;
                 auto it = w_.nodeToFirstVertex_.find(nid);
-                if (it == w_.nodeToFirstVertex_.end()) continue;
-                int vi = it->second;
-                if (vi * 6 + 2 >= static_cast<int>(w_.mesh_.vertices.size())) continue;
-
-                glm::vec3 pos(w_.mesh_.vertices[vi * 6],
-                              w_.mesh_.vertices[vi * 6 + 1],
-                              w_.mesh_.vertices[vi * 6 + 2]);
+                if (it != w_.nodeToFirstVertex_.end()
+                    && it->second * 6 + 2 < static_cast<int>(w_.mesh_.vertices.size())) {
+                    int vi = it->second;
+                    pos = glm::vec3(w_.mesh_.vertices[vi * 6],
+                                    w_.mesh_.vertices[vi * 6 + 1],
+                                    w_.mesh_.vertices[vi * 6 + 2]);
+                } else if (w_.hasSurfaceCache_) {
+                    auto cit = w_.surfaceCache_.coords.find(nid);
+                    if (cit == w_.surfaceCache_.coords.end()) continue;
+                    pos = cit->second;
+                } else {
+                    continue;
+                }
                 QPointF sp = project(pos);
                 if (sp.x() < 0) continue;
                 if (!reserveBin(sp)) continue;
@@ -268,6 +276,27 @@ void LabelOverlay::drawIdLabels(QPainter& painter, const glm::mat4& mvp) {
                         acc.sz += w_.mesh_.vertices[vi * 6 + 2];
                         acc.count++;
                     }
+                }
+            }
+
+            // 内部单元没有渲染三角形 → 用表面缓存的节点坐标算重心补上标签
+            if (w_.hasSurfaceCache_) {
+                for (int eid : w_.selection_.selectedElements) {
+                    if (elemCentroids.count(eid)) continue;
+                    if (!w_.isElementVisible(eid)) continue;
+                    auto nit = w_.elemToNodes_.find(eid);
+                    if (nit == w_.elemToNodes_.end()) continue;
+                    ElemAccum acc;
+                    for (int nid : nit->second) {
+                        auto cit = w_.surfaceCache_.coords.find(nid);
+                        if (cit != w_.surfaceCache_.coords.end()) {
+                            acc.sx += cit->second.x;
+                            acc.sy += cit->second.y;
+                            acc.sz += cit->second.z;
+                            acc.count++;
+                        }
+                    }
+                    if (acc.count > 0) elemCentroids[eid] = acc;
                 }
             }
 
