@@ -36,6 +36,8 @@
 class GLWidget;
 class MonitorPanel;
 class ExportPanel;
+class DisplayPanel;
+class AppearancePanel;
 class FEModelPanel;
 class PartsPanel;
 class ResultPanel;
@@ -94,6 +96,8 @@ private:
     GLWidget*              glWidget_        = nullptr;
     MonitorPanel*          monitorPanel_    = nullptr;
     ExportPanel*           exportPanel_     = nullptr;
+    DisplayPanel*          displayPanel_    = nullptr;
+    AppearancePanel*       appearancePanel_ = nullptr;
 
     // ── 录像状态 ──
     QProcess*  recordProcess_     = nullptr;

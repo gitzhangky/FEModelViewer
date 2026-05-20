@@ -21,6 +21,10 @@ public:
     void setTextColor(const QColor& c);
     void setExtremes(int minId, float minVal, int maxId, float maxVal);
     void setIdLabel(const QString& label);
+    /** @brief 色谱方案：0=Jet, 1=Grayscale, 2=CoolWarm（与 scene.frag 一致） */
+    void setColormap(int map);
+    /** @brief 反转色谱 */
+    void setColormapInverted(bool inverted);
 
 protected:
     void paintEvent(QPaintEvent*) override;
@@ -33,4 +37,6 @@ private:
     int minId_ = -1, maxId_ = -1;
     float minVal_ = 0.0f, maxVal_ = 0.0f;
     QString idLabel_ = "ID";
+    int colormap_ = 0;
+    bool colormapInverted_ = false;
 };

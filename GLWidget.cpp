@@ -299,6 +299,69 @@ void GLWidget::setMesh(const Mesh& mesh) {
 
 void GLWidget::setObjectColor(const glm::vec3& c) { color_ = c; update(); }
 
+void GLWidget::setEdgeColor(const glm::vec3& c) { edgeColor_ = c; update(); }
+
+void GLWidget::setEdgeWidth(float w) { edgeWidth_ = std::max(1.0f, w); update(); }
+
+void GLWidget::setEdgeAlpha(float a) { edgeAlpha_ = std::clamp(a, 0.0f, 1.0f); update(); }
+
+void GLWidget::setSurfaceAlpha(float a) { surfaceAlpha_ = std::clamp(a, 0.0f, 1.0f); update(); }
+
+void GLWidget::setColormapInverted(bool inverted) {
+    colormapInverted_ = inverted;
+    if (colorBarOverlay_) colorBarOverlay_->setColormapInverted(inverted);
+    update();
+}
+
+void GLWidget::setDisplayMode(DisplayMode mode) { displayMode_ = mode; update(); }
+
+void GLWidget::setProjectionMode(ProjectionMode mode) { projectionMode_ = mode; update(); }
+
+void GLWidget::setBackgroundColors(const glm::vec3& top, const glm::vec3& bottom) {
+    bgTopColor_[0] = top.x;    bgTopColor_[1] = top.y;    bgTopColor_[2] = top.z;
+    bgBotColor_[0] = bottom.x; bgBotColor_[1] = bottom.y; bgBotColor_[2] = bottom.z;
+    uploadBackgroundVbo();
+    update();
+}
+
+void GLWidget::resetBackgroundToTheme() {
+    for (int i = 0; i < 3; ++i) {
+        bgTopColor_[i] = themeBgTop_[i];
+        bgBotColor_[i] = themeBgBot_[i];
+    }
+    uploadBackgroundVbo();
+    update();
+}
+
+void GLWidget::uploadBackgroundVbo() {
+    if (!bgVbo_.isCreated()) return;
+    float bgData[] = {
+        -1, -1,  bgBotColor_[0], bgBotColor_[1], bgBotColor_[2],
+         1, -1,  bgBotColor_[0], bgBotColor_[1], bgBotColor_[2],
+         1,  1,  bgTopColor_[0], bgTopColor_[1], bgTopColor_[2],
+        -1, -1,  bgBotColor_[0], bgBotColor_[1], bgBotColor_[2],
+         1,  1,  bgTopColor_[0], bgTopColor_[1], bgTopColor_[2],
+        -1,  1,  bgTopColor_[0], bgTopColor_[1], bgTopColor_[2],
+    };
+    makeCurrent();
+    {
+        ScopedBufferBind bind(bgVbo_);
+        bgVbo_.write(0, bgData, sizeof(bgData));
+    }
+    doneCurrent();
+}
+
+void GLWidget::setColormap(Colormap map) {
+    colormap_ = map;
+    if (colorBarOverlay_) colorBarOverlay_->setColormap(static_cast<int>(map));
+    update();
+}
+
+void GLWidget::setNumBands(int bands) {
+    numBands_ = std::max(1, bands);
+    update();
+}
+
 void GLWidget::fitToModel(const glm::vec3& center, float size) {
     cam_.target = center;
     cam_.distance = size * 1.5f;
@@ -844,7 +907,7 @@ void GLWidget::paintGL() {
     float aspect = (height() > 0) ? static_cast<float>(width()) / height() : 1.0f;
     float nearPlane = cam_.distance * 0.01f;
     float farPlane  = cam_.distance * 10.0f;
-    glm::mat4 projection = glm::perspective(glm::radians(45.0f), aspect, nearPlane, farPlane);
+    glm::mat4 projection = projectionMatrix(aspect, nearPlane, farPlane);
     glm::mat4 model = glm::mat4(1.0f);
     glm::mat4 view = cam_.viewMatrix();
     glm::mat4 mvp = projection * view * model;
@@ -870,7 +933,9 @@ void GLWidget::paintGL() {
     shader_->setUniformValue("uScalarMin", scalarMin_);
     shader_->setUniformValue("uScalarMax", scalarMax_);
     shader_->setUniformValue("uNumBands", numBands_);
-    shader_->setUniformValue("uSurfaceAlpha", 1.0f);
+    shader_->setUniformValue("uColormap", static_cast<int>(colormap_));
+    shader_->setUniformValue("uColormapInvert", colormapInverted_);
+    shader_->setUniformValue("uSurfaceAlpha", surfaceAlpha_);
 
     // 绑定 triToPart texture buffer 到纹理单元 0
     glActiveTexture(GL_TEXTURE0);
@@ -992,6 +1057,16 @@ void GLWidget::setLineWidthClamped(float width) {
     glLineWidth(std::clamp(width, 1.0f, maxLineWidth_));
 }
 
+glm::mat4 GLWidget::projectionMatrix(float aspect, float nearPlane, float farPlane) const {
+    if (projectionMode_ == ProjectionMode::Orthographic) {
+        // 正交：用目标距离处透视视锥的半高确定范围，使两种投影下模型大小相当
+        float halfH = cam_.distance * std::tan(glm::radians(22.5f));
+        float halfW = halfH * aspect;
+        return glm::ortho(-halfW, halfW, -halfH, halfH, nearPlane, farPlane);
+    }
+    return glm::perspective(glm::radians(45.0f), aspect, nearPlane, farPlane);
+}
+
 void GLWidget::rebuildPartVisibilityIbo() {
     if (!partVisibilityDirty_ || allTriIndices_.empty()) return;
     partVisibilityDirty_ = false;
@@ -1032,10 +1107,16 @@ void GLWidget::renderMainMesh() {
     int count = activeIndexCount_;
     const bool isoActive = isoIndexCount_ > 0;
     if (count <= 0 || isoActive) return;
+    if (displayMode_ == DisplayMode::Wireframe) return;  // 线框模式不画实体面
 
     shader_->setUniformValue("uColor", QVector3D(color_.x, color_.y, color_.z));
     shader_->setUniformValue("uWireframe", false);
     shader_->setUniformValue("uUseVertexColor", useVertexColor_ || !partColors_.empty());
+    const bool translucent = (surfaceAlpha_ < 0.999f);
+    if (translucent) {
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    }
     glEnable(GL_POLYGON_OFFSET_FILL);
     glPolygonOffset(1.0f, 1.0f);
     glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
@@ -1043,16 +1124,22 @@ void GLWidget::renderMainMesh() {
     glDrawElements(GL_TRIANGLES, count, GL_UNSIGNED_INT, nullptr);
     vao_.release();
     glDisable(GL_POLYGON_OFFSET_FILL);
+    if (translucent) glDisable(GL_BLEND);
 }
 
 void GLWidget::renderMeshEdges() {
+    if (displayMode_ == DisplayMode::Solid) return;  // 实体模式不画边线
+    const bool wireOnly = (displayMode_ == DisplayMode::Wireframe);
+
     shader_->setUniformValue("uWireframe", true);
     shader_->setUniformValue("uUseVertexColor", false);
 
     int count = activeIndexCount_;
     int numTri = count / 3;
+    // 实体+线框模式下，边线随屏幕边长自适应淡入淡出避免糊成一团；
+    // 纯线框模式下始终不透明，保证线框完整可见。
     float wireAlpha = 1.0f;
-    if (numTri > 0 && count > 0) {
+    if (!wireOnly && numTri > 0 && count > 0) {
         float modelSize = cam_.maxDist * 0.1f;
         float avgEdgeLen = modelSize * 2.0f / std::sqrt(static_cast<float>(numTri));
         float fovFactor = height() / (2.0f * std::tan(glm::radians(22.5f)));
@@ -1060,12 +1147,17 @@ void GLWidget::renderMeshEdges() {
         wireAlpha = glm::clamp((screenEdgePx - 3.0f) / 7.0f, 0.0f, 1.0f);
     }
 
+    const QVector3D edgeQc(edgeColor_.x, edgeColor_.y, edgeColor_.z);
+
     if (activeEdgeIndexCount_ > 0) {
-        float lineW = (count == 0) ? 3.0f : 1.0f;
-        float alpha = (count == 0) ? 1.0f : wireAlpha;
+        // 无实体面（纯边线数据）或纯线框模式：不透明粗线；否则细线 + 自适应透明。
+        // 边线宽度/不透明度由用户控制（edgeWidth_ / edgeAlpha_）。
+        bool emphasize = (count == 0) || wireOnly;
+        float lineW = emphasize ? std::max(edgeWidth_, 3.0f) : edgeWidth_;
+        float alpha = (emphasize ? 1.0f : wireAlpha) * edgeAlpha_;
         shader_->setUniformValue("uColor", (count == 0)
             ? QVector3D(color_.x, color_.y, color_.z)
-            : QVector3D(0.2f, 0.2f, 0.22f));
+            : edgeQc);
         shader_->setUniformValue("uWireAlpha", alpha);
         setLineWidthClamped(lineW);
         if (alpha < 1.0f) {
@@ -1078,11 +1170,12 @@ void GLWidget::renderMeshEdges() {
         glLineWidth(1.0f);
         if (alpha < 1.0f) glDisable(GL_BLEND);
     } else if (count > 0) {
-        shader_->setUniformValue("uColor", QVector3D(0.2f, 0.2f, 0.22f));
+        float alpha = (wireOnly ? 1.0f : wireAlpha) * edgeAlpha_;
+        shader_->setUniformValue("uColor", edgeQc);
         shader_->setUniformValue("uUseVertexColor", false);
-        shader_->setUniformValue("uWireAlpha", wireAlpha);
-        glLineWidth(1.0f);
-        if (wireAlpha < 1.0f) {
+        shader_->setUniformValue("uWireAlpha", alpha);
+        setLineWidthClamped(edgeWidth_);
+        if (alpha < 1.0f) {
             glEnable(GL_BLEND);
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
         }
@@ -1091,7 +1184,8 @@ void GLWidget::renderMeshEdges() {
         glDrawElements(GL_TRIANGLES, count, GL_UNSIGNED_INT, nullptr);
         glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
         vao_.release();
-        if (wireAlpha < 1.0f) glDisable(GL_BLEND);
+        glLineWidth(1.0f);
+        if (alpha < 1.0f) glDisable(GL_BLEND);
     }
 }
 
@@ -1513,7 +1607,7 @@ void GLWidget::wheelEvent(QWheelEvent* e) {
     float aspect = (height() > 0) ? static_cast<float>(width()) / height() : 1.0f;
     float nearPlane = cam_.distance * 0.01f;
     float farPlane  = cam_.distance * 10.0f;
-    glm::mat4 projection = glm::perspective(glm::radians(45.0f), aspect, nearPlane, farPlane);
+    glm::mat4 projection = projectionMatrix(aspect, nearPlane, farPlane);
     glm::mat4 view = cam_.viewMatrix();
     glm::vec4 vp(0, 0, fbW, fbH);
 
@@ -1710,27 +1804,14 @@ void GLWidget::applyTheme(const Theme& theme) {
     barTextColor_ = QColor(theme.barTextR, theme.barTextG, theme.barTextB);
     if (colorBarOverlay_) colorBarOverlay_->setTextColor(barTextColor_);
 
-    // 存储背景颜色（initializeGL 会使用）
+    // 存储背景颜色（initializeGL 会使用），并记下主题预设供"恢复主题"使用
     bgTopColor_[0] = theme.bgTopR; bgTopColor_[1] = theme.bgTopG; bgTopColor_[2] = theme.bgTopB;
     bgBotColor_[0] = theme.bgBotR; bgBotColor_[1] = theme.bgBotG; bgBotColor_[2] = theme.bgBotB;
+    themeBgTop_[0] = theme.bgTopR; themeBgTop_[1] = theme.bgTopG; themeBgTop_[2] = theme.bgTopB;
+    themeBgBot_[0] = theme.bgBotR; themeBgBot_[1] = theme.bgBotG; themeBgBot_[2] = theme.bgBotB;
 
     // 更新渐变背景 VBO（仅在 GL 已初始化时）
-    if (bgVbo_.isCreated()) {
-        float bgData[] = {
-            -1, -1,  theme.bgBotR, theme.bgBotG, theme.bgBotB,
-             1, -1,  theme.bgBotR, theme.bgBotG, theme.bgBotB,
-             1,  1,  theme.bgTopR, theme.bgTopG, theme.bgTopB,
-            -1, -1,  theme.bgBotR, theme.bgBotG, theme.bgBotB,
-             1,  1,  theme.bgTopR, theme.bgTopG, theme.bgTopB,
-            -1,  1,  theme.bgTopR, theme.bgTopG, theme.bgTopB,
-        };
-        makeCurrent();
-        {
-            ScopedBufferBind bind(bgVbo_);
-            bgVbo_.write(0, bgData, sizeof(bgData));
-        }
-        doneCurrent();
-    }
+    uploadBackgroundVbo();
     update();
 }
 

@@ -15,6 +15,8 @@ uniform bool uContourMode;
 uniform float uScalarMin;
 uniform float uScalarMax;
 uniform int uNumBands;
+uniform int uColormap;   // 0=Jet, 1=Grayscale, 2=CoolWarm
+uniform bool uColormapInvert;
 uniform samplerBuffer uTriPartMap;
 out vec4 outColor;
 
@@ -41,6 +43,27 @@ vec3 jetColor(float t) {
     return vec3(r, g, b);
 }
 
+vec3 grayColor(float t) {
+    t = clamp(t, 0.0, 1.0);
+    return vec3(t);
+}
+
+// 蓝-白-红冷暖发散色谱
+vec3 coolWarmColor(float t) {
+    t = clamp(t, 0.0, 1.0);
+    vec3 cold = vec3(0.23, 0.30, 0.75);
+    vec3 mid  = vec3(0.95, 0.95, 0.95);
+    vec3 warm = vec3(0.71, 0.016, 0.15);
+    return (t < 0.5) ? mix(cold, mid, t * 2.0)
+                     : mix(mid, warm, (t - 0.5) * 2.0);
+}
+
+vec3 colormapColor(float t) {
+    if (uColormap == 1) return grayColor(t);
+    if (uColormap == 2) return coolWarmColor(t);
+    return jetColor(t);
+}
+
 void main() {
     vec3 surfaceColor = uUseVertexColor ? vColor : uColor;
 
@@ -56,7 +79,8 @@ void main() {
         int band = int(t * float(uNumBands));
         if (band >= uNumBands) band = uNumBands - 1;
         float qt = (float(band) + 0.5) / float(uNumBands);
-        surfaceColor = jetColor(qt);
+        if (uColormapInvert) qt = 1.0 - qt;
+        surfaceColor = colormapColor(qt);
     } else if (uUseVertexColor) {
         // 部件颜色模式：用 gl_PrimitiveID 查 triToPart texture buffer
         int partIdx = int(texelFetch(uTriPartMap, gl_PrimitiveID).r);

@@ -177,6 +177,8 @@ qt5_wrap_cpp(VIEWER_MOC_SRCS
     ControlPanel.h
     MonitorPanel.h
     ExportPanel.h
+    DisplayPanel.h
+    AppearancePanel.h
 )
 
 add_executable(${PROJECT_NAME}
@@ -188,6 +190,8 @@ add_executable(${PROJECT_NAME}
     ControlPanel.cpp
     MonitorPanel.cpp
     ExportPanel.cpp
+    DisplayPanel.cpp
+    AppearancePanel.cpp
     ${VIEWER_MOC_SRCS}
 )
 
@@ -449,6 +453,8 @@ if(BUILD_TESTING)
         ControlPanel.h
         MonitorPanel.h
         ExportPanel.h
+        DisplayPanel.h
+        AppearancePanel.h
     )
     add_executable(test_main_window_linkage
         tests/test_main_window_linkage.cpp
@@ -459,6 +465,8 @@ if(BUILD_TESTING)
         ControlPanel.cpp
         MonitorPanel.cpp
         ExportPanel.cpp
+        DisplayPanel.cpp
+        AppearancePanel.cpp
         ${TEST_MAIN_WINDOW_LINKAGE_MOC_SRCS}
     )
     set_target_properties(test_main_window_linkage PROPERTIES AUTOMOC OFF)

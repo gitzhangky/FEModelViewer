@@ -42,6 +42,15 @@ class LabelOverlay;
 class PickRenderer;
 class SelectionRenderer;
 
+/** @brief 几何显示模式 */
+enum class DisplayMode { Solid, Wireframe, SolidWireframe };
+
+/** @brief 投影模式 */
+enum class ProjectionMode { Perspective, Orthographic };
+
+/** @brief 云图色谱方案 */
+enum class Colormap { Jet, Grayscale, CoolWarm };
+
 class FERENDER_EXPORT GLWidget : public QOpenGLWidget, protected QOpenGLFunctions {
     Q_OBJECT
     friend class LabelOverlay;
@@ -59,6 +68,39 @@ public:
 
     /** @brief 设置物体颜色 */
     void setObjectColor(const glm::vec3& c);
+
+    /** @brief 设置边线颜色（实体+线框 / 线框模式下的边线） */
+    void setEdgeColor(const glm::vec3& c);
+
+    /** @brief 设置边线宽度（像素，按驱动能力钳制） */
+    void setEdgeWidth(float w);
+    /** @brief 设置边线不透明度 [0,1]（叠加在自适应淡化之上） */
+    void setEdgeAlpha(float a);
+    /** @brief 设置实体面不透明度 [0,1]（<1 开启混合） */
+    void setSurfaceAlpha(float a);
+
+    /** @brief 反转云图色谱（如 Jet 从蓝→红 变为 红→蓝） */
+    void setColormapInverted(bool inverted);
+
+    /** @brief 设置几何显示模式（实体 / 线框 / 实体+线框） */
+    void setDisplayMode(DisplayMode mode);
+    /** @brief 当前显示模式 */
+    DisplayMode displayMode() const { return displayMode_; }
+
+    /** @brief 设置投影模式（透视 / 正交） */
+    void setProjectionMode(ProjectionMode mode);
+    /** @brief 当前投影模式 */
+    ProjectionMode projectionMode() const { return projectionMode_; }
+
+    /** @brief 自定义背景上/下渐变颜色（覆盖主题背景） */
+    void setBackgroundColors(const glm::vec3& top, const glm::vec3& bottom);
+    /** @brief 背景颜色恢复为当前主题预设 */
+    void resetBackgroundToTheme();
+
+    /** @brief 设置云图色谱方案 */
+    void setColormap(Colormap map);
+    /** @brief 设置云图分段数（量化档数） */
+    void setNumBands(int bands);
 
     /** @brief 自适应缩放 */
     void fitToModel(const glm::vec3& center, float size);
@@ -194,6 +236,12 @@ private:
     // 严格驱动上触发 GL_INVALID_VALUE，故统一走此包装。
     void setLineWidthClamped(float width);
 
+    // 根据 projectionMode_ 构建投影矩阵（透视或正交），供绘制与拾取统一调用。
+    glm::mat4 projectionMatrix(float aspect, float nearPlane, float farPlane) const;
+
+    // 用 bgTopColor_/bgBotColor_ 重写背景渐变 VBO（需 GL 已初始化）。
+    void uploadBackgroundVbo();
+
     // ── paintGL 渲染子步骤 ──
     void rebuildPartVisibilityIbo();
     void renderBackground();
@@ -305,6 +353,19 @@ private:
     // 背景渐变颜色（initializeGL 使用，applyTheme 更新）
     float bgTopColor_[3] = {0.38f, 0.45f, 0.58f};
     float bgBotColor_[3] = {0.68f, 0.74f, 0.82f};
+    // 当前主题的背景预设（用于"恢复主题"）
+    float themeBgTop_[3] = {0.38f, 0.45f, 0.58f};
+    float themeBgBot_[3] = {0.68f, 0.74f, 0.82f};
+
+    // ── 显示 / 投影 / 色谱状态 ──
+    DisplayMode    displayMode_    = DisplayMode::SolidWireframe;
+    ProjectionMode projectionMode_ = ProjectionMode::Perspective;
+    Colormap       colormap_       = Colormap::Jet;
+    bool           colormapInverted_ = false;
+    glm::vec3      edgeColor_{0.2f, 0.2f, 0.22f};
+    float          edgeWidth_      = 1.0f;
+    float          edgeAlpha_      = 1.0f;
+    float          surfaceAlpha_   = 1.0f;
 
     // ── 交互状态 ──
     QPoint lastPos_;

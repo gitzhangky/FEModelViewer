@@ -21,6 +21,8 @@
 #include "GLWidget.h"
 #include "MonitorPanel.h"
 #include "ExportPanel.h"
+#include "DisplayPanel.h"
+#include "AppearancePanel.h"
 #include "FEModelPanel.h"
 #include "PartsPanel.h"
 #include "ResultPanel.h"
@@ -40,6 +42,7 @@
 #include <QHBoxLayout>
 #include <QVBoxLayout>
 #include <QSplitter>
+#include <QScrollArea>
 #include <QToolBar>
 #include <QAction>
 #include <QActionGroup>
@@ -74,15 +77,31 @@ MainWindow::MainWindow() {
     monitorPanel_ = new MonitorPanel;
     resultPanel_ = new ResultPanel;
     exportPanel_ = new ExportPanel;
+    displayPanel_ = new DisplayPanel;
+    appearancePanel_ = new AppearancePanel;
     filePanel_ = createFilePanel();
 
-    // ── 底部标签页（文件导入 / 结果显示 / 导出 / 监控）──
+    // ── 底部标签页（文件导入 / 结果显示 / 显示 / 外观 / 导出 / 监控）──
+    // 每页套 QScrollArea：使 tab 控件最小高度不被最高面板（导出）撑大，
+    // splitter 才能把底部压到期望高度，超高内容自动滚动。
     bottomTabs_ = new QTabWidget;
     bottomTabs_->setTabPosition(QTabWidget::North);
-    bottomTabs_->addTab(filePanel_,    "文件导入");
-    bottomTabs_->addTab(resultPanel_,  "结果显示");
-    bottomTabs_->addTab(exportPanel_,  "导出");
-    bottomTabs_->addTab(monitorPanel_, "监控");
+    auto addScrollTab = [this](QWidget* page, const QString& title) {
+        auto* sa = new QScrollArea;
+        sa->setWidget(page);
+        sa->setWidgetResizable(true);
+        sa->setFrameShape(QFrame::NoFrame);
+        sa->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        sa->setStyleSheet("QScrollArea { background: transparent; border: none; }");
+        sa->viewport()->setStyleSheet("background: transparent;");
+        bottomTabs_->addTab(sa, title);
+    };
+    addScrollTab(filePanel_,       "文件导入");
+    addScrollTab(resultPanel_,     "结果显示");
+    addScrollTab(displayPanel_,    "显示");
+    addScrollTab(appearancePanel_, "外观");
+    addScrollTab(exportPanel_,     "导出");
+    addScrollTab(monitorPanel_,    "监控");
 
     // ── 中央区域：垂直 Splitter（GL 视口 + 底部标签页）──
     auto* splitter = new QSplitter(Qt::Vertical);
@@ -90,7 +109,7 @@ MainWindow::MainWindow() {
     splitter->addWidget(bottomTabs_);
     splitter->setStretchFactor(0, 1);
     splitter->setStretchFactor(1, 0);
-    splitter->setSizes({600, 180});
+    splitter->setSizes({600, 200});
     splitter->setChildrenCollapsible(false);
     setCentralWidget(splitter);
 
@@ -238,6 +257,40 @@ MainWindow::MainWindow() {
             this, &MainWindow::onRecordStart);
     connect(exportPanel_, &ExportPanel::recordStopRequested,
             this, &MainWindow::onRecordStop);
+
+    // ── 显示面板连接 ──
+    connect(displayPanel_, &DisplayPanel::displayModeChanged, this, [this](int m){
+        glWidget_->setDisplayMode(static_cast<DisplayMode>(m));
+    });
+    connect(displayPanel_, &DisplayPanel::projectionModeChanged, this, [this](int m){
+        glWidget_->setProjectionMode(static_cast<ProjectionMode>(m));
+    });
+    connect(displayPanel_, &DisplayPanel::objectColorChanged,
+            glWidget_, &GLWidget::setObjectColor);
+    connect(displayPanel_, &DisplayPanel::edgeColorChanged,
+            glWidget_, &GLWidget::setEdgeColor);
+    connect(displayPanel_, &DisplayPanel::edgeWidthChanged, this, [this](int px){
+        glWidget_->setEdgeWidth(static_cast<float>(px));
+    });
+    connect(displayPanel_, &DisplayPanel::edgeAlphaChanged, this, [this](int pct){
+        glWidget_->setEdgeAlpha(pct / 100.0f);
+    });
+    connect(displayPanel_, &DisplayPanel::surfaceAlphaChanged, this, [this](int pct){
+        glWidget_->setSurfaceAlpha(pct / 100.0f);
+    });
+
+    // ── 外观面板连接 ──
+    connect(appearancePanel_, &AppearancePanel::backgroundColorsChanged,
+            glWidget_, &GLWidget::setBackgroundColors);
+    connect(appearancePanel_, &AppearancePanel::backgroundResetRequested,
+            glWidget_, &GLWidget::resetBackgroundToTheme);
+    connect(appearancePanel_, &AppearancePanel::colormapChanged, this, [this](int m){
+        glWidget_->setColormap(static_cast<Colormap>(m));
+    });
+    connect(appearancePanel_, &AppearancePanel::numBandsChanged,
+            glWidget_, &GLWidget::setNumBands);
+    connect(appearancePanel_, &AppearancePanel::colormapInvertedChanged,
+            glWidget_, &GLWidget::setColormapInverted);
 
     // 启动时异步探测 ffmpeg
     QTimer::singleShot(0, this, [this]() {
@@ -820,6 +873,8 @@ void MainWindow::applyTheme(const Theme& t) {
     monitorPanel_->applyTheme(t);
     resultPanel_->applyTheme(t);
     exportPanel_->applyTheme(t);
+    displayPanel_->applyTheme(t);
+    appearancePanel_->applyTheme(t);
     glWidget_->applyTheme(t);
 }
 

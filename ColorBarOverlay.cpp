@@ -28,6 +28,8 @@ void ColorBarOverlay::setExtremes(int minId, float minVal, int maxId, float maxV
 }
 
 void ColorBarOverlay::setIdLabel(const QString& label) { idLabel_ = label; update(); }
+void ColorBarOverlay::setColormap(int map) { colormap_ = map; update(); }
+void ColorBarOverlay::setColormapInverted(bool inverted) { colormapInverted_ = inverted; update(); }
 
 void ColorBarOverlay::paintEvent(QPaintEvent*) {
     const int segCount = 9;
@@ -37,15 +39,33 @@ void ColorBarOverlay::paintEvent(QPaintEvent*) {
     const int margin = 14;
     const int barLabelGap = 8;
 
-    auto jetColor = [](float t) -> QColor {
+    // 与 scene.frag 的 colormapColor 保持一致：0=Jet, 1=Grayscale, 2=CoolWarm
+    auto barColor = [map = colormap_, inv = colormapInverted_](float t) -> QColor {
         if (t < 0.0f) t = 0.0f;
         if (t > 1.0f) t = 1.0f;
+        if (inv) t = 1.0f - t;
         float r = 0, g = 0, b = 0;
-        if (t < 0.125f)      { r = 0;   g = 0;   b = 0.5f + t / 0.125f * 0.5f; }
-        else if (t < 0.375f) { r = 0;   g = (t - 0.125f) / 0.25f; b = 1.0f; }
-        else if (t < 0.625f) { r = (t - 0.375f) / 0.25f; g = 1.0f; b = 1.0f - (t - 0.375f) / 0.25f; }
-        else if (t < 0.875f) { r = 1.0f; g = 1.0f - (t - 0.625f) / 0.25f; b = 0; }
-        else                 { r = 1.0f - (t - 0.875f) / 0.125f * 0.5f; g = 0; b = 0; }
+        if (map == 1) {                    // 灰度
+            r = g = b = t;
+        } else if (map == 2) {             // 冷暖（蓝-白-红）
+            if (t < 0.5f) {
+                float u = t * 2.0f;
+                r = 0.23f + (0.95f - 0.23f) * u;
+                g = 0.30f + (0.95f - 0.30f) * u;
+                b = 0.75f + (0.95f - 0.75f) * u;
+            } else {
+                float u = (t - 0.5f) * 2.0f;
+                r = 0.95f + (0.71f  - 0.95f) * u;
+                g = 0.95f + (0.016f - 0.95f) * u;
+                b = 0.95f + (0.15f  - 0.95f) * u;
+            }
+        } else {                           // Jet
+            if (t < 0.125f)      { r = 0;   g = 0;   b = 0.5f + t / 0.125f * 0.5f; }
+            else if (t < 0.375f) { r = 0;   g = (t - 0.125f) / 0.25f; b = 1.0f; }
+            else if (t < 0.625f) { r = (t - 0.375f) / 0.25f; g = 1.0f; b = 1.0f - (t - 0.375f) / 0.25f; }
+            else if (t < 0.875f) { r = 1.0f; g = 1.0f - (t - 0.625f) / 0.25f; b = 0; }
+            else                 { r = 1.0f - (t - 0.875f) / 0.125f * 0.5f; g = 0; b = 0; }
+        }
         return QColor(static_cast<int>(r * 255), static_cast<int>(g * 255), static_cast<int>(b * 255));
     };
 
@@ -67,7 +87,7 @@ void ColorBarOverlay::paintEvent(QPaintEvent*) {
         float t = (i + 0.5f) / segCount;
         int y = margin + barH - (i + 1) * segH;
         painter.setPen(Qt::NoPen);
-        painter.setBrush(jetColor(t));
+        painter.setBrush(barColor(t));
         painter.drawRect(margin, y, barW, segH);
     }
 

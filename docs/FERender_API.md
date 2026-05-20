@@ -1011,8 +1011,26 @@ explicit GLWidget(QWidget* parent = nullptr);
 | `void setMesh(const Mesh& mesh)` | 设置要渲染的三角网格，触发 GPU 上传 |
 | `void setVertexColors(const std::vector<float>& colors)` | 设置 per-vertex RGB 颜色（用于云图） |
 | `void setObjectColor(const glm::vec3& c)` | 设置统一物体颜色 |
+| `void setEdgeColor(const glm::vec3& c)` | 设置边线颜色（实体+线框 / 线框模式） |
+| `void setEdgeWidth(float w)` | 设置边线宽度（像素，按驱动能力钳制；macOS 仅 1.0） |
+| `void setEdgeAlpha(float a)` | 设置边线不透明度 [0,1]（叠加在自适应淡化之上） |
+| `void setSurfaceAlpha(float a)` | 设置实体面不透明度 [0,1]（<1 开启混合） |
 | `void setUseVertexColor(bool use)` | 切换云图模式 (`true`) / 纯色模式 (`false`) |
 | `void setVertexScalars(const std::vector<float>& scalars, float minVal, float maxVal, int numBands)` | 上传 per-vertex 标量值，由 GPU 着色器做量化 + 颜色映射 |
+
+#### 显示模式与外观
+
+| 方法 | 说明 |
+|------|------|
+| `void setDisplayMode(DisplayMode mode)` | 设置几何显示模式（实体 / 线框 / 实体+线框） |
+| `DisplayMode displayMode() const` | 当前显示模式 |
+| `void setProjectionMode(ProjectionMode mode)` | 设置投影模式（透视 / 正交） |
+| `ProjectionMode projectionMode() const` | 当前投影模式 |
+| `void setBackgroundColors(const glm::vec3& top, const glm::vec3& bottom)` | 自定义背景上/下渐变色（覆盖主题背景） |
+| `void resetBackgroundToTheme()` | 背景恢复为当前主题预设 |
+| `void setColormap(Colormap map)` | 设置云图色谱（Jet / 灰度 / 冷暖） |
+| `void setNumBands(int bands)` | 设置云图分段数（量化档数，下限 1） |
+| `void setColormapInverted(bool inverted)` | 反转云图色谱（如 Jet 蓝→红 变为 红→蓝） |
 
 #### 相机与视图
 
@@ -1150,6 +1168,16 @@ enum class PickMode {
     Element,   // 选中点击处的单元
     Part       // 选中整个部件
 };
+```
+
+### 5.1b 显示相关枚举
+
+**头文件**：`GLWidget.h`
+
+```cpp
+enum class DisplayMode { Solid, Wireframe, SolidWireframe };  // 实体 / 线框 / 实体+线框
+enum class ProjectionMode { Perspective, Orthographic };       // 透视 / 正交
+enum class Colormap { Jet, Grayscale, CoolWarm };              // 云图色谱（与 scene.frag 的 uColormap 一致）
 ```
 
 ### 5.2 FEPickResult — 拾取结果
