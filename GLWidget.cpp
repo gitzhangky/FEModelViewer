@@ -434,42 +434,13 @@ void GLWidget::rebuildRenderEdgeMaps() {
     int edgeCount = static_cast<int>(allEdgeIndices_.size() / 2);
     if (edgeCount <= 0) return;
 
-    auto edgeKey = [](int a, int b) -> long long {
-        int mn = std::min(a, b);
-        int mx = std::max(a, b);
-        return (static_cast<long long>(mn) << 32) |
-               static_cast<unsigned int>(mx);
-    };
     auto posKey = [](float x, float y, float z) -> std::string {
         return std::to_string(std::llround(x * 1000000.0f)) + "," +
                std::to_string(std::llround(y * 1000000.0f)) + "," +
                std::to_string(std::llround(z * 1000000.0f));
     };
 
-    std::unordered_map<long long, std::unordered_set<int>> edgeElems;
-    int triCount = std::min(static_cast<int>(triToElem_.size()),
-                            static_cast<int>(mesh_.indices.size() / 3));
-    for (int t = 0; t < triCount; ++t) {
-        int elemId = triToElem_[t];
-        if (elemId < 0) continue;
-        for (int e = 0; e < 3; ++e) {
-            unsigned int va = mesh_.indices[t * 3 + e];
-            unsigned int vb = mesh_.indices[t * 3 + (e + 1) % 3];
-            int na = (va < vertexToNode_.size()) ? vertexToNode_[va] : static_cast<int>(va);
-            int nb = (vb < vertexToNode_.size()) ? vertexToNode_[vb] : static_cast<int>(vb);
-            edgeElems[edgeKey(na, nb)].insert(elemId);
-        }
-    }
-
-    int elemEdgeCount = std::min(static_cast<int>(mesh_.elemEdgeToElement.size()),
-                                 static_cast<int>(mesh_.elemEdgeNodeIds.size()));
-    for (int i = 0; i < elemEdgeCount; ++i) {
-        int elemId = mesh_.elemEdgeToElement[i];
-        if (elemId < 0) continue;
-        auto [a, b] = mesh_.elemEdgeNodeIds[i];
-        edgeElems[edgeKey(a, b)].insert(elemId);
-    }
-
+    // 位置 → 节点ID，仅用于按"隐藏节点"过滤边线
     std::unordered_map<std::string, int> posToNode;
     int meshVertCount = std::min(static_cast<int>(mesh_.vertices.size() / 6),
                                  static_cast<int>(vertexToNode_.size()));
@@ -503,10 +474,12 @@ void GLWidget::rebuildRenderEdgeMaps() {
         }
         renderEdgeNodeIds_.push_back({std::min(na, nb), std::max(na, nb)});
 
+        // 直接采用转换层给出的"边线→单元"映射（与 edgeIndices 同步生成，权威可靠）。
+        // 旧实现靠位置反查重建该映射，匹配失败时映射为空，filterEdges 会跳过单元
+        // 可见性判断，导致隐藏单元后其边线/线框仍然残留。
         std::vector<int> elems;
-        auto it = edgeElems.find(edgeKey(na, nb));
-        if (it != edgeElems.end())
-            elems.assign(it->second.begin(), it->second.end());
+        if (e < static_cast<int>(mesh_.edgeToElement.size()) && mesh_.edgeToElement[e] >= 0)
+            elems.push_back(mesh_.edgeToElement[e]);
         renderEdgeToElems_.push_back(std::move(elems));
     }
 }
