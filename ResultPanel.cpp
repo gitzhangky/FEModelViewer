@@ -7,6 +7,7 @@
 
 #include "ResultPanel.h"
 #include "Theme.h"
+#include "StyleHelpers.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -729,11 +730,6 @@ void ResultPanel::applyTheme(const Theme& t) {
         "  min-height: 24px; }"
         "QComboBox:hover { border-color: %6; }"
         "QComboBox:disabled { background: %1; color: %8; border-color: %4; }"
-        "QComboBox::drop-down { border: none; width: 24px; }"
-        "QComboBox::down-arrow {"
-        "  image: none; border-left: 5px solid transparent;"
-        "  border-right: 5px solid transparent;"
-        "  border-top: 6px solid %6; margin-right: 8px; }"
         "QComboBox QAbstractItemView {"
         "  background: %3; border: 1px solid %8; border-radius: 4px;"
         "  padding: 4px; selection-background-color: %8; color: %2;"
@@ -743,14 +739,6 @@ void ResultPanel::applyTheme(const Theme& t) {
         "  padding: 5px 10px; font-size: 12px; color: %2;"
         "  min-height: 24px; }"
         "QDoubleSpinBox:hover { border-color: %6; }"
-        "QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {"
-        "  width: 18px; border: none; background: %4; }"
-        "QDoubleSpinBox::up-arrow { border-left: 4px solid transparent;"
-        "  border-right: 4px solid transparent;"
-        "  border-bottom: 5px solid %6; }"
-        "QDoubleSpinBox::down-arrow { border-left: 4px solid transparent;"
-        "  border-right: 4px solid transparent;"
-        "  border-top: 5px solid %6; }"
         "QCheckBox { font-size: 11px; color: %7; spacing: 6px; }"
         "QCheckBox::indicator {"
         "  width: 16px; height: 16px; border-radius: 3px;"
@@ -758,6 +746,11 @@ void ResultPanel::applyTheme(const Theme& t) {
         "QCheckBox::indicator:checked {"
         "  background: %6; border-color: %6; }"
     ).arg(t.base, t.text, t.mantle, t.surface0, t.subtext0, t.blue, t.subtext1, t.surface1));
+
+    // 追加 SVG 箭头（在 Qt5 中 CSS 三角形技巧不生效）
+    setStyleSheet(styleSheet()
+                  + StyleHelpers::comboArrowStyle(t.blue, t.surface1)
+                  + StyleHelpers::spinArrowStyle(t.blue, t.surface0, t.surface1, t.surface1));
 }
 
 void ResultPanel::onFilterApplyClicked()

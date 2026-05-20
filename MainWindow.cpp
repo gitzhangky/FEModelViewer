@@ -20,6 +20,7 @@
 #include "MainWindow.h"
 #include "GLWidget.h"
 #include "MonitorPanel.h"
+#include "ExportPanel.h"
 #include "FEModelPanel.h"
 #include "PartsPanel.h"
 #include "ResultPanel.h"
@@ -52,6 +53,10 @@
 #include <QSettings>
 #include <QDir>
 #include <QCloseEvent>
+#include <QTimer>
+#include <QDateTime>
+#include <QImage>
+#include <QStandardPaths>
 
 MainWindow::MainWindow() {
     setWindowTitle("FEModelViewer");
@@ -68,13 +73,15 @@ MainWindow::MainWindow() {
     feModelPanel_ = new FEModelPanel;
     monitorPanel_ = new MonitorPanel;
     resultPanel_ = new ResultPanel;
+    exportPanel_ = new ExportPanel;
     filePanel_ = createFilePanel();
 
-    // ── 底部标签页（文件导入 / 结果显示 / 监控）──
+    // ── 底部标签页（文件导入 / 结果显示 / 导出 / 监控）──
     bottomTabs_ = new QTabWidget;
     bottomTabs_->setTabPosition(QTabWidget::North);
     bottomTabs_->addTab(filePanel_,    "文件导入");
     bottomTabs_->addTab(resultPanel_,  "结果显示");
+    bottomTabs_->addTab(exportPanel_,  "导出");
     bottomTabs_->addTab(monitorPanel_, "监控");
 
     // ── 中央区域：垂直 Splitter（GL 视口 + 底部标签页）──
@@ -223,6 +230,20 @@ MainWindow::MainWindow() {
     });
 
     monitorPanel_->bindToWidget(glWidget_);
+
+    // ── 导出面板连接 ──
+    connect(exportPanel_, &ExportPanel::screenshotRequested,
+            this, &MainWindow::onScreenshotRequested);
+    connect(exportPanel_, &ExportPanel::recordStartRequested,
+            this, &MainWindow::onRecordStart);
+    connect(exportPanel_, &ExportPanel::recordStopRequested,
+            this, &MainWindow::onRecordStop);
+
+    // 启动时异步探测 ffmpeg
+    QTimer::singleShot(0, this, [this]() {
+        ffmpegPath_ = detectFfmpeg();
+        exportPanel_->setFfmpegAvailable(!ffmpegPath_.isEmpty());
+    });
 
     // ── 结果面板连接 ──
 
@@ -798,6 +819,7 @@ void MainWindow::applyTheme(const Theme& t) {
     partsPanel_->applyTheme(t);
     monitorPanel_->applyTheme(t);
     resultPanel_->applyTheme(t);
+    exportPanel_->applyTheme(t);
     glWidget_->applyTheme(t);
 }
 
@@ -1109,4 +1131,239 @@ void MainWindow::clearFilters()
         pushRenderDataToGL(activeRenderData());
 
     reapplyContourIfNeeded();
+}
+
+// ════════════════════════════════════════════════════════════
+// 截图 / 录像
+// ════════════════════════════════════════════════════════════
+
+QString MainWindow::detectFfmpeg() const
+{
+    // macOS GUI app 启动时不继承 shell PATH，homebrew 装的 ffmpeg 在默认 PATH 找不到。
+    // 先尝试常见路径，再 PATH 查找。
+    static const QStringList candidates = {
+        "/opt/homebrew/bin/ffmpeg",
+        "/usr/local/bin/ffmpeg",
+        "/usr/bin/ffmpeg",
+    };
+    for (const QString& p : candidates) {
+        if (QFileInfo(p).isExecutable()) return p;
+    }
+    QString found = QStandardPaths::findExecutable("ffmpeg");
+    return found;
+}
+
+QPair<int,int> MainWindow::targetRecordSize() const
+{
+    int mode = exportPanel_->resolutionMode();
+    int w = 0, h = 0;
+    if (mode == 1) {
+        w = 1920; h = 1080;
+    } else if (mode == 2) {
+        w = exportPanel_->customWidth();
+        h = exportPanel_->customHeight();
+    } else {
+        // 跟随视口（按逻辑像素，避免 retina 下 4 倍像素拖垮编码速度）
+        w = glWidget_->width();
+        h = glWidget_->height();
+    }
+    // libx264 要求偶数
+    if (w & 1) --w;
+    if (h & 1) --h;
+    return {w, h};
+}
+
+qint64 MainWindow::recordFrameBytes() const
+{
+    return qint64(recordW_) * qint64(recordH_) * 4;
+}
+
+qint64 MainWindow::recordBacklogLimitBytes() const
+{
+    // 限制 QProcess 写入队列，避免弱机器编码跟不上时把大量 RGBA 原始帧堆在内存里。
+    // 阈值约为 2 帧；小分辨率下给 8MB 下限，避免管道轻微抖动导致过度丢帧。
+    return qMax<qint64>(recordFrameBytes() * 2, 8 * 1024 * 1024);
+}
+
+void MainWindow::onScreenshotRequested()
+{
+    QImage img = glWidget_->grabFramebuffer();
+    if (img.isNull()) {
+        statusLabel_->setText("  截图失败：无法读取画面");
+        return;
+    }
+
+    QDir dir(exportPanel_->outputDir());
+    if (!dir.exists()) dir.mkpath(".");
+    QString name = QString("screenshot_%1.png")
+        .arg(QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss"));
+    QString path = dir.filePath(name);
+
+    if (img.save(path, "PNG")) {
+        statusLabel_->setText(QString("  截图已保存: %1").arg(name));
+    } else {
+        statusLabel_->setText("  截图保存失败");
+    }
+}
+
+void MainWindow::onRecordStart()
+{
+    if (recordProcess_) return;  // 已在录制
+    if (ffmpegPath_.isEmpty()) {
+        QMessageBox::warning(this, "录制视频", "未找到 ffmpeg，无法录制。");
+        return;
+    }
+
+    auto [w, h] = targetRecordSize();
+    if (w < 16 || h < 16) {
+        QMessageBox::warning(this, "录制视频", "目标分辨率太小。");
+        return;
+    }
+
+    QDir dir(exportPanel_->outputDir());
+    if (!dir.exists()) dir.mkpath(".");
+    QString name = QString("recording_%1.mp4")
+        .arg(QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss"));
+    recordOutputPath_ = dir.filePath(name);
+
+    recordW_ = w;
+    recordH_ = h;
+    recordFps_ = exportPanel_->framerate();
+    recordMaxFrames_ = recordFps_ * exportPanel_->maxDurationSec();
+    recordFrameCount_ = 0;
+    recordDroppedFrames_ = 0;
+    recordElapsed_.restart();
+
+    QStringList args = {
+        "-y",
+        "-hide_banner", "-loglevel", "error",
+        "-f", "rawvideo",
+        "-pixel_format", "rgba",
+        "-video_size", QString("%1x%2").arg(w).arg(h),
+        "-framerate", QString::number(recordFps_),
+        "-i", "-",
+        "-c:v", "libx264",
+        // 录屏场景优先速度：ultrafast + zerolatency 关掉 B 帧/lookahead，
+        // 停止录制时几乎不需要 flush。去掉 +faststart 避免末尾再读写整个文件。
+        "-preset", "ultrafast",
+        "-tune", "zerolatency",
+        "-pix_fmt", "yuv420p",
+        recordOutputPath_,
+    };
+
+    recordProcess_ = new QProcess(this);
+    recordProcess_->setProcessChannelMode(QProcess::MergedChannels);
+    connect(recordProcess_,
+            QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
+            this, &MainWindow::onRecordProcessFinished);
+    recordProcess_->start(ffmpegPath_, args);
+    if (!recordProcess_->waitForStarted(3000)) {
+        QMessageBox::warning(this, "录制视频",
+                             "ffmpeg 启动失败：" + recordProcess_->errorString());
+        delete recordProcess_;
+        recordProcess_ = nullptr;
+        return;
+    }
+
+    if (!recordTimer_) {
+        recordTimer_ = new QTimer(this);
+        connect(recordTimer_, &QTimer::timeout, this, &MainWindow::onRecordTick);
+    }
+    recordTimer_->start(1000 / recordFps_);
+
+    exportPanel_->setRecording(true);
+    statusLabel_->setText(QString("  正在录制 %1×%2 @ %3fps")
+                          .arg(w).arg(h).arg(recordFps_));
+}
+
+void MainWindow::onRecordTick()
+{
+    if (!recordProcess_ || recordProcess_->state() != QProcess::Running) return;
+
+    if (recordProcess_->bytesToWrite() > recordBacklogLimitBytes()) {
+        ++recordDroppedFrames_;
+        exportPanel_->updateRecordingStats(recordFrameCount_, recordDroppedFrames_);
+        if (recordMaxFrames_ > 0 &&
+            recordElapsed_.isValid() &&
+            recordElapsed_.elapsed() >= qint64(exportPanel_->maxDurationSec()) * 1000) {
+            onRecordStop();
+        }
+        return;
+    }
+
+    QImage img = glWidget_->grabFramebuffer();
+    if (img.isNull()) return;
+
+    if (img.width() != recordW_ || img.height() != recordH_) {
+        // FastTransformation（最近邻）：录屏对单像素细节不敏感，速度远超双线性
+        img = img.scaled(recordW_, recordH_,
+                         Qt::IgnoreAspectRatio, Qt::FastTransformation);
+    }
+    if (img.format() != QImage::Format_RGBA8888) {
+        img = img.convertToFormat(QImage::Format_RGBA8888);
+    }
+
+    // 整块写入：RGBA8888 + 偶数宽通常无 padding，一次写完省掉 H 次 syscall
+    const int rowBytes = recordW_ * 4;
+    if (img.bytesPerLine() == rowBytes) {
+        recordProcess_->write(reinterpret_cast<const char*>(img.constBits()),
+                              qint64(rowBytes) * recordH_);
+    } else {
+        for (int y = 0; y < recordH_; ++y) {
+            recordProcess_->write(
+                reinterpret_cast<const char*>(img.constScanLine(y)), rowBytes);
+        }
+    }
+
+    ++recordFrameCount_;
+    exportPanel_->updateRecordingStats(recordFrameCount_, recordDroppedFrames_);
+
+    bool reachedFrameLimit = (recordMaxFrames_ > 0 && recordFrameCount_ >= recordMaxFrames_);
+    bool reachedWallClockLimit = (recordMaxFrames_ > 0 &&
+                                  recordElapsed_.isValid() &&
+                                  recordElapsed_.elapsed() >= qint64(exportPanel_->maxDurationSec()) * 1000);
+    if (reachedFrameLimit || reachedWallClockLimit) {
+        onRecordStop();
+    }
+}
+
+void MainWindow::onRecordStop()
+{
+    if (!recordProcess_) return;
+    if (recordTimer_) recordTimer_->stop();
+    recordProcess_->closeWriteChannel();
+    statusLabel_->setText("  正在完成视频编码…");
+    // 实际完成在 onRecordProcessFinished 中
+}
+
+void MainWindow::onRecordProcessFinished(int exitCode, QProcess::ExitStatus status)
+{
+    bool ok = (status == QProcess::NormalExit && exitCode == 0);
+    QString err = recordProcess_ ? QString::fromUtf8(recordProcess_->readAllStandardOutput()) : QString();
+
+    if (recordTimer_) recordTimer_->stop();
+    if (recordProcess_) {
+        recordProcess_->deleteLater();
+        recordProcess_ = nullptr;
+    }
+    exportPanel_->setRecording(false);
+
+    if (ok) {
+        // ffmpeg 对 mp4 有大量缓冲（编码器 B 帧、AVIO 缓冲、moov 在 EOF 才写），
+        // 录制中 onRecordTick 读到的文件大小远小于最终值。这里 finalize 后再用
+        // 磁盘上的真实大小回填一次面板。
+        const qint64 finalBytes = QFileInfo(recordOutputPath_).size();
+        exportPanel_->setRecordingFinished(recordFrameCount_, finalBytes, recordDroppedFrames_);
+        QString frameSummary = QString("%1 帧").arg(recordFrameCount_);
+        if (recordDroppedFrames_ > 0)
+            frameSummary += QString("，丢弃 %1 帧").arg(recordDroppedFrames_);
+        statusLabel_->setText(QString("  视频已保存: %1 (%2)")
+                              .arg(QFileInfo(recordOutputPath_).fileName())
+                              .arg(frameSummary));
+    } else {
+        QString msg = QString("ffmpeg 退出码 %1").arg(exitCode);
+        if (!err.isEmpty()) msg += "\n" + err;
+        QMessageBox::warning(this, "录制视频", msg);
+        statusLabel_->setText("  录制失败");
+    }
 }

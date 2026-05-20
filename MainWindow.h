@@ -22,6 +22,8 @@
 #include <QMenu>
 #include <QTabWidget>
 #include <QDockWidget>
+#include <QProcess>
+#include <QElapsedTimer>
 
 #include "Theme.h"
 #include "FERenderData.h"
@@ -33,6 +35,7 @@
 
 class GLWidget;
 class MonitorPanel;
+class ExportPanel;
 class FEModelPanel;
 class PartsPanel;
 class ResultPanel;
@@ -77,8 +80,33 @@ private:
     void reapplyContourIfNeeded();
     void syncPickMode(PickMode mode);  // 同步工具栏按钮 + GLWidget 拾取模式
 
+    // ── 截图 / 录像 ──
+    void onScreenshotRequested();
+    void onRecordStart();
+    void onRecordStop();
+    void onRecordTick();
+    void onRecordProcessFinished(int exitCode, QProcess::ExitStatus status);
+    QString detectFfmpeg() const;
+    QPair<int,int> targetRecordSize() const;
+    qint64 recordFrameBytes() const;
+    qint64 recordBacklogLimitBytes() const;
+
     GLWidget*              glWidget_        = nullptr;
     MonitorPanel*          monitorPanel_    = nullptr;
+    ExportPanel*           exportPanel_     = nullptr;
+
+    // ── 录像状态 ──
+    QProcess*  recordProcess_     = nullptr;
+    QTimer*    recordTimer_       = nullptr;
+    int        recordFrameCount_  = 0;
+    int        recordDroppedFrames_ = 0;
+    int        recordW_           = 0;
+    int        recordH_           = 0;
+    int        recordFps_         = 30;
+    int        recordMaxFrames_   = 0;
+    QElapsedTimer recordElapsed_;
+    QString    recordOutputPath_;
+    QString    ffmpegPath_;
     FEModelPanel*          feModelPanel_    = nullptr;
     PartsPanel*            partsPanel_      = nullptr;
     ResultPanel*           resultPanel_     = nullptr;

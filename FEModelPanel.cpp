@@ -10,6 +10,7 @@
 #include "FEMeshConverter.h"
 #include "FEProbe.h"
 #include "Theme.h"
+#include "StyleHelpers.h"
 
 #include <QVBoxLayout>
 #include <QPushButton>
@@ -80,11 +81,6 @@ void FEModelPanel::applyTheme(const Theme& t) {
         "  padding: 5px 10px; font-size: 12px; color: %2;"
         "  min-height: 24px; }"
         "QComboBox:hover { border-color: %6; }"
-        "QComboBox::drop-down { border: none; width: 24px; }"
-        "QComboBox::down-arrow {"
-        "  image: none; border-left: 5px solid transparent;"
-        "  border-right: 5px solid transparent;"
-        "  border-top: 6px solid %6; margin-right: 8px; }"
         "QComboBox QAbstractItemView {"
         "  background: %3; border: 1px solid %9; border-radius: 4px;"
         "  padding: 4px; selection-background-color: %9; color: %2;"
@@ -97,6 +93,9 @@ void FEModelPanel::applyTheme(const Theme& t) {
         "  background: %6; border-color: %6; }"
         "QCheckBox::indicator:hover { border-color: %6; }"
     ).arg(t.base, t.text, t.mantle, t.surface0, t.subtext0, t.green, t.subtext1, t.overlay0, t.surface1));
+
+    // 追加 SVG 箭头
+    setStyleSheet(styleSheet() + StyleHelpers::comboArrowStyle(t.green, t.surface1));
 
     if (searchBtn_) {
         searchBtn_->setStyleSheet(QString(

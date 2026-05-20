@@ -176,6 +176,7 @@ qt5_wrap_cpp(VIEWER_MOC_SRCS
     ResultPanel.h
     ControlPanel.h
     MonitorPanel.h
+    ExportPanel.h
 )
 
 add_executable(${PROJECT_NAME}
@@ -186,6 +187,7 @@ add_executable(${PROJECT_NAME}
     ResultPanel.cpp
     ControlPanel.cpp
     MonitorPanel.cpp
+    ExportPanel.cpp
     ${VIEWER_MOC_SRCS}
 )
 
@@ -255,6 +257,13 @@ install(FILES "${CMAKE_CURRENT_BINARY_DIR}/FERenderConfig.cmake"
 # ── 测试 ──
 
 include(CTest)
+
+# 常规测试仍由 CTest 的 BUILD_TESTING 控制。
+# 交互/内部实现类测试默认关闭，避免普通构建在不同 GUI/OpenGL 环境下被测试 target 拖垮。
+option(FEMODELVIEWER_BUILD_OPTIONAL_TESTS
+    "Build optional internal/GUI interaction test targets"
+    OFF
+)
 
 if(BUILD_TESTING)
     add_executable(test_result_mapper
@@ -352,15 +361,17 @@ if(BUILD_TESTING)
         COMMAND test_node_vertex_lookup
     )
 
-    add_executable(test_selection_id_filter
-        tests/test_selection_id_filter.cpp
-    )
-    target_include_directories(test_selection_id_filter PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}
-    )
-    add_test(NAME selection_id_filter
-        COMMAND test_selection_id_filter
-    )
+    if(FEMODELVIEWER_BUILD_OPTIONAL_TESTS)
+        add_executable(test_selection_id_filter
+            tests/test_selection_id_filter.cpp
+        )
+        target_include_directories(test_selection_id_filter PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}
+        )
+        add_test(NAME selection_id_filter
+            COMMAND test_selection_id_filter
+        )
+    endif()
 
     add_executable(test_label_layout
         tests/test_label_layout.cpp
@@ -437,6 +448,7 @@ if(BUILD_TESTING)
         ResultPanel.h
         ControlPanel.h
         MonitorPanel.h
+        ExportPanel.h
     )
     add_executable(test_main_window_linkage
         tests/test_main_window_linkage.cpp
@@ -446,6 +458,7 @@ if(BUILD_TESTING)
         ResultPanel.cpp
         ControlPanel.cpp
         MonitorPanel.cpp
+        ExportPanel.cpp
         ${TEST_MAIN_WINDOW_LINKAGE_MOC_SRCS}
     )
     set_target_properties(test_main_window_linkage PROPERTIES AUTOMOC OFF)
@@ -454,14 +467,16 @@ if(BUILD_TESTING)
         COMMAND test_main_window_linkage
     )
 
-    add_executable(test_pivot_interaction
-        tests/test_pivot_interaction.cpp
-    )
-    set_target_properties(test_pivot_interaction PROPERTIES AUTOMOC OFF)
-    target_link_libraries(test_pivot_interaction PRIVATE FERender Qt5::Core Qt5::Gui Qt5::Widgets)
-    add_test(NAME pivot_interaction
-        COMMAND test_pivot_interaction
-    )
+    if(FEMODELVIEWER_BUILD_OPTIONAL_TESTS)
+        add_executable(test_pivot_interaction
+            tests/test_pivot_interaction.cpp
+        )
+        set_target_properties(test_pivot_interaction PROPERTIES AUTOMOC OFF)
+        target_link_libraries(test_pivot_interaction PRIVATE FERender Qt5::Core Qt5::Gui Qt5::Widgets)
+        add_test(NAME pivot_interaction
+            COMMAND test_pivot_interaction
+        )
+    endif()
 
     add_test(NAME ferender_public_headers
         COMMAND ${CMAKE_COMMAND}

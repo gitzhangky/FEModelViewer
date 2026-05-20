@@ -5,6 +5,7 @@
 
 #include "ControlPanel.h"
 #include "Theme.h"
+#include "StyleHelpers.h"
 
 #include <QVBoxLayout>
 #include <QPushButton>
@@ -74,11 +75,6 @@ void ControlPanel::applyTheme(const Theme& t) {
         "  background: %4; border: 1px solid %13;"
         "  border-radius: 5px; padding: 5px 10px; color: %2; min-height: 24px; }"
         "QComboBox:hover { border-color: %8; }"
-        "QComboBox::drop-down { border: none; width: 24px; }"
-        "QComboBox::down-arrow {"
-        "  image: none; border-left: 5px solid transparent;"
-        "  border-right: 5px solid transparent;"
-        "  border-top: 6px solid %8; margin-right: 8px; }"
         "QComboBox QAbstractItemView {"
         "  background: %10; border: 1px solid %13; border-radius: 4px;"
         "  padding: 4px; selection-background-color: %8;"
@@ -86,6 +82,9 @@ void ControlPanel::applyTheme(const Theme& t) {
     ).arg(t.base, t.text, t.gradTop, t.surface0, t.surface2,
           t.gradTopHov, t.gradBotHov, t.blue, t.btnText)
      .arg(t.mantle, t.subtext0, t.subtext1, t.surface1));
+
+    // 追加 SVG 箭头
+    setStyleSheet(styleSheet() + StyleHelpers::comboArrowStyle(t.blue, t.surface2));
 }
 
 QGroupBox* ControlPanel::createShapeGroup() {
