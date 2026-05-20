@@ -34,6 +34,7 @@
 #include "Camera.h"
 #include "Geometry.h"
 #include "FEPickResult.h"
+#include "FEMeshConverter.h"   // FESurfaceCache：可见性变化时重建边界面
 #include "ferender_export.h"
 
 struct Theme;
@@ -62,6 +63,16 @@ public:
 
     /** @brief 设置要渲染的网格数据 */
     void setMesh(const Mesh& mesh);
+
+    /**
+     * @brief 设置表面缓存（面+单元邻接），启用"按可见集合重建边界面"
+     *
+     * 启用后，隐藏实体单元时会重新生成当前可见单元集合的边界面，
+     * 包括暴露出来的切口内壁；拓扑映射表（elemToPart/elemToNodes 等）
+     * 从缓存按全模型构建，保证隐藏/取消隐藏/拾取/部件着色均正确。
+     * 应在 setMesh 及各映射表设置之后调用。
+     */
+    void setSurfaceCache(const FESurfaceCache& cache);
 
     /** @brief 直接设置 per-vertex 颜色到 colorVbo_（用于云图） */
     void setVertexColors(const std::vector<float>& colors);
@@ -242,6 +253,11 @@ private:
     // 用 bgTopColor_/bgBotColor_ 重写背景渐变 VBO（需 GL 已初始化）。
     void uploadBackgroundVbo();
 
+    // 从表面缓存按全模型构建稳定的拓扑映射（elemToPart_/elemToNodes_ 等）。
+    void buildTopologyFromCache();
+    // 据当前可见性用缓存重建边界面网格 + 渲染映射，并触发重上传（保留相机/选中）。
+    void rebuildSurfaceFromCache();
+
     // ── paintGL 渲染子步骤 ──
     void rebuildPartVisibilityIbo();
     void renderBackground();
@@ -356,6 +372,11 @@ private:
     // 当前主题的背景预设（用于"恢复主题"）
     float themeBgTop_[3] = {0.38f, 0.45f, 0.58f};
     float themeBgBot_[3] = {0.68f, 0.74f, 0.82f};
+
+    // ── 表面缓存（按可见集合重建边界面，支持切口内壁）──
+    FESurfaceCache surfaceCache_;
+    bool           hasSurfaceCache_     = false;
+    bool           surfaceRebuildDirty_ = false;
 
     // ── 显示 / 投影 / 色谱状态 ──
     DisplayMode    displayMode_    = DisplayMode::SolidWireframe;

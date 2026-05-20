@@ -877,6 +877,23 @@ static FERenderData toRenderData(
     const ProgressCallback& progress = nullptr
 );
 
+// 一次性提取面 + 单元邻接，构建可复用的表面缓存
+// 之后用 buildRenderData 配合可见性谓词即可快速重建边界面
+static FESurfaceCache buildSurfaceCache(
+    const FEModel& model,
+    const std::vector<int>& elementIds,
+    const ProgressCallback& progress = nullptr
+);
+
+// 据表面缓存 + 可见性谓词重建渲染数据（当前可见单元集合的边界面）
+// 隐藏实体单元后会生成暴露出来的切口内壁面（法线/拾取均归属可见单元）
+// isElementVisible 为 nullptr 时视为全部可见，等价于外表面提取
+static FERenderData buildRenderData(
+    const FESurfaceCache& cache,
+    const std::function<bool(int)>& isElementVisible,
+    const ProgressCallback& progress = nullptr
+);
+
 // 带云图颜色的渲染数据包
 // Mesh 顶点格式变为 [pos(3) + normal(3) + color(3)]
 static FERenderData toColoredRenderData(
@@ -1009,6 +1026,7 @@ explicit GLWidget(QWidget* parent = nullptr);
 | 方法 | 说明 |
 |------|------|
 | `void setMesh(const Mesh& mesh)` | 设置要渲染的三角网格，触发 GPU 上传 |
+| `void setSurfaceCache(const FESurfaceCache& cache)` | 设置表面缓存，启用"按可见集合重建边界面"（隐藏实体单元后显示切口内壁）。应在 setMesh 及映射表设置之后调用 |
 | `void setVertexColors(const std::vector<float>& colors)` | 设置 per-vertex RGB 颜色（用于云图） |
 | `void setObjectColor(const glm::vec3& c)` | 设置统一物体颜色 |
 | `void setEdgeColor(const glm::vec3& c)` | 设置边线颜色（实体+线框 / 线框模式） |

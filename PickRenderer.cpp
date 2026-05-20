@@ -111,7 +111,7 @@ int PickRenderer::colorToId(unsigned char r, unsigned char g, unsigned char b) {
 
 glm::mat4 PickRenderer::buildPickMvp() const {
     float aspect = (w_.height() > 0) ? static_cast<float>(w_.width()) / w_.height() : 1.0f;
-    glm::mat4 proj = glm::perspective(glm::radians(45.0f), aspect,
+    glm::mat4 proj = w_.projectionMatrix(aspect,
         w_.cam_.distance * 0.01f, w_.cam_.distance * 10.0f);
     return proj * w_.cam_.viewMatrix();
 }
@@ -324,67 +324,87 @@ void PickRenderer::pickInRect(const QRect& rect, bool ctrlHeld) {
 
     int vertCount = static_cast<int>(w_.mesh_.vertices.size() / 6);
 
+    auto inside = [&](const glm::vec3& p) {
+        glm::vec4 c = mvp * glm::vec4(p, 1.0f);
+        if (c.w <= 0) return false;
+        float sx = c.x / c.w, sy = c.y / c.w;
+        return sx >= ndcL && sx <= ndcR && sy >= ndcB && sy <= ndcT;
+    };
+    // 有表面缓存时走"全单元节点投影 + 包含式"：单元所有节点都落在框内才选中，
+    // 从而能框到内部/被遮挡的实体单元（商软常见的 enclosed through-depth 框选）。
+    const bool useAll = w_.hasSurfaceCache_ && !w_.surfaceCache_.coords.empty()
+                        && !w_.elemToNodes_.empty();
+    // 单元形心落在框内即选中（through-depth）：比"所有节点入框"更直觉，
+    // 不会因表层/边缘单元未被完整框住而漏选，框一块即可整块选中。
+    auto centerInside = [&](const auto& nodes) {
+        glm::vec3 c(0.0f); int cnt = 0;
+        for (int nid : nodes) {
+            auto cit = w_.surfaceCache_.coords.find(nid);
+            if (cit != w_.surfaceCache_.coords.end()) { c += cit->second; ++cnt; }
+        }
+        return cnt > 0 && inside(c / static_cast<float>(cnt));
+    };
+
     if (w_.pickMode_ == PickMode::Node) {
-        std::unordered_set<int> addedNodes;
-        for (int vi = 0; vi < vertCount; ++vi) {
-            int nodeId = (vi < static_cast<int>(w_.vertexToNode_.size())) ? w_.vertexToNode_[vi] : vi;
-            if (nodeId < 0 || !w_.isNodeVisible(nodeId)) continue;
-            glm::vec4 wp(w_.mesh_.vertices[vi * 6],
-                         w_.mesh_.vertices[vi * 6 + 1],
-                         w_.mesh_.vertices[vi * 6 + 2], 1.0f);
-            glm::vec4 clip = mvp * wp;
-            if (clip.w <= 0) continue;
-            float sx = clip.x / clip.w;
-            float sy = clip.y / clip.w;
-            if (sx >= ndcL && sx <= ndcR && sy >= ndcB && sy <= ndcT) {
-                if (nodeId >= 0 && addedNodes.insert(nodeId).second)
+        if (useAll) {
+            for (const auto& [nodeId, pos] : w_.surfaceCache_.coords) {
+                if (nodeId < 0 || !w_.isNodeVisible(nodeId)) continue;
+                if (inside(pos)) w_.selection_.selectedNodes.insert(nodeId);
+            }
+        } else {
+            std::unordered_set<int> addedNodes;
+            for (int vi = 0; vi < vertCount; ++vi) {
+                int nodeId = (vi < static_cast<int>(w_.vertexToNode_.size())) ? w_.vertexToNode_[vi] : vi;
+                if (nodeId < 0 || !w_.isNodeVisible(nodeId)) continue;
+                glm::vec3 p(w_.mesh_.vertices[vi * 6], w_.mesh_.vertices[vi * 6 + 1], w_.mesh_.vertices[vi * 6 + 2]);
+                if (inside(p) && addedNodes.insert(nodeId).second)
                     w_.selection_.selectedNodes.insert(nodeId);
             }
         }
     } else if (w_.pickMode_ == PickMode::Part) {
         std::unordered_set<int> hitParts;
-        int triCount = static_cast<int>(w_.triToElem_.size());
-        for (int t = 0; t < triCount; ++t) {
-            if (!w_.isTriangleVisible(t)) continue;
-            bool anyInside = false;
-            for (int v = 0; v < 3; ++v) {
-                unsigned int vi = w_.mesh_.indices[t * 3 + v];
-                glm::vec4 wp(w_.mesh_.vertices[vi * 6],
-                             w_.mesh_.vertices[vi * 6 + 1],
-                             w_.mesh_.vertices[vi * 6 + 2], 1.0f);
-                glm::vec4 clip = mvp * wp;
-                if (clip.w <= 0) continue;
-                float sx = clip.x / clip.w;
-                float sy = clip.y / clip.w;
-                if (sx >= ndcL && sx <= ndcR && sy >= ndcB && sy <= ndcT) {
-                    anyInside = true; break;
-                }
+        if (useAll) {
+            for (const auto& [elemId, nodes] : w_.elemToNodes_) {
+                if (!w_.isElementVisible(elemId) || !centerInside(nodes)) continue;
+                auto pit = w_.elemToPart_.find(elemId);
+                if (pit != w_.elemToPart_.end()) hitParts.insert(pit->second);
             }
-            if (anyInside && t < static_cast<int>(w_.triToPart_.size()))
-                hitParts.insert(w_.triToPart_[t]);
+        } else {
+            int triCount = static_cast<int>(w_.triToElem_.size());
+            for (int t = 0; t < triCount; ++t) {
+                if (!w_.isTriangleVisible(t)) continue;
+                bool anyInside = false;
+                for (int v = 0; v < 3; ++v) {
+                    unsigned int vi = w_.mesh_.indices[t * 3 + v];
+                    glm::vec3 p(w_.mesh_.vertices[vi * 6], w_.mesh_.vertices[vi * 6 + 1], w_.mesh_.vertices[vi * 6 + 2]);
+                    if (inside(p)) { anyInside = true; break; }
+                }
+                if (anyInside && t < static_cast<int>(w_.triToPart_.size()))
+                    hitParts.insert(w_.triToPart_[t]);
+            }
         }
         for (int p : hitParts) selectPart(p);
     } else {
-        int triCount = static_cast<int>(w_.triToElem_.size());
-        for (int t = 0; t < triCount; ++t) {
-            if (!w_.isTriangleVisible(t)) continue;
-            int elemId = w_.triToElem_[t];
-            if (w_.selection_.isElementSelected(elemId)) continue;
-            bool anyInside = false;
-            for (int v = 0; v < 3; ++v) {
-                unsigned int vi = w_.mesh_.indices[t * 3 + v];
-                glm::vec4 wp(w_.mesh_.vertices[vi * 6],
-                             w_.mesh_.vertices[vi * 6 + 1],
-                             w_.mesh_.vertices[vi * 6 + 2], 1.0f);
-                glm::vec4 clip = mvp * wp;
-                if (clip.w <= 0) continue;
-                float sx = clip.x / clip.w;
-                float sy = clip.y / clip.w;
-                if (sx >= ndcL && sx <= ndcR && sy >= ndcB && sy <= ndcT) {
-                    anyInside = true; break;
-                }
+        if (useAll) {
+            for (const auto& [elemId, nodes] : w_.elemToNodes_) {
+                if (w_.selection_.isElementSelected(elemId)) continue;
+                if (!w_.isElementVisible(elemId) || !centerInside(nodes)) continue;
+                w_.selection_.selectedElements.insert(elemId);
             }
-            if (anyInside) w_.selection_.selectedElements.insert(elemId);
+        } else {
+            int triCount = static_cast<int>(w_.triToElem_.size());
+            for (int t = 0; t < triCount; ++t) {
+                if (!w_.isTriangleVisible(t)) continue;
+                int elemId = w_.triToElem_[t];
+                if (w_.selection_.isElementSelected(elemId)) continue;
+                bool anyInside = false;
+                for (int v = 0; v < 3; ++v) {
+                    unsigned int vi = w_.mesh_.indices[t * 3 + v];
+                    glm::vec3 p(w_.mesh_.vertices[vi * 6], w_.mesh_.vertices[vi * 6 + 1], w_.mesh_.vertices[vi * 6 + 2]);
+                    if (inside(p)) { anyInside = true; break; }
+                }
+                if (anyInside) w_.selection_.selectedElements.insert(elemId);
+            }
         }
     }
 
@@ -467,60 +487,84 @@ void PickRenderer::deselectInRect(const QRect& rect) {
 
     int vertCount = static_cast<int>(w_.mesh_.vertices.size() / 6);
 
+    auto inside = [&](const glm::vec3& p) {
+        glm::vec4 c = mvp * glm::vec4(p, 1.0f);
+        if (c.w <= 0) return false;
+        float sx = c.x / c.w, sy = c.y / c.w;
+        return sx >= ndcL && sx <= ndcR && sy >= ndcB && sy <= ndcT;
+    };
+    const bool useAll = w_.hasSurfaceCache_ && !w_.surfaceCache_.coords.empty()
+                        && !w_.elemToNodes_.empty();
+    // 单元形心落在框内即选中（through-depth）：比"所有节点入框"更直觉，
+    // 不会因表层/边缘单元未被完整框住而漏选，框一块即可整块选中。
+    auto centerInside = [&](const auto& nodes) {
+        glm::vec3 c(0.0f); int cnt = 0;
+        for (int nid : nodes) {
+            auto cit = w_.surfaceCache_.coords.find(nid);
+            if (cit != w_.surfaceCache_.coords.end()) { c += cit->second; ++cnt; }
+        }
+        return cnt > 0 && inside(c / static_cast<float>(cnt));
+    };
+
     if (w_.pickMode_ == PickMode::Node) {
-        std::unordered_set<int> removedNodes;
-        for (int vi = 0; vi < vertCount; ++vi) {
-            int nodeId = (vi < static_cast<int>(w_.vertexToNode_.size())) ? w_.vertexToNode_[vi] : vi;
-            if (nodeId < 0 || !w_.isNodeVisible(nodeId)) continue;
-            glm::vec4 wp(w_.mesh_.vertices[vi * 6], w_.mesh_.vertices[vi * 6 + 1],
-                         w_.mesh_.vertices[vi * 6 + 2], 1.0f);
-            glm::vec4 clip = mvp * wp;
-            if (clip.w <= 0) continue;
-            float sx = clip.x / clip.w;
-            float sy = clip.y / clip.w;
-            if (sx >= ndcL && sx <= ndcR && sy >= ndcB && sy <= ndcT) {
-                if (nodeId >= 0 && removedNodes.insert(nodeId).second)
+        if (useAll) {
+            for (const auto& [nodeId, pos] : w_.surfaceCache_.coords) {
+                if (nodeId < 0) continue;
+                if (inside(pos)) w_.selection_.selectedNodes.erase(nodeId);
+            }
+        } else {
+            std::unordered_set<int> removedNodes;
+            for (int vi = 0; vi < vertCount; ++vi) {
+                int nodeId = (vi < static_cast<int>(w_.vertexToNode_.size())) ? w_.vertexToNode_[vi] : vi;
+                if (nodeId < 0 || !w_.isNodeVisible(nodeId)) continue;
+                glm::vec3 p(w_.mesh_.vertices[vi * 6], w_.mesh_.vertices[vi * 6 + 1], w_.mesh_.vertices[vi * 6 + 2]);
+                if (inside(p) && removedNodes.insert(nodeId).second)
                     w_.selection_.selectedNodes.erase(nodeId);
             }
         }
     } else if (w_.pickMode_ == PickMode::Part) {
         std::unordered_set<int> hitParts;
-        int triCount = static_cast<int>(w_.triToElem_.size());
-        for (int t = 0; t < triCount; ++t) {
-            if (!w_.isTriangleVisible(t)) continue;
-            bool anyInside = false;
-            for (int v = 0; v < 3; ++v) {
-                unsigned int vi = w_.mesh_.indices[t * 3 + v];
-                glm::vec4 wp(w_.mesh_.vertices[vi * 6], w_.mesh_.vertices[vi * 6 + 1],
-                             w_.mesh_.vertices[vi * 6 + 2], 1.0f);
-                glm::vec4 clip = mvp * wp;
-                if (clip.w <= 0) continue;
-                float sx = clip.x / clip.w;
-                float sy = clip.y / clip.w;
-                if (sx >= ndcL && sx <= ndcR && sy >= ndcB && sy <= ndcT) { anyInside = true; break; }
+        if (useAll) {
+            for (const auto& [elemId, nodes] : w_.elemToNodes_) {
+                if (!centerInside(nodes)) continue;
+                auto pit = w_.elemToPart_.find(elemId);
+                if (pit != w_.elemToPart_.end()) hitParts.insert(pit->second);
             }
-            if (anyInside && t < static_cast<int>(w_.triToPart_.size()))
-                hitParts.insert(w_.triToPart_[t]);
+        } else {
+            int triCount = static_cast<int>(w_.triToElem_.size());
+            for (int t = 0; t < triCount; ++t) {
+                if (!w_.isTriangleVisible(t)) continue;
+                bool anyInside = false;
+                for (int v = 0; v < 3; ++v) {
+                    unsigned int vi = w_.mesh_.indices[t * 3 + v];
+                    glm::vec3 p(w_.mesh_.vertices[vi * 6], w_.mesh_.vertices[vi * 6 + 1], w_.mesh_.vertices[vi * 6 + 2]);
+                    if (inside(p)) { anyInside = true; break; }
+                }
+                if (anyInside && t < static_cast<int>(w_.triToPart_.size()))
+                    hitParts.insert(w_.triToPart_[t]);
+            }
         }
         for (int p : hitParts) deselectPart(p);
     } else {
-        int triCount = static_cast<int>(w_.triToElem_.size());
-        for (int t = 0; t < triCount; ++t) {
-            if (!w_.isTriangleVisible(t)) continue;
-            int elemId = w_.triToElem_[t];
-            if (!w_.selection_.isElementSelected(elemId)) continue;
-            bool anyInside = false;
-            for (int v = 0; v < 3; ++v) {
-                unsigned int vi = w_.mesh_.indices[t * 3 + v];
-                glm::vec4 wp(w_.mesh_.vertices[vi * 6], w_.mesh_.vertices[vi * 6 + 1],
-                             w_.mesh_.vertices[vi * 6 + 2], 1.0f);
-                glm::vec4 clip = mvp * wp;
-                if (clip.w <= 0) continue;
-                float sx = clip.x / clip.w;
-                float sy = clip.y / clip.w;
-                if (sx >= ndcL && sx <= ndcR && sy >= ndcB && sy <= ndcT) { anyInside = true; break; }
+        if (useAll) {
+            for (const auto& [elemId, nodes] : w_.elemToNodes_) {
+                if (!w_.selection_.isElementSelected(elemId)) continue;
+                if (centerInside(nodes)) w_.selection_.selectedElements.erase(elemId);
             }
-            if (anyInside) w_.selection_.selectedElements.erase(elemId);
+        } else {
+            int triCount = static_cast<int>(w_.triToElem_.size());
+            for (int t = 0; t < triCount; ++t) {
+                if (!w_.isTriangleVisible(t)) continue;
+                int elemId = w_.triToElem_[t];
+                if (!w_.selection_.isElementSelected(elemId)) continue;
+                bool anyInside = false;
+                for (int v = 0; v < 3; ++v) {
+                    unsigned int vi = w_.mesh_.indices[t * 3 + v];
+                    glm::vec3 p(w_.mesh_.vertices[vi * 6], w_.mesh_.vertices[vi * 6 + 1], w_.mesh_.vertices[vi * 6 + 2]);
+                    if (inside(p)) { anyInside = true; break; }
+                }
+                if (anyInside) w_.selection_.selectedElements.erase(elemId);
+            }
         }
     }
 

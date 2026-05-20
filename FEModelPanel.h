@@ -22,6 +22,7 @@
 
 #include "FEModel.h"
 #include "FERenderData.h"
+#include "FEMeshConverter.h"   // FESurfaceCache
 #include "FEPickResult.h"
 #include "FEGroup.h"
 #include "FEResultData.h"
@@ -75,6 +76,9 @@ signals:
                       const std::vector<FEElementSet>& elementSets,
                       const std::vector<int>& triToPart, const std::vector<int>& edgeToPart);
 
+    /** @brief 表面缓存就绪（供 GLWidget 启用按可见集合重建边界面） */
+    void surfaceCacheReady(const FESurfaceCache& cache);
+
     /** @brief 加载进度更新 (0-100, 描述文字) */
     void loadProgress(int percent, const QString& text);
 
@@ -114,6 +118,7 @@ private:
     // ── 数据 ──
     FEModel currentModel_;
     FERenderData currentRenderData_;
+    FESurfaceCache currentSurfaceCache_;
 
     // ── 信息显示标签 ──
     QLabel* nodeCountLabel_     = nullptr;

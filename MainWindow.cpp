@@ -248,6 +248,10 @@ MainWindow::MainWindow() {
         }
     });
 
+    // 表面缓存 → 启用"按可见集合重建边界面"（隐藏实体单元可见切口内壁）
+    connect(feModelPanel_, &FEModelPanel::surfaceCacheReady,
+            glWidget_, &GLWidget::setSurfaceCache);
+
     monitorPanel_->bindToWidget(glWidget_);
 
     // ── 导出面板连接 ──

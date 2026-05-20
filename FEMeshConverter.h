@@ -65,10 +65,38 @@
 #include "FERenderData.h"
 #include "Geometry.h"
 #include <functional>
+#include <map>
+#include <unordered_map>
+#include <array>
+#include <vector>
+#include <glm/glm.hpp>
 
 #include "ferender_export.h"
 
 using ProgressCallback = std::function<void(int percent)>;
+
+/**
+ * @brief 表面提取缓存：保存去重后的面 + 单元邻接关系 + 节点坐标
+ *
+ * 一次性提取所有面及其相邻单元，之后可在可见性变化时快速重建"当前可见
+ * 单元集合的边界面"——包括隐藏单元后暴露出来的切口面，而无需重跑昂贵的
+ * extractFaces。buildRenderData 据此挑选"相邻单元恰好一个可见"的面。
+ */
+struct FERENDER_EXPORT FESurfaceCache {
+    struct FaceInfo {
+        int elemId;                 // 面所属单元 ID
+        int faceIndex;              // 面在单元内的序号
+        std::vector<int> faceNodes; // 节点 ID（原始顺序，外法线对应 elemId）
+        bool is2D;                  // 是否来自 2D 壳单元
+    };
+    // key = 排序后的节点 ID 列表；value = 共享该面的所有单元记录（流形时 1~2 个）
+    std::map<std::vector<int>, std::vector<FaceInfo>> faceMap;
+    std::unordered_map<int, glm::vec3> coords;   // nodeId → 坐标
+    std::unordered_map<int, int> elemToPart;     // 单元 → 部件索引
+    std::vector<std::array<int, 3>> lineElems;   // 1D 线单元 {a, b, elemId}
+
+    bool empty() const { return faceMap.empty() && lineElems.empty(); }
+};
 
 class FERENDER_EXPORT FEMeshConverter {
 public:
@@ -103,6 +131,31 @@ public:
      * 映射表只包含指定单元的信息。
      */
     static FERenderData toRenderData(const FEModel& model, const std::vector<int>& elementIds, const ProgressCallback& progress = nullptr);
+
+    /**
+     * @brief 一次性提取面+邻接关系，构建可复用的表面缓存
+     *
+     * 与 toRenderData 共享同一套面提取逻辑，但只到"去重面 + 邻接"为止。
+     * 之后用 buildRenderData 配合可见性谓词即可快速重建边界面。
+     */
+    static FESurfaceCache buildSurfaceCache(const FEModel& model,
+                                            const std::vector<int>& elementIds,
+                                            const ProgressCallback& progress = nullptr);
+
+    /**
+     * @brief 据表面缓存 + 可见性谓词重建渲染数据（当前可见单元集合的边界面）
+     * @param cache           buildSurfaceCache 的输出
+     * @param isElementVisible 判断某单元当前是否可见；nullptr 视为全部可见
+     *
+     * 选择规则：
+     *   - 2D 壳面：其单元可见即渲染
+     *   - 3D 面：相邻单元中"恰好一个可见"才渲染（外表面=该单元可见；
+     *     切口面=隐藏侧不画、可见侧画），朝向取可见单元的外法线
+     * 由此隐藏实体单元后，暴露的内壁面会被正确生成（法线/拾取均归属可见单元）。
+     */
+    static FERenderData buildRenderData(const FESurfaceCache& cache,
+                                        const std::function<bool(int)>& isElementVisible,
+                                        const ProgressCallback& progress = nullptr);
 
     /**
      * @brief 将 FEM 模型转换为带云图颜色的渲染数据包

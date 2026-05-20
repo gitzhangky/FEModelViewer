@@ -297,6 +297,78 @@ void GLWidget::setMesh(const Mesh& mesh) {
     update();
 }
 
+void GLWidget::setSurfaceCache(const FESurfaceCache& cache) {
+    surfaceCache_ = cache;
+    hasSurfaceCache_ = !cache.empty();
+    if (hasSurfaceCache_) buildTopologyFromCache();
+}
+
+void GLWidget::buildTopologyFromCache() {
+    // 拓扑映射按全模型构建（含被隐藏/内部单元），不随当前可见网格变化，
+    // 保证隐藏/取消隐藏、节点隐藏、拾取、部件着色始终正确。
+    elemToPart_ = surfaceCache_.elemToPart;
+
+    int numParts = 0;
+    for (const auto& [eid, p] : elemToPart_) numParts = std::max(numParts, p + 1);
+    partElementIds_.assign(numParts, {});
+    for (const auto& [eid, p] : elemToPart_)
+        if (p >= 0 && p < numParts) partElementIds_[p].push_back(eid);
+
+    elemToNodes_.clear();
+    nodeToElems_.clear();
+    for (const auto& [key, infos] : surfaceCache_.faceMap)
+        for (const auto& fi : infos)
+            for (int nid : fi.faceNodes) {
+                elemToNodes_[fi.elemId].insert(nid);
+                nodeToElems_[nid].insert(fi.elemId);
+            }
+    for (const auto& le : surfaceCache_.lineElems) {
+        elemToNodes_[le[2]].insert(le[0]); elemToNodes_[le[2]].insert(le[1]);
+        nodeToElems_[le[0]].insert(le[2]); nodeToElems_[le[1]].insert(le[2]);
+    }
+}
+
+void GLWidget::rebuildSurfaceFromCache() {
+    FERenderData rd = FEMeshConverter::buildRenderData(
+        surfaceCache_, [this](int e) { return isElementVisible(e); });
+
+    mesh_ = rd.mesh;
+    allTriIndices_  = rd.mesh.indices;
+    allEdgeIndices_ = rd.mesh.edgeIndices;
+    triToElem_    = rd.triangleToElement;
+    vertexToNode_ = rd.vertexToNode;
+    triToPart_    = rd.triangleToPart;
+    edgeToPart_   = rd.edgeToPart;
+
+    // 渲染相关映射（随网格变化），拓扑映射保持缓存构建的全模型版本
+    nodeToFirstVertex_ = NodeVertexLookup::buildFirstVertexByNode(vertexToNode_);
+
+    int numParts = static_cast<int>(partColors_.size());
+    for (int p : triToPart_) if (p >= 0) numParts = std::max(numParts, p + 1);
+    if (static_cast<int>(partColors_.size()) < numParts) {
+        partColors_.resize(numParts);
+        for (int i = 0; i < numParts; ++i)
+            partColors_[i] = kPartPalette[i % kPartPaletteSize];
+    }
+    partTriangles_.assign(numParts, {});
+    for (int t = 0; t < static_cast<int>(triToPart_.size()); ++t) {
+        int p = triToPart_[t];
+        if (p >= 0 && p < numParts) partTriangles_[p].push_back(t);
+    }
+
+    rebuildRenderEdgeMaps();
+    selectionRenderer_->invalidatePartEdgeCache();
+    selectionRenderer_->markEdgeAdjacencyDirty();
+    selectionRenderer_->markSelectionDirty();
+
+    // 触发下游上传/过滤（在缓存模式下过滤为恒等，但负责上传 IBO/TBO/边线）
+    needsUpload_         = true;
+    needsColorUpload_    = true;
+    triPartDirty_        = true;
+    partVisibilityDirty_ = true;
+    edgeVisibilityDirty_ = true;
+}
+
 void GLWidget::setObjectColor(const glm::vec3& c) { color_ = c; update(); }
 
 void GLWidget::setEdgeColor(const glm::vec3& c) { edgeColor_ = c; update(); }
@@ -485,8 +557,13 @@ void GLWidget::rebuildRenderEdgeMaps() {
 }
 
 void GLWidget::markVisibilityDirty() {
-    partVisibilityDirty_ = true;
-    edgeVisibilityDirty_ = true;
+    if (hasSurfaceCache_) {
+        // 缓存模式：重建当前可见集合的边界面（含切口内壁）
+        surfaceRebuildDirty_ = true;
+    } else {
+        partVisibilityDirty_ = true;
+        edgeVisibilityDirty_ = true;
+    }
     selectionRenderer_->markSelectionDirty();
     update();
 }
@@ -857,6 +934,10 @@ void GLWidget::paintGL() {
 
     pickRenderer_->processDeferredPicks();
 
+    if (hasSurfaceCache_ && surfaceRebuildDirty_) {
+        rebuildSurfaceFromCache();
+        surfaceRebuildDirty_ = false;
+    }
     if (needsUpload_) uploadMesh();
     rebuildPartVisibilityIbo();
     if (needsColorUpload_) uploadColors();

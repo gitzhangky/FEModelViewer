@@ -382,6 +382,238 @@ FERenderData FEMeshConverter::toRenderData(const FEModel& model, const std::vect
     return result;
 }
 
+// ════════════════════════════════════════════════════════════
+// 表面缓存 + 按可见性重建（支持隐藏实体单元后显示切口内壁）
+// ════════════════════════════════════════════════════════════
+
+FESurfaceCache FEMeshConverter::buildSurfaceCache(const FEModel& model,
+                                                  const std::vector<int>& elementIds,
+                                                  const ProgressCallback& progress) {
+    FESurfaceCache cache;
+    const int totalElems = static_cast<int>(elementIds.size());
+    const int reportInterval = std::max(1, totalElems / 100);
+    int processed = 0;
+
+    for (int elemId : elementIds) {
+        auto it = model.elements.find(elemId);
+        if (it == model.elements.end()) continue;
+        const FEElement& elem = it->second;
+        int dim = elementDimension(elem.type);
+
+        if (dim == 3) {
+            auto faces = extractFaces(elem);
+            for (int fi = 0; fi < static_cast<int>(faces.size()); ++fi) {
+                std::vector<int> sortedKey = faces[fi];
+                std::sort(sortedKey.begin(), sortedKey.end());
+                cache.faceMap[sortedKey].push_back({elemId, fi, faces[fi], false});
+            }
+        } else if (dim == 2) {
+            int cc = elementCornerNodeCount(elem.type);
+            std::vector<int> faceNodes(cc);
+            for (int i = 0; i < cc; ++i) faceNodes[i] = elem.nodeIds[i];
+            std::vector<int> sortedKey = faceNodes;
+            std::sort(sortedKey.begin(), sortedKey.end());
+            cache.faceMap[sortedKey].push_back({elemId, 0, faceNodes, true});
+        } else if (dim == 1 && elem.nodeIds.size() >= 2) {
+            cache.lineElems.push_back({elem.nodeIds[0], elem.nodeIds[1], elemId});
+        }
+
+        if (progress && (++processed % reportInterval == 0))
+            progress(processed * 40 / std::max(1, totalElems));
+    }
+
+    // 收集所有相关节点坐标，使重建不再依赖 FEModel
+    auto addCoord = [&](int nid) {
+        if (cache.coords.find(nid) == cache.coords.end()) {
+            const glm::vec3* p = model.nodeCoords(nid);
+            if (p) cache.coords[nid] = *p;
+        }
+    };
+    for (const auto& [key, infos] : cache.faceMap)
+        for (const auto& fi : infos)
+            for (int nid : fi.faceNodes) addCoord(nid);
+    for (const auto& le : cache.lineElems) { addCoord(le[0]); addCoord(le[1]); }
+
+    for (int i = 0; i < static_cast<int>(model.parts.size()); ++i)
+        for (int eid : model.parts[i].elementIds)
+            cache.elemToPart[eid] = i;
+
+    if (progress) progress(40);
+    return cache;
+}
+
+FERenderData FEMeshConverter::buildRenderData(const FESurfaceCache& cache,
+                                              const std::function<bool(int)>& isElementVisible,
+                                              const ProgressCallback& progress) {
+    FERenderData result;
+    auto vis = [&](int e) { return e >= 0 && (!isElementVisible || isElementVisible(e)); };
+    auto coord = [&](int nid) -> const glm::vec3* {
+        auto it = cache.coords.find(nid);
+        return it != cache.coords.end() ? &it->second : nullptr;
+    };
+
+    // ── Step A: 选出当前可见集合的边界面 ──
+    struct RenderFace { std::vector<int> faceNodes; int elemId; int faceIndex; };
+    std::vector<RenderFace> renderFaces;
+    renderFaces.reserve(cache.faceMap.size());
+
+    for (const auto& [key, infos] : cache.faceMap) {
+        bool any2D = false;
+        for (const auto& fi : infos) if (fi.is2D) { any2D = true; break; }
+        if (any2D) {
+            // 2D 壳：单元可见即渲染
+            for (const auto& fi : infos)
+                if (fi.is2D && vis(fi.elemId)) {
+                    renderFaces.push_back({fi.faceNodes, fi.elemId, fi.faceIndex});
+                    break;
+                }
+            continue;
+        }
+        // 3D：相邻单元恰好一个可见 → 渲染（外法线取该可见单元，切口面自然朝向空腔）
+        int visIdx = -1, visCount = 0;
+        for (int i = 0; i < static_cast<int>(infos.size()); ++i)
+            if (vis(infos[i].elemId)) { ++visCount; visIdx = i; }
+        if (visCount == 1) {
+            const auto& fi = infos[visIdx];
+            renderFaces.push_back({fi.faceNodes, fi.elemId, fi.faceIndex});
+        }
+    }
+    if (progress) progress(50);
+
+    // ── Step B: 共享顶点 + 三角化 + 面积加权法线 ──
+    std::unordered_map<int, unsigned int> nodeToVertex;
+    for (const auto& rf : renderFaces)
+        for (int nid : rf.faceNodes)
+            if (nodeToVertex.find(nid) == nodeToVertex.end())
+                nodeToVertex[nid] = static_cast<unsigned int>(nodeToVertex.size());
+
+    int vertCount = static_cast<int>(nodeToVertex.size());
+    result.mesh.vertices.resize(vertCount * 6, 0.0f);
+    result.vertexToNode.resize(vertCount, -1);
+    for (const auto& [nid, vi] : nodeToVertex) {
+        const glm::vec3* p = coord(nid);
+        if (p) {
+            result.mesh.vertices[vi * 6 + 0] = p->x;
+            result.mesh.vertices[vi * 6 + 1] = p->y;
+            result.mesh.vertices[vi * 6 + 2] = p->z;
+        }
+        result.vertexToNode[vi] = nid;
+    }
+
+    for (const auto& rf : renderFaces) {
+        int n = static_cast<int>(rf.faceNodes.size());
+        if (n < 3) continue;
+        unsigned int vi0 = nodeToVertex[rf.faceNodes[0]];
+        for (int i = 1; i < n - 1; ++i) {
+            unsigned int vi1 = nodeToVertex[rf.faceNodes[i]];
+            unsigned int vi2 = nodeToVertex[rf.faceNodes[i + 1]];
+            result.mesh.indices.push_back(vi0);
+            result.mesh.indices.push_back(vi1);
+            result.mesh.indices.push_back(vi2);
+            result.triangleToElement.push_back(rf.elemId);
+            result.triangleToFace.push_back(rf.faceIndex);
+
+            glm::vec3 p0(result.mesh.vertices[vi0 * 6], result.mesh.vertices[vi0 * 6 + 1], result.mesh.vertices[vi0 * 6 + 2]);
+            glm::vec3 p1(result.mesh.vertices[vi1 * 6], result.mesh.vertices[vi1 * 6 + 1], result.mesh.vertices[vi1 * 6 + 2]);
+            glm::vec3 p2(result.mesh.vertices[vi2 * 6], result.mesh.vertices[vi2 * 6 + 1], result.mesh.vertices[vi2 * 6 + 2]);
+            glm::vec3 fn = glm::cross(p1 - p0, p2 - p0);
+            for (unsigned int vi : {vi0, vi1, vi2}) {
+                result.mesh.vertices[vi * 6 + 3] += fn.x;
+                result.mesh.vertices[vi * 6 + 4] += fn.y;
+                result.mesh.vertices[vi * 6 + 5] += fn.z;
+            }
+        }
+    }
+    for (int v = 0; v < vertCount; ++v) {
+        float nx = result.mesh.vertices[v * 6 + 3];
+        float ny = result.mesh.vertices[v * 6 + 4];
+        float nz = result.mesh.vertices[v * 6 + 5];
+        float len = std::sqrt(nx * nx + ny * ny + nz * nz);
+        if (len > 1e-8f) {
+            result.mesh.vertices[v * 6 + 3] = nx / len;
+            result.mesh.vertices[v * 6 + 4] = ny / len;
+            result.mesh.vertices[v * 6 + 5] = nz / len;
+        } else {
+            result.mesh.vertices[v * 6 + 5] = 1.0f;
+        }
+    }
+    if (progress) progress(70);
+
+    // ── Step C: 边界面边线（普通线框，去重）+ 可见 1D 线单元 ──
+    {
+        std::map<std::pair<int, int>, int> edgeToElemMap;
+        for (const auto& rf : renderFaces) {
+            int n = static_cast<int>(rf.faceNodes.size());
+            for (int i = 0; i < n; ++i) {
+                int a = rf.faceNodes[i], b = rf.faceNodes[(i + 1) % n];
+                edgeToElemMap.emplace(std::make_pair(std::min(a, b), std::max(a, b)), rf.elemId);
+            }
+        }
+        for (const auto& le : cache.lineElems) {
+            if (!vis(le[2])) continue;
+            edgeToElemMap.emplace(std::make_pair(std::min(le[0], le[1]), std::max(le[0], le[1])), le[2]);
+        }
+        for (const auto& [edge, elemId] : edgeToElemMap) {
+            const glm::vec3* pa = coord(edge.first);
+            const glm::vec3* pb = coord(edge.second);
+            if (!pa || !pb) continue;
+            unsigned int idx = static_cast<unsigned int>(result.mesh.edgeVertices.size() / 3);
+            result.mesh.edgeVertices.push_back(pa->x); result.mesh.edgeVertices.push_back(pa->y); result.mesh.edgeVertices.push_back(pa->z);
+            result.mesh.edgeVertices.push_back(pb->x); result.mesh.edgeVertices.push_back(pb->y); result.mesh.edgeVertices.push_back(pb->z);
+            result.mesh.edgeIndices.push_back(idx);
+            result.mesh.edgeIndices.push_back(idx + 1);
+            result.mesh.edgeToElement.push_back(elemId);
+        }
+    }
+
+    // ── Step D: 完整单元边线（不去重跨单元，带归属，用于选中高亮）──
+    {
+        std::unordered_map<int, std::set<std::pair<int, int>>> perElem;
+        for (const auto& [key, infos] : cache.faceMap)
+            for (const auto& fi : infos) {
+                if (!vis(fi.elemId)) continue;
+                int n = static_cast<int>(fi.faceNodes.size());
+                for (int i = 0; i < n; ++i) {
+                    int a = fi.faceNodes[i], b = fi.faceNodes[(i + 1) % n];
+                    perElem[fi.elemId].insert({std::min(a, b), std::max(a, b)});
+                }
+            }
+        for (const auto& le : cache.lineElems)
+            if (vis(le[2])) perElem[le[2]].insert({std::min(le[0], le[1]), std::max(le[0], le[1])});
+
+        for (const auto& [elemId, edges] : perElem) {
+            for (const auto& [a, b] : edges) {
+                const glm::vec3* pa = coord(a);
+                const glm::vec3* pb = coord(b);
+                if (!pa || !pb) continue;
+                result.mesh.elemEdgeVertices.push_back(pa->x); result.mesh.elemEdgeVertices.push_back(pa->y); result.mesh.elemEdgeVertices.push_back(pa->z);
+                result.mesh.elemEdgeVertices.push_back(pb->x); result.mesh.elemEdgeVertices.push_back(pb->y); result.mesh.elemEdgeVertices.push_back(pb->z);
+                result.mesh.elemEdgeToElement.push_back(elemId);
+                result.mesh.elemEdgeNodeIds.push_back({a, b});
+            }
+        }
+    }
+
+    // ── 部件映射 ──
+    if (!cache.elemToPart.empty()) {
+        int triCount = static_cast<int>(result.triangleToElement.size());
+        result.triangleToPart.resize(triCount, -1);
+        for (int t = 0; t < triCount; ++t) {
+            auto it = cache.elemToPart.find(result.triangleToElement[t]);
+            if (it != cache.elemToPart.end()) result.triangleToPart[t] = it->second;
+        }
+        int edgeCount = static_cast<int>(result.mesh.edgeToElement.size());
+        result.edgeToPart.resize(edgeCount, -1);
+        for (int e = 0; e < edgeCount; ++e) {
+            auto it = cache.elemToPart.find(result.mesh.edgeToElement[e]);
+            if (it != cache.elemToPart.end()) result.edgeToPart[e] = it->second;
+        }
+    }
+    if (progress) progress(100);
+
+    return result;
+}
+
 /**
  * @brief 将 FEM 模型转换为带云图颜色的渲染数据包
  *

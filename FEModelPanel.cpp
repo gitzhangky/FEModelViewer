@@ -203,6 +203,7 @@ void FEModelPanel::loadModelFromPath(const QString& path) {
     bool workerOk = false;
     FEModel           resultModel;
     FERenderData      resultRender;
+    FESurfaceCache    resultCache;
 
     QThread* worker = QThread::create([&]() {
         phase.store(0);
@@ -232,8 +233,16 @@ void FEModelPanel::loadModelFromPath(const QString& path) {
         targetVal.store(500);
 
         phase.store(1);
-        resultRender = FEMeshConverter::toRenderData(resultModel, [&](int pct) {
-            targetVal.store(500 + pct * 450 / 100);
+        // 先构建面+邻接缓存（一次性提取），再据此生成初始边界面；
+        // 缓存交给 GLWidget，隐藏单元时可快速重建含切口内壁的边界面。
+        std::vector<int> allIds;
+        allIds.reserve(resultModel.elements.size());
+        for (const auto& [id, elem] : resultModel.elements) allIds.push_back(id);
+        resultCache = FEMeshConverter::buildSurfaceCache(resultModel, allIds, [&](int pct) {
+            targetVal.store(500 + pct * 200 / 100);
+        });
+        resultRender = FEMeshConverter::buildRenderData(resultCache, nullptr, [&](int pct) {
+            targetVal.store(700 + pct * 250 / 100);
         });
         targetVal.store(950);
         phase.store(2);
@@ -277,6 +286,7 @@ void FEModelPanel::loadModelFromPath(const QString& path) {
 
     currentModel_ = resultModel;
     currentRenderData_ = resultRender;
+    currentSurfaceCache_ = std::move(resultCache);
 
     // 收尾
     emit loadProgress(100, "正在更新显示...");
@@ -289,6 +299,9 @@ void FEModelPanel::loadModelFromPath(const QString& path) {
     emit partsChanged(QString::fromStdString(currentModel_.name), currentModel_.parts,
                       currentModel_.nodeSets, currentModel_.elementSets,
                       currentRenderData_.triangleToPart, currentRenderData_.edgeToPart);
+
+    // 网格与映射表就绪后再交付表面缓存，使 GLWidget 用全模型拓扑覆盖
+    emit surfaceCacheReady(currentSurfaceCache_);
 
     emit loadProgress(0, "");
     emit loadFinished(true,
