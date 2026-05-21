@@ -995,6 +995,9 @@ void pan(float dx, float dy);
 
 // 缩放：delta 为滚轮增量（正值放大），限制在 [minDist, maxDist]
 void zoom(float delta);
+
+// 标准视图：前 / 后 / 左 / 右 / 上 / 下
+void setStandardView(StandardView view);
 ```
 
 #### 使用示例
@@ -1058,6 +1061,7 @@ explicit GLWidget(QWidget* parent = nullptr);
 | 方法 | 说明 |
 |------|------|
 | `void fitToModel(const glm::vec3& center, float size)` | 自适应缩放，将模型居中并适配视口 |
+| `void setStandardView(StandardView view)` | 切换到标准视图（前/后/左/右/上/下），保持当前 target 和 distance |
 
 #### 色标控制
 
@@ -1201,6 +1205,7 @@ enum class PickMode {
 enum class DisplayMode { Solid, Wireframe, SolidWireframe };  // 实体 / 线框 / 实体+线框
 enum class ProjectionMode { Perspective, Orthographic };       // 透视 / 正交
 enum class FERenderColormap { Jet, Grayscale, CoolWarm };      // 云图色谱（与 scene.frag 的 uColormap 一致）
+enum class StandardView { Front, Back, Left, Right, Top, Bottom }; // 六个标准视图
 ```
 
 ### 5.2 FEPickResult — 拾取结果

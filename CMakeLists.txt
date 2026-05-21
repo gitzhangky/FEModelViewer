@@ -299,6 +299,14 @@ if(BUILD_TESTING)
         COMMAND test_deformation
     )
 
+    add_executable(test_camera_views
+        tests/test_camera_views.cpp
+    )
+    target_link_libraries(test_camera_views PRIVATE FERender)
+    add_test(NAME camera_views
+        COMMAND test_camera_views
+    )
+
     add_executable(test_probe
         tests/test_probe.cpp
     )

@@ -657,6 +657,23 @@ void MainWindow::setupToolBar() {
 
     toolbar_->addSeparator();
 
+    auto addViewAction = [this](const QString& text, const QString& tip, StandardView view) {
+        auto* action = toolbar_->addAction(text);
+        action->setToolTip(tip);
+        connect(action, &QAction::triggered, this, [this, view]() {
+            glWidget_->setStandardView(view);
+        });
+    };
+
+    addViewAction("前视", "切换到前视图", StandardView::Front);
+    addViewAction("后视", "切换到后视图", StandardView::Back);
+    addViewAction("左视", "切换到左视图", StandardView::Left);
+    addViewAction("右视", "切换到右视图", StandardView::Right);
+    addViewAction("俯视", "切换到俯视图", StandardView::Top);
+    addViewAction("仰视", "切换到仰视图", StandardView::Bottom);
+
+    toolbar_->addSeparator();
+
     // ── 主题切换（下拉菜单） ──
     themeMenu_ = new QMenu(this);
     for (int i = 0; i < Theme::count(); ++i) {

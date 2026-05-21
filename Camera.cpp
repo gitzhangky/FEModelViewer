@@ -8,6 +8,19 @@
 #include <glm/gtc/matrix_transform.hpp>  // glm::lookAt, glm::radians, glm::clamp
 #include <cmath>                         // cos, sin
 
+namespace {
+
+glm::vec3 presetUp(StandardView view)
+{
+    switch (view) {
+        case StandardView::Top:    return glm::vec3(0.0f, 0.0f, -1.0f);
+        case StandardView::Bottom: return glm::vec3(0.0f, 0.0f,  1.0f);
+        default:                   return glm::vec3(0.0f, 1.0f,  0.0f);
+    }
+}
+
+} // namespace
+
 glm::vec3 Camera::eye() const {
     // 将角度转换为弧度
     float ry = glm::radians(yaw);
@@ -31,12 +44,19 @@ glm::mat4 Camera::viewMatrix() const {
     // up:     根据 pitch 判断是否翻转（当相机倒置时 up 方向取反）
     //         利用 cos(pitch) 的符号判断：pitch 在 (-90°,90°) 区间时 cos>0，up 朝 +Y
     //         pitch 在 (90°,270°)（即 cos<0）时 up 朝 -Y，保证 lookAt 不退化
-    float cp = cos(glm::radians(pitch));
-    glm::vec3 up(0.0f, (cp >= 0.0f) ? 1.0f : -1.0f, 0.0f);
+    glm::vec3 up;
+    if (usePresetUp_) {
+        up = presetUp(presetView_);
+    } else {
+        float cp = cos(glm::radians(pitch));
+        up = glm::vec3(0.0f, (cp >= 0.0f) ? 1.0f : -1.0f, 0.0f);
+    }
     return glm::lookAt(eye(), target, up);
 }
 
 void Camera::rotate(float dx, float dy) {
+    usePresetUp_ = false;
+
     // 当相机倒置时（cos(pitch) < 0），水平拖动方向需要取反，否则左右旋转会反直觉
     float cp = cos(glm::radians(pitch));
     float yawSign = (cp >= 0.0f) ? 1.0f : -1.0f;
@@ -72,4 +92,36 @@ void Camera::zoom(float delta) {
     distance *= factor;
     // 限制距离在合理范围内
     distance  = glm::clamp(distance, minDist, maxDist);
+}
+
+void Camera::setStandardView(StandardView view) {
+    presetView_ = view;
+    usePresetUp_ = true;
+
+    switch (view) {
+        case StandardView::Front:
+            yaw = 0.0f;
+            pitch = 0.0f;
+            break;
+        case StandardView::Back:
+            yaw = 180.0f;
+            pitch = 0.0f;
+            break;
+        case StandardView::Left:
+            yaw = -90.0f;
+            pitch = 0.0f;
+            break;
+        case StandardView::Right:
+            yaw = 90.0f;
+            pitch = 0.0f;
+            break;
+        case StandardView::Top:
+            yaw = 0.0f;
+            pitch = 90.0f;
+            break;
+        case StandardView::Bottom:
+            yaw = 0.0f;
+            pitch = -90.0f;
+            break;
+    }
 }

@@ -596,6 +596,11 @@ void GLWidget::fitToModel(const glm::vec3& center, float size) {
     update();
 }
 
+void GLWidget::setStandardView(StandardView view) {
+    cam_.setStandardView(view);
+    update();
+}
+
 void GLWidget::setTriangleToElementMap(const std::vector<int>& map) {
     triToElem_ = map;
     rebuildElementNodeMap();

@@ -14,6 +14,15 @@
 #include <glm/glm.hpp>
 #include "ferender_export.h"
 
+enum class StandardView {
+    Front,
+    Back,
+    Left,
+    Right,
+    Top,
+    Bottom
+};
+
 class FERENDER_EXPORT Camera {
 public:
     // ── 轨道参数 ──
@@ -69,4 +78,11 @@ public:
      * 调整 distance 并限制在 [minDist, maxDist] 范围内。
      */
     void zoom(float delta);
+
+    /** @brief 切换到标准视图（前/后/左/右/上/下），保持当前 target 和 distance 不变 */
+    void setStandardView(StandardView view);
+
+private:
+    bool usePresetUp_ = false;
+    StandardView presetView_ = StandardView::Front;
 };
