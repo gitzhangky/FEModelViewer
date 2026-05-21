@@ -8,6 +8,8 @@ uniform mat4 uMVP;
 uniform mat4 uModel;
 uniform mat3 uNormalMat;
 uniform float uPointSize;
+uniform vec2 uViewportPx;
+uniform vec2 uScreenOffsetPx;
 out vec3 vWorldPos;
 out vec3 vNormal;
 out vec3 vColor;
@@ -20,5 +22,11 @@ void main() {
     vColor    = aColor;
     vScalar   = aScalar;
     gl_Position = uMVP * vec4(aPos, 1.0);
+    if (uViewportPx.x > 0.0 && uViewportPx.y > 0.0 &&
+        (uScreenOffsetPx.x != 0.0 || uScreenOffsetPx.y != 0.0)) {
+        vec2 offsetNdc = vec2(2.0 * uScreenOffsetPx.x / uViewportPx.x,
+                              2.0 * uScreenOffsetPx.y / uViewportPx.y);
+        gl_Position.xy += offsetNdc * gl_Position.w;
+    }
     gl_PointSize = uPointSize;
 }

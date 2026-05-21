@@ -1183,6 +1183,8 @@ void GLWidget::paintGL() {
     shader_->setUniformValue("uViewPos", QVector3D(eyePos.x, eyePos.y, eyePos.z));
     shader_->setUniformValue("uPointHighlight", false);
     shader_->setUniformValue("uPointSize", 1.0f);
+    shader_->setUniformValue("uViewportPx", QVector2D(width() * dpr_, height() * dpr_));
+    shader_->setUniformValue("uScreenOffsetPx", QVector2D(0.0f, 0.0f));
     shader_->setUniformValue("uContourMode", useVertexColor_ && colorBarVisible_);
     shader_->setUniformValue("uScalarMin", scalarMin_);
     shader_->setUniformValue("uScalarMax", scalarMax_);

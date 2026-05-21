@@ -17,6 +17,28 @@
 #define GL_POINT_SPRITE 0x8861
 #endif
 
+namespace {
+
+struct SelectionLineStyle {
+    QVector3D haloColor;
+    QVector3D coreColor;
+    float haloWidth = 1.0f;
+    float coreWidth = 1.0f;
+    float haloAlpha = 1.0f;
+    float coreAlpha = 1.0f;
+};
+
+SelectionLineStyle selectionLineStyle(const GLWidget& w) {
+    return {
+        QVector3D(0.22f, 0.12f, 0.02f),
+        QVector3D(1.00f, 0.80f, 0.10f),
+        4.2f, 2.6f,
+        0.72f, 0.98f
+    };
+}
+
+} // namespace
+
 SelectionRenderer::SelectionRenderer(GLWidget& w) : w_(w) {}
 
 void SelectionRenderer::initGL() {
@@ -114,9 +136,7 @@ void SelectionRenderer::render(QOpenGLShaderProgram& shader) {
 
     shader.setUniformValue("uWireframe", true);
     shader.setUniformValue("uPointHighlight", selHlMode_ == 1);
-    shader.setUniformValue("uWireAlpha", 1.0f);
     shader.setUniformValue("uUseVertexColor", false);
-    shader.setUniformValue("uColor", QVector3D(1.0f, 0.78f, 0.0f));
 
     ScopedDepthTest depth(&w_, false);
     selEdgeVao_.bind();
@@ -125,7 +145,9 @@ void SelectionRenderer::render(QOpenGLShaderProgram& shader) {
         w_.glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
         const bool compatibilityPointSprite =
             w_.context() && w_.context()->format().profile() != QSurfaceFormat::CoreProfile;
-        shader.setUniformValue("uPointSize", 12.0f * static_cast<float>(w_.devicePixelRatioF()));
+        shader.setUniformValue("uColor", QVector3D(1.0f, 0.78f, 0.0f));
+        shader.setUniformValue("uWireAlpha", 1.0f);
+        shader.setUniformValue("uPointSize", 9.0f * static_cast<float>(w_.devicePixelRatioF()));
         w_.glEnable(GL_PROGRAM_POINT_SIZE);
         if (compatibilityPointSprite) w_.glEnable(GL_POINT_SPRITE);
         w_.glDrawArrays(GL_POINTS, 0, selEdgeVertCount_);
@@ -133,8 +155,42 @@ void SelectionRenderer::render(QOpenGLShaderProgram& shader) {
         w_.glDisable(GL_PROGRAM_POINT_SIZE);
         shader.setUniformValue("uPointSize", 1.0f);
     } else {
-        w_.setLineWidthClamped(2.5f);
-        w_.glDrawArrays(GL_LINES, 0, selEdgeVertCount_);
+        ScopedBlend blend(&w_, true);
+        w_.glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+        const SelectionLineStyle style = selectionLineStyle(w_);
+        const bool canUseHalo = w_.maxLineWidth() > 1.25f;
+        const QVector2D noOffset(0.0f, 0.0f);
+        auto drawLinePass = [&](const QVector3D& color, float width, float alpha) {
+            shader.setUniformValue("uColor", color);
+            shader.setUniformValue("uWireAlpha", alpha);
+            w_.setLineWidthClamped(width);
+            w_.glDrawArrays(GL_LINES, 0, selEdgeVertCount_);
+        };
+        auto drawOffsetPass = [&](const QVector3D& color, float alpha, bool includeCenter) {
+            shader.setUniformValue("uColor", color);
+            shader.setUniformValue("uWireAlpha", alpha);
+            shader.setUniformValue("uScreenOffsetPx", QVector2D(-1.0f,  0.0f));
+            w_.glDrawArrays(GL_LINES, 0, selEdgeVertCount_);
+            shader.setUniformValue("uScreenOffsetPx", QVector2D( 1.0f,  0.0f));
+            w_.glDrawArrays(GL_LINES, 0, selEdgeVertCount_);
+            shader.setUniformValue("uScreenOffsetPx", QVector2D( 0.0f, -1.0f));
+            w_.glDrawArrays(GL_LINES, 0, selEdgeVertCount_);
+            shader.setUniformValue("uScreenOffsetPx", QVector2D( 0.0f,  1.0f));
+            w_.glDrawArrays(GL_LINES, 0, selEdgeVertCount_);
+            if (includeCenter) {
+                shader.setUniformValue("uScreenOffsetPx", noOffset);
+                w_.glDrawArrays(GL_LINES, 0, selEdgeVertCount_);
+            }
+        };
+        if (canUseHalo) {
+            drawLinePass(style.haloColor, style.haloWidth, style.haloAlpha);
+            drawLinePass(style.coreColor, style.coreWidth, style.coreAlpha);
+        } else {
+            drawOffsetPass(style.haloColor, 0.42f, false);
+            drawOffsetPass(style.coreColor, style.coreAlpha, true);
+        }
+        shader.setUniformValue("uScreenOffsetPx", noOffset);
         glLineWidth(1.0f);
     }
     selEdgeVao_.release();
