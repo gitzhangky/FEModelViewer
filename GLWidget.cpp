@@ -19,6 +19,7 @@
 #include <QPainter>
 #include <QShortcut>
 #include <QCoreApplication>
+#include <QSurfaceFormat>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/ext/matrix_projection.hpp>
@@ -140,6 +141,17 @@ GLWidget::GLWidget(QWidget* parent)
       pickRenderer_(std::make_shared<PickRenderer>(*this)),
       selectionRenderer_(std::make_shared<SelectionRenderer>(*this)),
       labelOverlay_(std::make_shared<LabelOverlay>(*this)) {
+    // 请求 OpenGL 4.1 Core Profile：本引擎依赖 Core 行为（如点高亮用到的
+    // gl_PointCoord 在 Core 下始终启用）。集成到未设置全局默认格式的宿主程序时，
+    // 若拿到 Compatibility profile，节点高亮的球面点会因 gl_PointCoord 失效而整颗被
+    // discard。此处给本 widget 单独请求 Core，保证引擎在任意宿主中行为一致。
+    {
+        QSurfaceFormat fmt = format();
+        fmt.setVersion(4, 1);
+        fmt.setProfile(QSurfaceFormat::CoreProfile);
+        setFormat(fmt);
+    }
+
     // 设置强焦点策略，使 widget 能接收键盘事件
     setFocusPolicy(Qt::StrongFocus);
 
