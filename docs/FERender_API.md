@@ -888,10 +888,12 @@ static FESurfaceCache buildSurfaceCache(
 // 据表面缓存 + 可见性谓词重建渲染数据（当前可见单元集合的边界面）
 // 隐藏实体单元后会生成暴露出来的切口内壁面（法线/拾取均归属可见单元）
 // isElementVisible 为 nullptr 时视为全部可见，等价于外表面提取
+// includeElementEdges 控制是否生成完整单元边线；交互式显隐可设为 false 并复用外部缓存
 static FERenderData buildRenderData(
     const FESurfaceCache& cache,
     const std::function<bool(int)>& isElementVisible,
-    const ProgressCallback& progress = nullptr
+    const ProgressCallback& progress = nullptr,
+    bool includeElementEdges = true
 );
 
 // 带云图颜色的渲染数据包

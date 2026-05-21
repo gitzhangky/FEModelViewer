@@ -146,6 +146,7 @@ public:
      * @brief 据表面缓存 + 可见性谓词重建渲染数据（当前可见单元集合的边界面）
      * @param cache           buildSurfaceCache 的输出
      * @param isElementVisible 判断某单元当前是否可见；nullptr 视为全部可见
+     * @param includeElementEdges 是否生成完整单元边线；交互式显隐可设为 false 并复用外部缓存
      *
      * 选择规则：
      *   - 2D 壳面：其单元可见即渲染
@@ -155,7 +156,8 @@ public:
      */
     static FERenderData buildRenderData(const FESurfaceCache& cache,
                                         const std::function<bool(int)>& isElementVisible,
-                                        const ProgressCallback& progress = nullptr);
+                                        const ProgressCallback& progress = nullptr,
+                                        bool includeElementEdges = true);
 
     /**
      * @brief 将 FEM 模型转换为带云图颜色的渲染数据包

@@ -26,6 +26,7 @@
 #include <cmath>
 #include <memory>
 #include <string>
+#include <unordered_set>
 
 // ============================================================
 // GLSL 着色器加载（从 Qt 资源加载外部 .glsl 文件）
@@ -54,6 +55,25 @@ static const glm::vec3 kPartPalette[] = {
     {0.71f, 0.71f, 0.98f},  // lavender #b4befe
 };
 static const int kPartPaletteSize = static_cast<int>(sizeof(kPartPalette) / sizeof(kPartPalette[0]));
+
+struct ElementEdgeKey {
+    int elemId = -1;
+    int a = -1;
+    int b = -1;
+
+    bool operator==(const ElementEdgeKey& other) const {
+        return elemId == other.elemId && a == other.a && b == other.b;
+    }
+};
+
+struct ElementEdgeKeyHash {
+    size_t operator()(const ElementEdgeKey& key) const {
+        size_t h = std::hash<int>{}(key.elemId);
+        h ^= std::hash<int>{}(key.a) + 0x9e3779b9u + (h << 6) + (h >> 2);
+        h ^= std::hash<int>{}(key.b) + 0x9e3779b9u + (h << 6) + (h >> 2);
+        return h;
+    }
+};
 
 static Mesh makeClipPlanePreviewMesh(const glm::vec3& bbMin,
                                      const glm::vec3& bbMax,
@@ -286,6 +306,12 @@ void GLWidget::setMesh(const Mesh& mesh) {
     nodeToFirstVertex_.clear();
     renderEdgeToElems_.clear();
     renderEdgeNodeIds_.clear();
+    surfaceElemEdgeVertices_.clear();
+    surfaceElemEdgeToElement_.clear();
+    surfaceElemEdgeNodeIds_.clear();
+    surfaceCache_ = FESurfaceCache();
+    hasSurfaceCache_ = false;
+    surfaceRebuildDirty_ = false;
     hiddenElements_.clear();
     hiddenNodes_.clear();
     activeIndexCount_ = static_cast<int>(mesh.indices.size());
@@ -300,7 +326,13 @@ void GLWidget::setMesh(const Mesh& mesh) {
 void GLWidget::setSurfaceCache(const FESurfaceCache& cache) {
     surfaceCache_ = cache;
     hasSurfaceCache_ = !cache.empty();
-    if (hasSurfaceCache_) buildTopologyFromCache();
+    surfaceElemEdgeVertices_.clear();
+    surfaceElemEdgeToElement_.clear();
+    surfaceElemEdgeNodeIds_.clear();
+    if (hasSurfaceCache_) {
+        buildTopologyFromCache();
+        rebuildSurfaceElementEdgeCache();
+    }
 }
 
 void GLWidget::buildTopologyFromCache() {
@@ -328,9 +360,63 @@ void GLWidget::buildTopologyFromCache() {
     }
 }
 
+void GLWidget::rebuildSurfaceElementEdgeCache() {
+    surfaceElemEdgeVertices_.clear();
+    surfaceElemEdgeToElement_.clear();
+    surfaceElemEdgeNodeIds_.clear();
+    if (!hasSurfaceCache_) return;
+
+    auto coord = [this](int nid) -> const glm::vec3* {
+        auto it = surfaceCache_.coords.find(nid);
+        return it != surfaceCache_.coords.end() ? &it->second : nullptr;
+    };
+
+    size_t approxEdges = surfaceCache_.lineElems.size();
+    for (const auto& [key, infos] : surfaceCache_.faceMap)
+        for (const auto& fi : infos)
+            approxEdges += fi.faceNodes.size();
+
+    surfaceElemEdgeVertices_.reserve(approxEdges * 6);
+    surfaceElemEdgeToElement_.reserve(approxEdges);
+    surfaceElemEdgeNodeIds_.reserve(approxEdges);
+
+    std::unordered_set<ElementEdgeKey, ElementEdgeKeyHash> seen;
+    seen.reserve(approxEdges);
+
+    auto appendEdge = [&](int elemId, int a, int b) {
+        if (elemId < 0 || a < 0 || b < 0) return;
+        if (a > b) std::swap(a, b);
+        ElementEdgeKey key{elemId, a, b};
+        if (!seen.insert(key).second) return;
+
+        const glm::vec3* pa = coord(a);
+        const glm::vec3* pb = coord(b);
+        if (!pa || !pb) return;
+
+        surfaceElemEdgeVertices_.push_back(pa->x);
+        surfaceElemEdgeVertices_.push_back(pa->y);
+        surfaceElemEdgeVertices_.push_back(pa->z);
+        surfaceElemEdgeVertices_.push_back(pb->x);
+        surfaceElemEdgeVertices_.push_back(pb->y);
+        surfaceElemEdgeVertices_.push_back(pb->z);
+        surfaceElemEdgeToElement_.push_back(elemId);
+        surfaceElemEdgeNodeIds_.push_back({a, b});
+    };
+
+    for (const auto& [key, infos] : surfaceCache_.faceMap) {
+        for (const auto& fi : infos) {
+            int n = static_cast<int>(fi.faceNodes.size());
+            for (int i = 0; i < n; ++i)
+                appendEdge(fi.elemId, fi.faceNodes[i], fi.faceNodes[(i + 1) % n]);
+        }
+    }
+    for (const auto& le : surfaceCache_.lineElems)
+        appendEdge(le[2], le[0], le[1]);
+}
+
 void GLWidget::rebuildSurfaceFromCache() {
     FERenderData rd = FEMeshConverter::buildRenderData(
-        surfaceCache_, [this](int e) { return isElementVisible(e); });
+        surfaceCache_, [this](int e) { return isElementVisible(e); }, nullptr, false);
 
     mesh_ = rd.mesh;
     allTriIndices_  = rd.mesh.indices;

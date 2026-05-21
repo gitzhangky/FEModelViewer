@@ -444,7 +444,8 @@ FESurfaceCache FEMeshConverter::buildSurfaceCache(const FEModel& model,
 
 FERenderData FEMeshConverter::buildRenderData(const FESurfaceCache& cache,
                                               const std::function<bool(int)>& isElementVisible,
-                                              const ProgressCallback& progress) {
+                                              const ProgressCallback& progress,
+                                              bool includeElementEdges) {
     FERenderData result;
     auto vis = [&](int e) { return e >= 0 && (!isElementVisible || isElementVisible(e)); };
     auto coord = [&](int nid) -> const glm::vec3* {
@@ -483,6 +484,24 @@ FERenderData FEMeshConverter::buildRenderData(const FESurfaceCache& cache,
     // ── Step B: 三角化 + 面法线 ──
     // 隐藏实体后会出现新的切口面。这里不能复用共享顶点平滑法线，否则切口面会和
     // 周围外表面平均，边界光照看起来像凹陷；每个三角形保留自己的面法线。
+    size_t triReserve = 0;
+    size_t edgeReserve = 0;
+    for (const auto& rf : renderFaces) {
+        int n = static_cast<int>(rf.faceNodes.size());
+        if (n >= 3) {
+            triReserve += static_cast<size_t>(n - 2);
+            edgeReserve += static_cast<size_t>(n);
+        }
+    }
+    result.mesh.vertices.reserve(triReserve * 18);
+    result.mesh.indices.reserve(triReserve * 3);
+    result.vertexToNode.reserve(triReserve * 3);
+    result.triangleToElement.reserve(triReserve);
+    result.triangleToFace.reserve(triReserve);
+    result.mesh.edgeVertices.reserve(edgeReserve * 6);
+    result.mesh.edgeIndices.reserve(edgeReserve * 2);
+    result.mesh.edgeToElement.reserve(edgeReserve);
+
     for (const auto& rf : renderFaces) {
         int n = static_cast<int>(rf.faceNodes.size());
         if (n < 3) continue;
@@ -550,7 +569,8 @@ FERenderData FEMeshConverter::buildRenderData(const FESurfaceCache& cache,
     }
 
     // ── Step D: 完整单元边线（不去重跨单元，带归属，用于选中高亮）──
-    {
+    // GUI 显隐重建时可跳过；完整边线可在加载缓存时预计算一次并复用。
+    if (includeElementEdges) {
         std::unordered_map<int, std::set<std::pair<int, int>>> perElem;
         for (const auto& [key, infos] : cache.faceMap)
             for (const auto& fi : infos) {

@@ -258,6 +258,7 @@ private:
 
     // 从表面缓存按全模型构建稳定的拓扑映射（elemToPart_/elemToNodes_ 等）。
     void buildTopologyFromCache();
+    void rebuildSurfaceElementEdgeCache();
     // 据当前可见性用缓存重建边界面网格 + 渲染映射，并触发重上传（保留相机/选中）。
     void rebuildSurfaceFromCache();
 
@@ -358,6 +359,9 @@ private:
     std::unordered_map<int, int> nodeToFirstVertex_; // 节点 ID → 首个渲染顶点索引（标签/高亮快速定位）
     std::vector<std::vector<int>> renderEdgeToElems_; // 显示边线 → 相邻单元 ID 列表
     std::vector<std::pair<int, int>> renderEdgeNodeIds_; // 显示边线 → 节点 ID 对
+    std::vector<float> surfaceElemEdgeVertices_;      // 表面缓存全模型单元边线顶点（用于选中高亮）
+    std::vector<int> surfaceElemEdgeToElement_;       // 表面缓存单元边线 → 单元 ID
+    std::vector<std::pair<int, int>> surfaceElemEdgeNodeIds_; // 表面缓存单元边线 → 节点 ID 对
     std::unordered_set<int> hiddenElements_;         // 被用户隐藏的单元 ID
     std::unordered_set<int> hiddenNodes_;            // 被用户隐藏的节点 ID
 

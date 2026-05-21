@@ -127,7 +127,15 @@ void SelectionRenderer::render(QOpenGLShaderProgram& shader) {
 }
 
 void SelectionRenderer::rebuildSelectionEdges() {
-    int edgeCount = static_cast<int>(w_.mesh_.elemEdgeToElement.size());
+    const bool useSurfaceEdgeCache = w_.hasSurfaceCache_ && !w_.surfaceElemEdgeToElement_.empty();
+    const std::vector<float>& edgeVertices = useSurfaceEdgeCache
+        ? w_.surfaceElemEdgeVertices_
+        : w_.mesh_.elemEdgeVertices;
+    const std::vector<int>& edgeToElement = useSurfaceEdgeCache
+        ? w_.surfaceElemEdgeToElement_
+        : w_.mesh_.elemEdgeToElement;
+
+    int edgeCount = static_cast<int>(edgeToElement.size());
     std::vector<float> verts;
 
     if (w_.pickMode_ == PickMode::Part && !w_.vertexToNode_.empty()) {
@@ -141,13 +149,14 @@ void SelectionRenderer::rebuildSelectionEdges() {
 
     // 单元模式：显示所有选中单元的全部边线
     for (int i = 0; i < edgeCount; ++i) {
-        int elemId = w_.mesh_.elemEdgeToElement[i];
+        int elemId = edgeToElement[i];
         if (!w_.selection_.isElementSelected(elemId)) continue;
         if (!w_.isElementVisible(elemId)) continue;
 
         int base = i * 6;
+        if (base + 5 >= static_cast<int>(edgeVertices.size())) continue;
         for (int j = 0; j < 6; ++j)
-            verts.push_back(w_.mesh_.elemEdgeVertices[base + j]);
+            verts.push_back(edgeVertices[base + j]);
     }
 
     uploadHighlightVertices(verts);

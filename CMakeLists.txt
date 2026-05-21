@@ -385,6 +385,14 @@ if(BUILD_TESTING)
         COMMAND test_cut_surface_normals
     )
 
+    add_executable(test_surface_rebuild_options
+        tests/test_surface_rebuild_options.cpp
+    )
+    target_link_libraries(test_surface_rebuild_options PRIVATE FERender)
+    add_test(NAME surface_rebuild_options
+        COMMAND test_surface_rebuild_options
+    )
+
     if(FEMODELVIEWER_BUILD_OPTIONAL_TESTS)
         add_executable(test_selection_id_filter
             tests/test_selection_id_filter.cpp
