@@ -365,6 +365,18 @@ if(BUILD_TESTING)
         COMMAND test_node_vertex_lookup
     )
 
+    add_executable(test_projected_rect_filter
+        tests/test_projected_rect_filter.cpp
+    )
+    target_include_directories(test_projected_rect_filter PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${glm_SOURCE_DIR}
+    )
+    target_link_libraries(test_projected_rect_filter PRIVATE Qt5::Core)
+    add_test(NAME projected_rect_filter
+        COMMAND test_projected_rect_filter
+    )
+
     if(FEMODELVIEWER_BUILD_OPTIONAL_TESTS)
         add_executable(test_selection_id_filter
             tests/test_selection_id_filter.cpp

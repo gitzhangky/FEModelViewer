@@ -49,8 +49,8 @@ enum class DisplayMode { Solid, Wireframe, SolidWireframe };
 /** @brief 投影模式 */
 enum class ProjectionMode { Perspective, Orthographic };
 
-/** @brief 云图色谱方案 */
-enum class Colormap { Jet, Grayscale, CoolWarm };
+/** @brief 云图色谱方案（避免与外部项目的 Colormap 类型重名） */
+enum class FERenderColormap { Jet, Grayscale, CoolWarm };
 
 class FERENDER_EXPORT GLWidget : public QOpenGLWidget, protected QOpenGLFunctions {
     Q_OBJECT
@@ -109,7 +109,7 @@ public:
     void resetBackgroundToTheme();
 
     /** @brief 设置云图色谱方案 */
-    void setColormap(Colormap map);
+    void setColormap(FERenderColormap map);
     /** @brief 设置云图分段数（量化档数） */
     void setNumBands(int bands);
 
@@ -152,6 +152,9 @@ public:
 
     /** @brief 设置一组单元的可见性 */
     void setElementsVisibility(const std::vector<int>& elementIds, bool visible);
+
+    /** @brief 恢复所有被隐藏的单元/节点（清空隐藏集，部件可见性不变） */
+    void showAll();
 
     /** @brief 设置未变形叠加网格（半透明线框显示原始形状） */
     void setOverlayMesh(const Mesh& mesh);
@@ -381,7 +384,7 @@ private:
     // ── 显示 / 投影 / 色谱状态 ──
     DisplayMode    displayMode_    = DisplayMode::SolidWireframe;
     ProjectionMode projectionMode_ = ProjectionMode::Perspective;
-    Colormap       colormap_       = Colormap::Jet;
+    FERenderColormap colormap_     = FERenderColormap::Jet;
     bool           colormapInverted_ = false;
     glm::vec3      edgeColor_{0.2f, 0.2f, 0.22f};
     float          edgeWidth_      = 1.0f;

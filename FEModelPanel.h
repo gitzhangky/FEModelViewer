@@ -97,6 +97,9 @@ signals:
     /** @brief 节点/单元可见性变更请求（true=显示，false=隐藏） */
     void visibilityRequested(PickMode mode, const std::vector<int>& ids, bool visible);
 
+    /** @brief 恢复显示全部被隐藏的单元/节点 */
+    void showAllRequested();
+
 public slots:
     void updateSelectionInfo(PickMode mode, int count, const std::vector<int>& ids);
 
@@ -147,4 +150,5 @@ private:
     QPushButton* searchBtn_     = nullptr;
     QPushButton* showBtn_       = nullptr;
     QPushButton* hideBtn_       = nullptr;
+    QPushButton* showAllBtn_    = nullptr;
 };

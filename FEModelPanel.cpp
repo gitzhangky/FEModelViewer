@@ -436,10 +436,12 @@ QGroupBox* FEModelPanel::createSearchGroup() {
     auto* actionRow = new QHBoxLayout;
     showBtn_ = new QPushButton("显示");
     hideBtn_ = new QPushButton("隐藏");
+    showAllBtn_ = new QPushButton("全部显示");
     showBtn_->setEnabled(false);
     hideBtn_->setEnabled(false);
     actionRow->addWidget(showBtn_);
     actionRow->addWidget(hideBtn_);
+    actionRow->addWidget(showAllBtn_);
     layout->addLayout(actionRow);
 
     // 格式提示
@@ -452,6 +454,7 @@ QGroupBox* FEModelPanel::createSearchGroup() {
     connect(searchInput_, &QLineEdit::returnPressed, this, &FEModelPanel::onSearchTriggered);
     connect(showBtn_, &QPushButton::clicked, this, &FEModelPanel::onShowTriggered);
     connect(hideBtn_, &QPushButton::clicked, this, &FEModelPanel::onHideTriggered);
+    connect(showAllBtn_, &QPushButton::clicked, this, [this]{ emit showAllRequested(); });
     connect(searchTypeCombo_, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, [this](int) {
                 updateVisibilityActionState();

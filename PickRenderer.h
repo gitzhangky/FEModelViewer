@@ -5,6 +5,7 @@
 #include <QOpenGLVertexArrayObject>
 #include <QOpenGLFramebufferObject>
 #include <glm/glm.hpp>
+#include <unordered_set>
 
 class GLWidget;
 class QOpenGLShaderProgram;
@@ -40,6 +41,10 @@ private:
 
     glm::mat4 buildPickMvp() const;
     void emitSelectionSignals();
+
+    // 渲染拾取缓冲并扫描矩形内出现的单元 ID（遵循遮挡，只得到可见最前表层单元）
+    void collectVisibleElemsInRect(const QRect& rect, const glm::mat4& mvp,
+                                   std::unordered_set<int>& out);
 
     GLWidget& w_;
     QOpenGLShaderProgram* pickShader_ = nullptr;

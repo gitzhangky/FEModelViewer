@@ -252,6 +252,10 @@ MainWindow::MainWindow() {
     connect(feModelPanel_, &FEModelPanel::surfaceCacheReady,
             glWidget_, &GLWidget::setSurfaceCache);
 
+    // 全部显示 → 恢复被隐藏的单元/节点
+    connect(feModelPanel_, &FEModelPanel::showAllRequested,
+            glWidget_, &GLWidget::showAll);
+
     monitorPanel_->bindToWidget(glWidget_);
 
     // ── 导出面板连接 ──
@@ -289,7 +293,7 @@ MainWindow::MainWindow() {
     connect(appearancePanel_, &AppearancePanel::backgroundResetRequested,
             glWidget_, &GLWidget::resetBackgroundToTheme);
     connect(appearancePanel_, &AppearancePanel::colormapChanged, this, [this](int m){
-        glWidget_->setColormap(static_cast<Colormap>(m));
+        glWidget_->setColormap(static_cast<FERenderColormap>(m));
     });
     connect(appearancePanel_, &AppearancePanel::numBandsChanged,
             glWidget_, &GLWidget::setNumBands);

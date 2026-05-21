@@ -1,6 +1,7 @@
 #include "PickRenderer.h"
 #include "GLWidget.h"
 #include "GLStateGuards.h"
+#include "ProjectedRectFilter.h"
 #include "SelectionRenderer.h"
 
 #include <QOpenGLShaderProgram>
@@ -330,12 +331,10 @@ void PickRenderer::pickInRect(const QRect& rect, bool ctrlHeld) {
         float sx = c.x / c.w, sy = c.y / c.w;
         return sx >= ndcL && sx <= ndcR && sy >= ndcB && sy <= ndcT;
     };
-    // 有表面缓存时走"全单元节点投影 + 包含式"：单元所有节点都落在框内才选中，
-    // 从而能框到内部/被遮挡的实体单元（商软常见的 enclosed through-depth 框选）。
+    // 有表面缓存时走"全单元几何投影 + 贯穿"：框内所有单元（含内部、被隐藏）都选中，
+    // 不按可见性过滤——这样隐藏的单元也能被框选回来再"显示"。
     const bool useAll = w_.hasSurfaceCache_ && !w_.surfaceCache_.coords.empty()
                         && !w_.elemToNodes_.empty();
-    // 单元形心落在框内即选中（through-depth）：比"所有节点入框"更直觉，
-    // 不会因表层/边缘单元未被完整框住而漏选，框一块即可整块选中。
     auto centerInside = [&](const auto& nodes) {
         glm::vec3 c(0.0f); int cnt = 0;
         for (int nid : nodes) {
@@ -347,15 +346,13 @@ void PickRenderer::pickInRect(const QRect& rect, bool ctrlHeld) {
 
     if (w_.pickMode_ == PickMode::Node) {
         if (useAll) {
-            for (const auto& [nodeId, pos] : w_.surfaceCache_.coords) {
-                if (nodeId < 0 || !w_.isNodeVisible(nodeId)) continue;
-                if (inside(pos)) w_.selection_.selectedNodes.insert(nodeId);
-            }
+            for (const auto& [nodeId, pos] : w_.surfaceCache_.coords)
+                if (nodeId >= 0 && inside(pos)) w_.selection_.selectedNodes.insert(nodeId);
         } else {
             std::unordered_set<int> addedNodes;
             for (int vi = 0; vi < vertCount; ++vi) {
                 int nodeId = (vi < static_cast<int>(w_.vertexToNode_.size())) ? w_.vertexToNode_[vi] : vi;
-                if (nodeId < 0 || !w_.isNodeVisible(nodeId)) continue;
+                if (nodeId < 0) continue;
                 glm::vec3 p(w_.mesh_.vertices[vi * 6], w_.mesh_.vertices[vi * 6 + 1], w_.mesh_.vertices[vi * 6 + 2]);
                 if (inside(p) && addedNodes.insert(nodeId).second)
                     w_.selection_.selectedNodes.insert(nodeId);
@@ -365,14 +362,13 @@ void PickRenderer::pickInRect(const QRect& rect, bool ctrlHeld) {
         std::unordered_set<int> hitParts;
         if (useAll) {
             for (const auto& [elemId, nodes] : w_.elemToNodes_) {
-                if (!w_.isElementVisible(elemId) || !centerInside(nodes)) continue;
+                if (!centerInside(nodes)) continue;
                 auto pit = w_.elemToPart_.find(elemId);
                 if (pit != w_.elemToPart_.end()) hitParts.insert(pit->second);
             }
         } else {
             int triCount = static_cast<int>(w_.triToElem_.size());
             for (int t = 0; t < triCount; ++t) {
-                if (!w_.isTriangleVisible(t)) continue;
                 bool anyInside = false;
                 for (int v = 0; v < 3; ++v) {
                     unsigned int vi = w_.mesh_.indices[t * 3 + v];
@@ -388,13 +384,11 @@ void PickRenderer::pickInRect(const QRect& rect, bool ctrlHeld) {
         if (useAll) {
             for (const auto& [elemId, nodes] : w_.elemToNodes_) {
                 if (w_.selection_.isElementSelected(elemId)) continue;
-                if (!w_.isElementVisible(elemId) || !centerInside(nodes)) continue;
-                w_.selection_.selectedElements.insert(elemId);
+                if (centerInside(nodes)) w_.selection_.selectedElements.insert(elemId);
             }
         } else {
             int triCount = static_cast<int>(w_.triToElem_.size());
             for (int t = 0; t < triCount; ++t) {
-                if (!w_.isTriangleVisible(t)) continue;
                 int elemId = w_.triToElem_[t];
                 if (w_.selection_.isElementSelected(elemId)) continue;
                 bool anyInside = false;
@@ -473,98 +467,94 @@ void PickRenderer::deselectAtPoint(const QPoint& pos) {
 // 框选取消
 // ============================================================
 
+void PickRenderer::collectVisibleElemsInRect(const QRect& rect, const glm::mat4& mvp,
+                                             std::unordered_set<int>& out) {
+    if (!pickFbo_) return;
+    renderPickBuffer(mvp);
+
+    int dpr = w_.devicePixelRatio();
+    int fbW = w_.width() * dpr, fbH = w_.height() * dpr;
+    int x0 = std::max(0, rect.left() * dpr);
+    int x1 = std::min(fbW - 1, rect.right() * dpr);
+    int y0 = std::max(0, fbH - rect.bottom() * dpr);   // 控件 y 上→下，帧缓冲 y 下→上
+    int y1 = std::min(fbH - 1, fbH - rect.top() * dpr);
+    if (x1 < x0 || y1 < y0) return;
+
+    int w = x1 - x0 + 1, h = y1 - y0 + 1;
+    std::vector<unsigned char> buf(static_cast<size_t>(w) * h * 4);
+    {
+        ScopedFramebufferBind fbo(&w_, pickFbo_->handle(), [&]() { w_.bindWidgetFramebuffer(); });
+        w_.glReadPixels(x0, y0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, buf.data());
+    }
+    for (size_t i = 0; i < static_cast<size_t>(w) * h; ++i) {
+        int id = colorToId(buf[i * 4], buf[i * 4 + 1], buf[i * 4 + 2]);
+        if (id >= 0) out.insert(id);
+    }
+}
+
 void PickRenderer::deselectInRect(const QRect& rect) {
     if (w_.triToElem_.empty()) return;
 
     glm::mat4 mvp = buildPickMvp();
-
-    float ndcL = (2.0f * rect.left() / w_.width()) - 1.0f;
-    float ndcR = (2.0f * rect.right() / w_.width()) - 1.0f;
-    float ndcT = 1.0f - (2.0f * rect.top() / w_.height());
-    float ndcB = 1.0f - (2.0f * rect.bottom() / w_.height());
-    if (ndcL > ndcR) std::swap(ndcL, ndcR);
-    if (ndcB > ndcT) std::swap(ndcB, ndcT);
-
-    int vertCount = static_cast<int>(w_.mesh_.vertices.size() / 6);
-
-    auto inside = [&](const glm::vec3& p) {
-        glm::vec4 c = mvp * glm::vec4(p, 1.0f);
-        if (c.w <= 0) return false;
-        float sx = c.x / c.w, sy = c.y / c.w;
-        return sx >= ndcL && sx <= ndcR && sy >= ndcB && sy <= ndcT;
-    };
     const bool useAll = w_.hasSurfaceCache_ && !w_.surfaceCache_.coords.empty()
                         && !w_.elemToNodes_.empty();
-    // 单元形心落在框内即选中（through-depth）：比"所有节点入框"更直觉，
-    // 不会因表层/边缘单元未被完整框住而漏选，框一块即可整块选中。
-    auto centerInside = [&](const auto& nodes) {
-        glm::vec3 c(0.0f); int cnt = 0;
-        for (int nid : nodes) {
-            auto cit = w_.surfaceCache_.coords.find(nid);
-            if (cit != w_.surfaceCache_.coords.end()) { c += cit->second; ++cnt; }
-        }
-        return cnt > 0 && inside(c / static_cast<float>(cnt));
-    };
 
     if (w_.pickMode_ == PickMode::Node) {
         if (useAll) {
-            for (const auto& [nodeId, pos] : w_.surfaceCache_.coords) {
-                if (nodeId < 0) continue;
-                if (inside(pos)) w_.selection_.selectedNodes.erase(nodeId);
-            }
-        } else {
-            std::unordered_set<int> removedNodes;
-            for (int vi = 0; vi < vertCount; ++vi) {
-                int nodeId = (vi < static_cast<int>(w_.vertexToNode_.size())) ? w_.vertexToNode_[vi] : vi;
-                if (nodeId < 0 || !w_.isNodeVisible(nodeId)) continue;
-                glm::vec3 p(w_.mesh_.vertices[vi * 6], w_.mesh_.vertices[vi * 6 + 1], w_.mesh_.vertices[vi * 6 + 2]);
-                if (inside(p) && removedNodes.insert(nodeId).second)
-                    w_.selection_.selectedNodes.erase(nodeId);
-            }
+            // 缓存模式：贯穿取消框内可见节点，但不动隐藏节点/隐藏单元上的节点。
+            std::unordered_set<int> hitNodes;
+            ProjectedRectFilter::collectNodes(
+                rect, w_.width(), w_.height(), mvp, w_.surfaceCache_.coords,
+                [this](int nodeId) { return w_.isNodeVisible(nodeId); }, hitNodes);
+            for (int nodeId : hitNodes)
+                w_.selection_.selectedNodes.erase(nodeId);
+            emitSelectionSignals();
+            return;
         }
-    } else if (w_.pickMode_ == PickMode::Part) {
-        std::unordered_set<int> hitParts;
+        // 无缓存时只能取消渲染网格中的可见表层顶点。
+        float ndcL = (2.0f * rect.left() / w_.width()) - 1.0f;
+        float ndcR = (2.0f * rect.right() / w_.width()) - 1.0f;
+        float ndcT = 1.0f - (2.0f * rect.top() / w_.height());
+        float ndcB = 1.0f - (2.0f * rect.bottom() / w_.height());
+        if (ndcL > ndcR) std::swap(ndcL, ndcR);
+        if (ndcB > ndcT) std::swap(ndcB, ndcT);
+        int vertCount = static_cast<int>(w_.mesh_.vertices.size() / 6);
+        for (int vi = 0; vi < vertCount; ++vi) {
+            int nodeId = (vi < static_cast<int>(w_.vertexToNode_.size())) ? w_.vertexToNode_[vi] : vi;
+            if (nodeId < 0 || !w_.isNodeVisible(nodeId)) continue;
+            glm::vec4 c = mvp * glm::vec4(w_.mesh_.vertices[vi * 6], w_.mesh_.vertices[vi * 6 + 1],
+                                          w_.mesh_.vertices[vi * 6 + 2], 1.0f);
+            if (c.w <= 0) continue;
+            float sx = c.x / c.w, sy = c.y / c.w;
+            if (sx >= ndcL && sx <= ndcR && sy >= ndcB && sy <= ndcT)
+                w_.selection_.selectedNodes.erase(nodeId);
+        }
+    } else {
+        std::unordered_set<int> hitElems;
         if (useAll) {
-            for (const auto& [elemId, nodes] : w_.elemToNodes_) {
-                if (!centerInside(nodes)) continue;
-                auto pit = w_.elemToPart_.find(elemId);
+            // 缓存模式：贯穿取消框内可见单元，隐藏单元保持选中，便于随后"显示"。
+            ProjectedRectFilter::collectElementsByCenter(
+                rect, w_.width(), w_.height(), mvp, w_.elemToNodes_, w_.surfaceCache_.coords,
+                [this](int elemId) { return w_.isElementVisible(elemId); }, hitElems);
+        } else {
+            // 无缓存时退回拾取缓冲：只取消框内可见最前表层单元。
+            collectVisibleElemsInRect(rect, mvp, hitElems);
+        }
+        if (w_.pickMode_ == PickMode::Part) {
+            std::unordered_set<int> hitParts;
+            for (int eid : hitElems) {
+                auto pit = w_.elemToPart_.find(eid);
                 if (pit != w_.elemToPart_.end()) hitParts.insert(pit->second);
             }
-        } else {
-            int triCount = static_cast<int>(w_.triToElem_.size());
-            for (int t = 0; t < triCount; ++t) {
-                if (!w_.isTriangleVisible(t)) continue;
-                bool anyInside = false;
-                for (int v = 0; v < 3; ++v) {
-                    unsigned int vi = w_.mesh_.indices[t * 3 + v];
-                    glm::vec3 p(w_.mesh_.vertices[vi * 6], w_.mesh_.vertices[vi * 6 + 1], w_.mesh_.vertices[vi * 6 + 2]);
-                    if (inside(p)) { anyInside = true; break; }
+            for (int p : hitParts) {
+                if (p < 0 || p >= static_cast<int>(w_.partElementIds_.size())) continue;
+                for (int eid : w_.partElementIds_[p]) {
+                    if (w_.isElementVisible(eid))
+                        w_.selection_.selectedElements.erase(eid);
                 }
-                if (anyInside && t < static_cast<int>(w_.triToPart_.size()))
-                    hitParts.insert(w_.triToPart_[t]);
-            }
-        }
-        for (int p : hitParts) deselectPart(p);
-    } else {
-        if (useAll) {
-            for (const auto& [elemId, nodes] : w_.elemToNodes_) {
-                if (!w_.selection_.isElementSelected(elemId)) continue;
-                if (centerInside(nodes)) w_.selection_.selectedElements.erase(elemId);
             }
         } else {
-            int triCount = static_cast<int>(w_.triToElem_.size());
-            for (int t = 0; t < triCount; ++t) {
-                if (!w_.isTriangleVisible(t)) continue;
-                int elemId = w_.triToElem_[t];
-                if (!w_.selection_.isElementSelected(elemId)) continue;
-                bool anyInside = false;
-                for (int v = 0; v < 3; ++v) {
-                    unsigned int vi = w_.mesh_.indices[t * 3 + v];
-                    glm::vec3 p(w_.mesh_.vertices[vi * 6], w_.mesh_.vertices[vi * 6 + 1], w_.mesh_.vertices[vi * 6 + 2]);
-                    if (inside(p)) { anyInside = true; break; }
-                }
-                if (anyInside) w_.selection_.selectedElements.erase(elemId);
-            }
+            for (int eid : hitElems) w_.selection_.selectedElements.erase(eid);
         }
     }
 

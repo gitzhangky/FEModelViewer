@@ -423,7 +423,7 @@ void GLWidget::uploadBackgroundVbo() {
     doneCurrent();
 }
 
-void GLWidget::setColormap(Colormap map) {
+void GLWidget::setColormap(FERenderColormap map) {
     colormap_ = map;
     if (colorBarOverlay_) colorBarOverlay_->setColormap(static_cast<int>(map));
     update();
@@ -624,6 +624,13 @@ void GLWidget::setElementsVisibility(const std::vector<int>& elementIds, bool vi
         if (visible) hiddenElements_.erase(elemId);
         else hiddenElements_.insert(elemId);
     }
+    markVisibilityDirty();
+}
+
+void GLWidget::showAll() {
+    if (hiddenElements_.empty() && hiddenNodes_.empty()) return;
+    hiddenElements_.clear();
+    hiddenNodes_.clear();
     markVisibilityDirty();
 }
 
@@ -1655,8 +1662,13 @@ void GLWidget::wheelEvent(QWheelEvent* e) {
     // target/eye 都会被 P + f*(X - P) 拉近/推远，方向不变（yaw/pitch 保持）
     int dpr = devicePixelRatio();
     int fbW = width() * dpr, fbH = height() * dpr;
-    int px = e->position().x() * dpr;
-    int py = (height() - e->position().y()) * dpr;
+#if QT_VERSION >= QT_VERSION_CHECK(5, 14, 0)
+    const QPointF wheelPos = e->position();
+#else
+    const QPointF wheelPos = e->pos();
+#endif
+    int px = wheelPos.x() * dpr;
+    int py = (height() - wheelPos.y()) * dpr;
 
     float aspect = (height() > 0) ? static_cast<float>(width()) / height() : 1.0f;
     float nearPlane = cam_.distance * 0.01f;

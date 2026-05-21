@@ -1046,7 +1046,7 @@ explicit GLWidget(QWidget* parent = nullptr);
 | `ProjectionMode projectionMode() const` | 当前投影模式 |
 | `void setBackgroundColors(const glm::vec3& top, const glm::vec3& bottom)` | 自定义背景上/下渐变色（覆盖主题背景） |
 | `void resetBackgroundToTheme()` | 背景恢复为当前主题预设 |
-| `void setColormap(Colormap map)` | 设置云图色谱（Jet / 灰度 / 冷暖） |
+| `void setColormap(FERenderColormap map)` | 设置云图色谱（Jet / 灰度 / 冷暖） |
 | `void setNumBands(int bands)` | 设置云图分段数（量化档数，下限 1） |
 | `void setColormapInverted(bool inverted)` | 反转云图色谱（如 Jet 蓝→红 变为 红→蓝） |
 
@@ -1126,9 +1126,11 @@ public slots:
 ```cpp
 void setNodesVisibility(const std::vector<int>& nodeIds, bool visible);
 void setElementsVisibility(const std::vector<int>& elementIds, bool visible);
+void showAll();
 ```
 
 `setNodesVisibility()` 会隐藏这些节点以及所有连接到这些节点的单元；`setElementsVisibility()` 只隐藏指定单元。两者都会同步影响表面三角形、线框边线、拾取、高亮和 ID 标签显示。
+`showAll()` 会清空节点/单元隐藏集，恢复由节点/单元显隐接口隐藏的实体；部件显隐状态保持不变。
 
 #### 查询方法
 
@@ -1195,7 +1197,7 @@ enum class PickMode {
 ```cpp
 enum class DisplayMode { Solid, Wireframe, SolidWireframe };  // 实体 / 线框 / 实体+线框
 enum class ProjectionMode { Perspective, Orthographic };       // 透视 / 正交
-enum class Colormap { Jet, Grayscale, CoolWarm };              // 云图色谱（与 scene.frag 的 uColormap 一致）
+enum class FERenderColormap { Jet, Grayscale, CoolWarm };      // 云图色谱（与 scene.frag 的 uColormap 一致）
 ```
 
 ### 5.2 FEPickResult — 拾取结果
