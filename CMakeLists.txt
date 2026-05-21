@@ -142,6 +142,9 @@ qt5_add_resources(RENDER_QRC shaders.qrc)
 
 add_library(FERender SHARED ${RENDER_SOURCES} ${RENDER_HEADERS} ${RENDER_QRC})
 
+# Debug 版加 d 后缀（FERenderd.dll/.lib），避免与 Release 安装产物互相覆盖
+set_target_properties(FERender PROPERTIES DEBUG_POSTFIX "d")
+
 include(GenerateExportHeader)
 generate_export_header(FERender
     EXPORT_MACRO_NAME FERENDER_EXPORT
@@ -196,6 +199,8 @@ add_executable(${PROJECT_NAME}
 )
 
 set_target_properties(${PROJECT_NAME} PROPERTIES AUTOMOC OFF)
+# Debug 版加 d 后缀（FEModelViewerd.exe），与 Release 安装产物并存
+set_target_properties(${PROJECT_NAME} PROPERTIES DEBUG_POSTFIX "d")
 
 # macOS：打包为 .app bundle
 if(APPLE)
