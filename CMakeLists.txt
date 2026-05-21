@@ -368,6 +368,16 @@ if(BUILD_TESTING)
         COMMAND test_visibility_filter
     )
 
+    add_executable(test_zoom_policy
+        tests/test_zoom_policy.cpp
+    )
+    target_include_directories(test_zoom_policy PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+    add_test(NAME zoom_policy
+        COMMAND test_zoom_policy
+    )
+
     add_executable(test_node_vertex_lookup
         tests/test_node_vertex_lookup.cpp
     )

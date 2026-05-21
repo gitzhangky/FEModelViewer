@@ -13,6 +13,7 @@
 #include "Theme.h"
 #include "ColorBarOverlay.h"
 #include "VisibilityFilter.h"
+#include "ZoomPolicy.h"
 
 #include <QMouseEvent>
 #include <QWheelEvent>
@@ -1162,8 +1163,8 @@ void GLWidget::paintGL() {
 
     // ── 计算变换矩阵 ──
     float aspect = (height() > 0) ? static_cast<float>(width()) / height() : 1.0f;
-    float nearPlane = cam_.distance * 0.01f;
-    float farPlane  = cam_.distance * 10.0f;
+    float nearPlane, farPlane;
+    computeNearFar(nearPlane, farPlane);
     glm::mat4 projection = projectionMatrix(aspect, nearPlane, farPlane);
     glm::mat4 model = glm::mat4(1.0f);
     glm::mat4 view = cam_.viewMatrix();
@@ -1326,6 +1327,28 @@ glm::mat4 GLWidget::projectionMatrix(float aspect, float nearPlane, float farPla
         return glm::ortho(-halfW, halfW, -halfH, halfH, nearPlane, farPlane);
     }
     return glm::perspective(glm::radians(45.0f), aspect, nearPlane, farPlane);
+}
+
+void GLWidget::computeNearFar(float& nearPlane, float& farPlane) const {
+    // 模型尺寸（fitToModel 时 maxDist = size*10）；作为保守包围球半径
+    float modelSize = cam_.maxDist * 0.1f;
+    if (!hasModelCenter_ || modelSize <= 0.0f) {
+        // 尚无模型：退回按轨道距离取值
+        nearPlane = cam_.distance * 0.01f;
+        farPlane  = cam_.distance * 10.0f;
+        return;
+    }
+
+    float radius = modelSize;  // 偏保守，确保整模型落在视锥内、不发生近/远裁剪
+    float distToCenter = glm::length(cam_.eye() - modelCenter_);
+
+    nearPlane = distToCenter - radius;
+    farPlane  = distToCenter + radius;
+
+    // 相机钻进包围球内部时 near 会变成负数：钳到一个小正值以便看清内部
+    float nearFloor = modelSize * 0.001f;
+    if (nearPlane < nearFloor) nearPlane = nearFloor;
+    if (farPlane < nearPlane * 2.0f) farPlane = nearPlane * 2.0f;
 }
 
 void GLWidget::rebuildPartVisibilityIbo() {
@@ -1871,8 +1894,8 @@ void GLWidget::wheelEvent(QWheelEvent* e) {
     int py = (height() - wheelPos.y()) * dpr;
 
     float aspect = (height() > 0) ? static_cast<float>(width()) / height() : 1.0f;
-    float nearPlane = cam_.distance * 0.01f;
-    float farPlane  = cam_.distance * 10.0f;
+    float nearPlane, farPlane;
+    computeNearFar(nearPlane, farPlane);
     glm::mat4 projection = projectionMatrix(aspect, nearPlane, farPlane);
     glm::mat4 view = cam_.viewMatrix();
     glm::vec4 vp(0, 0, fbW, fbH);
@@ -1884,7 +1907,16 @@ void GLWidget::wheelEvent(QWheelEvent* e) {
     float denom = glm::dot(ray, viewDir);
 
     float oldDist = cam_.distance;
+    const float savedMinDist = cam_.minDist;
+    if (std::abs(denom) > 1e-6f) {
+        float t = glm::dot(cam_.target - nearPt, viewDir) / denom;
+        glm::vec3 mouseWorld = nearPt + ray * t;
+        const float modelSize = std::max(cam_.maxDist * 0.1f, 0.0f);
+        const float focusRadius = glm::length(cam_.target - mouseWorld);
+        cam_.minDist = ZoomPolicy::dynamicMinDistance(modelSize, focusRadius, savedMinDist);
+    }
     cam_.zoom(e->angleDelta().y() / 120.0f);
+    cam_.minDist = savedMinDist;
 
     if (std::abs(denom) > 1e-6f && oldDist > 1e-6f) {
         float t = glm::dot(cam_.target - nearPt, viewDir) / denom;

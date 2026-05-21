@@ -256,6 +256,10 @@ private:
     // 根据 projectionMode_ 构建投影矩阵（透视或正交），供绘制与拾取统一调用。
     glm::mat4 projectionMatrix(float aspect, float nearPlane, float farPlane) const;
 
+    // 按模型包围球计算 near/far：near=相机到模型中心距离−半径，far=距离+半径。
+    // 只要相机不钻进模型内部就不会发生近裁剪，且能给出紧致的深度范围（精度更好）。
+    void computeNearFar(float& nearPlane, float& farPlane) const;
+
     // 用 bgTopColor_/bgBotColor_ 重写背景渐变 VBO（需 GL 已初始化）。
     void uploadBackgroundVbo();
 
