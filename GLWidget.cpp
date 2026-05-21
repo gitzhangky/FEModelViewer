@@ -990,6 +990,7 @@ void GLWidget::paintGL() {
     shader_->setUniformValue("uLightDir", QVector3D(-0.4f, -0.7f, -0.5f));
     glm::vec3 eyePos = cam_.eye();
     shader_->setUniformValue("uViewPos", QVector3D(eyePos.x, eyePos.y, eyePos.z));
+    shader_->setUniformValue("uPointHighlight", false);
     shader_->setUniformValue("uContourMode", useVertexColor_ && colorBarVisible_);
     shader_->setUniformValue("uScalarMin", scalarMin_);
     shader_->setUniformValue("uScalarMax", scalarMax_);

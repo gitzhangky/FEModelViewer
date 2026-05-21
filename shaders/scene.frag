@@ -8,6 +8,7 @@ uniform vec3 uLightDir;
 uniform vec3 uViewPos;
 uniform vec3 uColor;
 uniform bool uWireframe;
+uniform bool uPointHighlight;
 uniform float uWireAlpha;
 uniform float uSurfaceAlpha;
 uniform bool uUseVertexColor;
@@ -64,10 +65,35 @@ vec3 colormapColor(float t) {
     return jetColor(t);
 }
 
+vec4 sphericalPointHighlight(vec3 baseColor, float alpha) {
+    vec2 p = gl_PointCoord * 2.0 - vec2(1.0);
+    float r2 = dot(p, p);
+    if (r2 > 1.0) discard;
+
+    float z = sqrt(max(0.0, 1.0 - r2));
+    vec3 normal = normalize(vec3(p.x, -p.y, z));
+    vec3 light = normalize(vec3(-0.45, 0.55, 0.80));
+    vec3 view = vec3(0.0, 0.0, 1.0);
+
+    float diffuse = 0.50 + 0.50 * max(dot(normal, light), 0.0);
+    float spec = pow(max(dot(reflect(-light, normal), view), 0.0), 18.0) * 0.28;
+    float radius = sqrt(r2);
+    float rim = smoothstep(0.68, 1.0, radius);
+    float edgeAlpha = 1.0 - smoothstep(0.86, 1.0, radius);
+
+    vec3 color = baseColor * diffuse + vec3(spec);
+    color = mix(color, baseColor * 0.48, rim * 0.45);
+    return vec4(min(color, vec3(1.0)), alpha * edgeAlpha);
+}
+
 void main() {
     vec3 surfaceColor = uUseVertexColor ? vColor : uColor;
 
     if (uWireframe) {
+        if (uPointHighlight) {
+            outColor = sphericalPointHighlight(surfaceColor, uWireAlpha);
+            return;
+        }
         outColor = vec4(surfaceColor, uWireAlpha);
         return;
     }

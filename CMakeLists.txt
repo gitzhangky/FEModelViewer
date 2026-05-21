@@ -377,6 +377,14 @@ if(BUILD_TESTING)
         COMMAND test_projected_rect_filter
     )
 
+    add_executable(test_cut_surface_normals
+        tests/test_cut_surface_normals.cpp
+    )
+    target_link_libraries(test_cut_surface_normals PRIVATE FERender)
+    add_test(NAME cut_surface_normals
+        COMMAND test_cut_surface_normals
+    )
+
     if(FEMODELVIEWER_BUILD_OPTIONAL_TESTS)
         add_executable(test_selection_id_filter
             tests/test_selection_id_filter.cpp
@@ -521,6 +529,13 @@ if(BUILD_TESTING)
         COMMAND ${CMAKE_COMMAND}
             "-DSOURCE_FILE=${CMAKE_CURRENT_SOURCE_DIR}/GLWidget.cpp"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check_qopenglwidget_framebuffer.cmake"
+    )
+
+    add_test(NAME node_highlight_shader_spherical
+        COMMAND ${CMAKE_COMMAND}
+            "-DSHADER_FILE=${CMAKE_CURRENT_SOURCE_DIR}/shaders/scene.frag"
+            "-DSELECTION_RENDERER_FILE=${CMAKE_CURRENT_SOURCE_DIR}/SelectionRenderer.cpp"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check_node_highlight_shader.cmake"
     )
 
     add_test(NAME installed_simple_viewer_example

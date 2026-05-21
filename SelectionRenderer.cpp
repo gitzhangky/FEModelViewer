@@ -104,6 +104,7 @@ void SelectionRenderer::render(QOpenGLShaderProgram& shader) {
     if (selEdgeVertCount_ <= 0 || !w_.selection_.hasSelection()) return;
 
     shader.setUniformValue("uWireframe", true);
+    shader.setUniformValue("uPointHighlight", selHlMode_ == 1);
     shader.setUniformValue("uWireAlpha", 1.0f);
     shader.setUniformValue("uUseVertexColor", false);
     shader.setUniformValue("uColor", QVector3D(1.0f, 0.78f, 0.0f));
@@ -111,14 +112,18 @@ void SelectionRenderer::render(QOpenGLShaderProgram& shader) {
     ScopedDepthTest depth(&w_, false);
     selEdgeVao_.bind();
     if (selHlMode_ == 1) {
-        glPointSize(8.0f);
+        ScopedBlend blend(&w_, true);
+        w_.glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glPointSize(10.0f);
         w_.glDrawArrays(GL_POINTS, 0, selEdgeVertCount_);
+        glPointSize(1.0f);
     } else {
         w_.setLineWidthClamped(2.5f);
         w_.glDrawArrays(GL_LINES, 0, selEdgeVertCount_);
         glLineWidth(1.0f);
     }
     selEdgeVao_.release();
+    shader.setUniformValue("uPointHighlight", false);
 }
 
 void SelectionRenderer::rebuildSelectionEdges() {

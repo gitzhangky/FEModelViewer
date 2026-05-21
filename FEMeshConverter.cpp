@@ -480,61 +480,44 @@ FERenderData FEMeshConverter::buildRenderData(const FESurfaceCache& cache,
     }
     if (progress) progress(50);
 
-    // ── Step B: 共享顶点 + 三角化 + 面积加权法线 ──
-    std::unordered_map<int, unsigned int> nodeToVertex;
-    for (const auto& rf : renderFaces)
-        for (int nid : rf.faceNodes)
-            if (nodeToVertex.find(nid) == nodeToVertex.end())
-                nodeToVertex[nid] = static_cast<unsigned int>(nodeToVertex.size());
-
-    int vertCount = static_cast<int>(nodeToVertex.size());
-    result.mesh.vertices.resize(vertCount * 6, 0.0f);
-    result.vertexToNode.resize(vertCount, -1);
-    for (const auto& [nid, vi] : nodeToVertex) {
-        const glm::vec3* p = coord(nid);
-        if (p) {
-            result.mesh.vertices[vi * 6 + 0] = p->x;
-            result.mesh.vertices[vi * 6 + 1] = p->y;
-            result.mesh.vertices[vi * 6 + 2] = p->z;
-        }
-        result.vertexToNode[vi] = nid;
-    }
-
+    // ── Step B: 三角化 + 面法线 ──
+    // 隐藏实体后会出现新的切口面。这里不能复用共享顶点平滑法线，否则切口面会和
+    // 周围外表面平均，边界光照看起来像凹陷；每个三角形保留自己的面法线。
     for (const auto& rf : renderFaces) {
         int n = static_cast<int>(rf.faceNodes.size());
         if (n < 3) continue;
-        unsigned int vi0 = nodeToVertex[rf.faceNodes[0]];
+
+        const glm::vec3* p0Ptr = coord(rf.faceNodes[0]);
+        glm::vec3 p0 = p0Ptr ? *p0Ptr : glm::vec3(0.0f);
+
         for (int i = 1; i < n - 1; ++i) {
-            unsigned int vi1 = nodeToVertex[rf.faceNodes[i]];
-            unsigned int vi2 = nodeToVertex[rf.faceNodes[i + 1]];
-            result.mesh.indices.push_back(vi0);
-            result.mesh.indices.push_back(vi1);
-            result.mesh.indices.push_back(vi2);
+            const glm::vec3* p1Ptr = coord(rf.faceNodes[i]);
+            const glm::vec3* p2Ptr = coord(rf.faceNodes[i + 1]);
+            glm::vec3 p1 = p1Ptr ? *p1Ptr : glm::vec3(0.0f);
+            glm::vec3 p2 = p2Ptr ? *p2Ptr : glm::vec3(0.0f);
+            glm::vec3 normal = computeNormal(p0, p1, p2);
+
+            unsigned int baseIdx = static_cast<unsigned int>(result.mesh.vertices.size() / 6);
+
+            auto appendVertex = [&](const glm::vec3& p, int nodeId) {
+                result.mesh.vertices.push_back(p.x);
+                result.mesh.vertices.push_back(p.y);
+                result.mesh.vertices.push_back(p.z);
+                result.mesh.vertices.push_back(normal.x);
+                result.mesh.vertices.push_back(normal.y);
+                result.mesh.vertices.push_back(normal.z);
+                result.vertexToNode.push_back(nodeId);
+            };
+
+            appendVertex(p0, rf.faceNodes[0]);
+            appendVertex(p1, rf.faceNodes[i]);
+            appendVertex(p2, rf.faceNodes[i + 1]);
+
+            result.mesh.indices.push_back(baseIdx);
+            result.mesh.indices.push_back(baseIdx + 1);
+            result.mesh.indices.push_back(baseIdx + 2);
             result.triangleToElement.push_back(rf.elemId);
             result.triangleToFace.push_back(rf.faceIndex);
-
-            glm::vec3 p0(result.mesh.vertices[vi0 * 6], result.mesh.vertices[vi0 * 6 + 1], result.mesh.vertices[vi0 * 6 + 2]);
-            glm::vec3 p1(result.mesh.vertices[vi1 * 6], result.mesh.vertices[vi1 * 6 + 1], result.mesh.vertices[vi1 * 6 + 2]);
-            glm::vec3 p2(result.mesh.vertices[vi2 * 6], result.mesh.vertices[vi2 * 6 + 1], result.mesh.vertices[vi2 * 6 + 2]);
-            glm::vec3 fn = glm::cross(p1 - p0, p2 - p0);
-            for (unsigned int vi : {vi0, vi1, vi2}) {
-                result.mesh.vertices[vi * 6 + 3] += fn.x;
-                result.mesh.vertices[vi * 6 + 4] += fn.y;
-                result.mesh.vertices[vi * 6 + 5] += fn.z;
-            }
-        }
-    }
-    for (int v = 0; v < vertCount; ++v) {
-        float nx = result.mesh.vertices[v * 6 + 3];
-        float ny = result.mesh.vertices[v * 6 + 4];
-        float nz = result.mesh.vertices[v * 6 + 5];
-        float len = std::sqrt(nx * nx + ny * ny + nz * nz);
-        if (len > 1e-8f) {
-            result.mesh.vertices[v * 6 + 3] = nx / len;
-            result.mesh.vertices[v * 6 + 4] = ny / len;
-            result.mesh.vertices[v * 6 + 5] = nz / len;
-        } else {
-            result.mesh.vertices[v * 6 + 5] = 1.0f;
         }
     }
     if (progress) progress(70);
