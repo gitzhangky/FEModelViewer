@@ -7,6 +7,7 @@ layout (location = 3) in float aScalar;
 uniform mat4 uMVP;
 uniform mat4 uModel;
 uniform mat3 uNormalMat;
+uniform float uPointSize;
 out vec3 vWorldPos;
 out vec3 vNormal;
 out vec3 vColor;
@@ -19,4 +20,5 @@ void main() {
     vColor    = aColor;
     vScalar   = aScalar;
     gl_Position = uMVP * vec4(aPos, 1.0);
+    gl_PointSize = uPointSize;
 }

@@ -738,6 +738,7 @@ struct Mesh {
     std::vector<float>        edgeVertices; // 边线顶点（仅位置，GL_LINES 用）
     std::vector<unsigned int> edgeIndices;  // 边线索引（每 2 个一组）
     std::vector<int>          edgeToElement; // 可渲染边线 → 单元 ID
+    std::vector<std::pair<int,int>> edgeNodeIds; // 可渲染边线 → 节点 ID 对（已排序）
 
     // ── 单元完整边线（用于选中高亮）──
     std::vector<float>              elemEdgeVertices;   // 边顶点坐标

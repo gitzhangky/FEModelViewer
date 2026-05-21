@@ -3,10 +3,19 @@
 #include "GLStateGuards.h"
 #include "GLWidget.h"
 
+#include <QOpenGLContext>
 #include <QOpenGLShaderProgram>
+#include <QSurfaceFormat>
 #include <QVector3D>
 #include <algorithm>
 #include <unordered_set>
+
+#ifndef GL_PROGRAM_POINT_SIZE
+#define GL_PROGRAM_POINT_SIZE 0x8642
+#endif
+#ifndef GL_POINT_SPRITE
+#define GL_POINT_SPRITE 0x8861
+#endif
 
 SelectionRenderer::SelectionRenderer(GLWidget& w) : w_(w) {}
 
@@ -114,9 +123,15 @@ void SelectionRenderer::render(QOpenGLShaderProgram& shader) {
     if (selHlMode_ == 1) {
         ScopedBlend blend(&w_, true);
         w_.glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-        glPointSize(14.0f);
+        const bool compatibilityPointSprite =
+            w_.context() && w_.context()->format().profile() != QSurfaceFormat::CoreProfile;
+        shader.setUniformValue("uPointSize", 12.0f * static_cast<float>(w_.devicePixelRatioF()));
+        w_.glEnable(GL_PROGRAM_POINT_SIZE);
+        if (compatibilityPointSprite) w_.glEnable(GL_POINT_SPRITE);
         w_.glDrawArrays(GL_POINTS, 0, selEdgeVertCount_);
-        glPointSize(1.0f);
+        if (compatibilityPointSprite) w_.glDisable(GL_POINT_SPRITE);
+        w_.glDisable(GL_PROGRAM_POINT_SIZE);
+        shader.setUniformValue("uPointSize", 1.0f);
     } else {
         w_.setLineWidthClamped(2.5f);
         w_.glDrawArrays(GL_LINES, 0, selEdgeVertCount_);

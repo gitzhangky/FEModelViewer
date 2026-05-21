@@ -291,6 +291,7 @@ FERenderData FEMeshConverter::toRenderData(const FEModel& model, const std::vect
             result.mesh.edgeIndices.push_back(idx);
             result.mesh.edgeIndices.push_back(idx + 1);
             result.mesh.edgeToElement.push_back(elemId);
+            result.mesh.edgeNodeIds.push_back({std::min(a, b), std::max(a, b)});
         }
     }
     if (progress) progress(85);
@@ -501,6 +502,7 @@ FERenderData FEMeshConverter::buildRenderData(const FESurfaceCache& cache,
     result.mesh.edgeVertices.reserve(edgeReserve * 6);
     result.mesh.edgeIndices.reserve(edgeReserve * 2);
     result.mesh.edgeToElement.reserve(edgeReserve);
+    result.mesh.edgeNodeIds.reserve(edgeReserve);
 
     for (const auto& rf : renderFaces) {
         int n = static_cast<int>(rf.faceNodes.size());
@@ -565,6 +567,7 @@ FERenderData FEMeshConverter::buildRenderData(const FESurfaceCache& cache,
             result.mesh.edgeIndices.push_back(idx);
             result.mesh.edgeIndices.push_back(idx + 1);
             result.mesh.edgeToElement.push_back(elemId);
+            result.mesh.edgeNodeIds.push_back(edge);
         }
     }
 

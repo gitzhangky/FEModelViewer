@@ -27,12 +27,14 @@ int main()
 
     FERenderData full = FEMeshConverter::buildRenderData(cache, nullptr);
     assert(!full.mesh.indices.empty());
+    assert(full.mesh.edgeNodeIds.size() == full.mesh.edgeIndices.size() / 2);
     assert(!full.mesh.elemEdgeVertices.empty());
     assert(!full.mesh.elemEdgeToElement.empty());
     assert(!full.mesh.elemEdgeNodeIds.empty());
 
     FERenderData light = FEMeshConverter::buildRenderData(cache, nullptr, nullptr, false);
     assert(!light.mesh.indices.empty());
+    assert(light.mesh.edgeNodeIds.size() == light.mesh.edgeIndices.size() / 2);
     assert(light.mesh.elemEdgeVertices.empty());
     assert(light.mesh.elemEdgeToElement.empty());
     assert(light.mesh.elemEdgeNodeIds.empty());

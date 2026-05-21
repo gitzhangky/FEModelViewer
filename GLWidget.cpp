@@ -19,7 +19,9 @@
 #include <QPainter>
 #include <QShortcut>
 #include <QCoreApplication>
+#include <QDebug>
 #include <QSurfaceFormat>
+#include <QtGlobal>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/ext/matrix_projection.hpp>
@@ -28,6 +30,13 @@
 #include <memory>
 #include <string>
 #include <unordered_set>
+
+#ifndef GL_POINT_SPRITE_COORD_ORIGIN
+#define GL_POINT_SPRITE_COORD_ORIGIN 0x8CA0
+#endif
+#ifndef GL_UPPER_LEFT
+#define GL_UPPER_LEFT 0x8CA2
+#endif
 
 // ============================================================
 // GLSL 着色器加载（从 Qt 资源加载外部 .glsl 文件）
@@ -43,6 +52,32 @@ static QByteArray loadShaderSource(const QString& resourcePath) {
     }
     return f.readAll();
 }
+
+static bool visibilityProfileEnabled() {
+    static const bool enabled = qEnvironmentVariableIntValue("FERENDER_VIS_PROFILE") != 0;
+    return enabled;
+}
+
+class ScopedVisibilityTimer {
+public:
+    explicit ScopedVisibilityTimer(const char* label)
+        : label_(label), enabled_(visibilityProfileEnabled()) {
+        if (enabled_) timer_.start();
+    }
+
+    ~ScopedVisibilityTimer() {
+        if (!enabled_) return;
+        const double ms = timer_.nsecsElapsed() / 1000000.0;
+        qInfo().noquote() << QString("[FERenderVis] %1: %2 ms")
+                                  .arg(QString::fromLatin1(label_))
+                                  .arg(ms, 0, 'f', 2);
+    }
+
+private:
+    const char* label_;
+    bool enabled_;
+    QElapsedTimer timer_;
+};
 
 // ── 部件颜色调色板（Catppuccin Mocha）──
 static const glm::vec3 kPartPalette[] = {
@@ -427,44 +462,59 @@ void GLWidget::rebuildSurfaceElementEdgeCache() {
 }
 
 void GLWidget::rebuildSurfaceFromCache() {
-    FERenderData rd = FEMeshConverter::buildRenderData(
-        surfaceCache_, [this](int e) { return isElementVisible(e); }, nullptr, false);
+    ScopedVisibilityTimer totalTimer("rebuildSurfaceFromCache total");
 
-    mesh_ = rd.mesh;
-    allTriIndices_  = rd.mesh.indices;
-    allEdgeIndices_ = rd.mesh.edgeIndices;
-    triToElem_    = rd.triangleToElement;
-    vertexToNode_ = rd.vertexToNode;
-    triToPart_    = rd.triangleToPart;
-    edgeToPart_   = rd.edgeToPart;
-
-    // 渲染相关映射（随网格变化），拓扑映射保持缓存构建的全模型版本
-    nodeToFirstVertex_ = NodeVertexLookup::buildFirstVertexByNode(vertexToNode_);
-
-    int numParts = static_cast<int>(partColors_.size());
-    for (int p : triToPart_) if (p >= 0) numParts = std::max(numParts, p + 1);
-    if (static_cast<int>(partColors_.size()) < numParts) {
-        partColors_.resize(numParts);
-        for (int i = 0; i < numParts; ++i)
-            partColors_[i] = kPartPalette[i % kPartPaletteSize];
-    }
-    partTriangles_.assign(numParts, {});
-    for (int t = 0; t < static_cast<int>(triToPart_.size()); ++t) {
-        int p = triToPart_[t];
-        if (p >= 0 && p < numParts) partTriangles_[p].push_back(t);
+    FERenderData rd;
+    {
+        ScopedVisibilityTimer timer("buildRenderData");
+        rd = FEMeshConverter::buildRenderData(
+            surfaceCache_, [this](int e) { return isElementVisible(e); }, nullptr, false);
     }
 
-    rebuildRenderEdgeMaps();
+    {
+        ScopedVisibilityTimer timer("assign render data");
+        mesh_ = rd.mesh;
+        allTriIndices_  = rd.mesh.indices;
+        allEdgeIndices_ = rd.mesh.edgeIndices;
+        triToElem_    = rd.triangleToElement;
+        vertexToNode_ = rd.vertexToNode;
+        triToPart_    = rd.triangleToPart;
+        edgeToPart_   = rd.edgeToPart;
+    }
+
+    {
+        ScopedVisibilityTimer timer("rebuild vertex/part lookup");
+        // 渲染相关映射（随网格变化），拓扑映射保持缓存构建的全模型版本
+        nodeToFirstVertex_ = NodeVertexLookup::buildFirstVertexByNode(vertexToNode_);
+
+        int numParts = static_cast<int>(partColors_.size());
+        for (int p : triToPart_) if (p >= 0) numParts = std::max(numParts, p + 1);
+        if (static_cast<int>(partColors_.size()) < numParts) {
+            partColors_.resize(numParts);
+            for (int i = 0; i < numParts; ++i)
+                partColors_[i] = kPartPalette[i % kPartPaletteSize];
+        }
+        partTriangles_.assign(numParts, {});
+        for (int t = 0; t < static_cast<int>(triToPart_.size()); ++t) {
+            int p = triToPart_[t];
+            if (p >= 0 && p < numParts) partTriangles_[p].push_back(t);
+        }
+    }
+
+    {
+        ScopedVisibilityTimer timer("rebuildRenderEdgeMaps");
+        rebuildRenderEdgeMaps();
+    }
     selectionRenderer_->invalidatePartEdgeCache();
     selectionRenderer_->markEdgeAdjacencyDirty();
     selectionRenderer_->markSelectionDirty();
 
-    // 触发下游上传/过滤（在缓存模式下过滤为恒等，但负责上传 IBO/TBO/边线）
+    // 缓存模式已经按当前可见集合生成了可绘制三角形/边线，后续只需上传新数据和 triPart TBO。
     needsUpload_         = true;
     needsColorUpload_    = true;
     triPartDirty_        = true;
-    partVisibilityDirty_ = true;
-    edgeVisibilityDirty_ = true;
+    partVisibilityDirty_ = false;
+    edgeVisibilityDirty_ = false;
 }
 
 void GLWidget::setObjectColor(const glm::vec3& c) { color_ = c; update(); }
@@ -603,6 +653,22 @@ void GLWidget::rebuildRenderEdgeMaps() {
 
     int edgeCount = static_cast<int>(allEdgeIndices_.size() / 2);
     if (edgeCount <= 0) return;
+
+    if (static_cast<int>(mesh_.edgeNodeIds.size()) >= edgeCount) {
+        renderEdgeNodeIds_.reserve(edgeCount);
+        renderEdgeToElems_.reserve(edgeCount);
+        for (int e = 0; e < edgeCount; ++e) {
+            auto [na, nb] = mesh_.edgeNodeIds[e];
+            if (na > nb) std::swap(na, nb);
+            renderEdgeNodeIds_.push_back({na, nb});
+
+            std::vector<int> elems;
+            if (e < static_cast<int>(mesh_.edgeToElement.size()) && mesh_.edgeToElement[e] >= 0)
+                elems.push_back(mesh_.edgeToElement[e]);
+            renderEdgeToElems_.push_back(std::move(elems));
+        }
+        return;
+    }
 
     auto posKey = [](float x, float y, float z) -> std::string {
         return std::to_string(std::llround(x * 1000000.0f)) + "," +
@@ -782,6 +848,11 @@ void GLWidget::initializeGL() {
     // ── 选中高亮（委托给 SelectionRenderer） ──
     if (!selectionRenderer_) selectionRenderer_ = std::make_shared<SelectionRenderer>(*this);
     selectionRenderer_->initGL();
+
+    auto glPointParameteriFn = reinterpret_cast<void(*)(GLenum, GLint)>(
+        context()->getProcAddress("glPointParameteri"));
+    if (glPointParameteriFn)
+        glPointParameteriFn(GL_POINT_SPRITE_COORD_ORIGIN, GL_UPPER_LEFT);
 
     if (!labelOverlay_) labelOverlay_ = std::make_shared<LabelOverlay>(*this);
 
@@ -1049,13 +1120,26 @@ void GLWidget::paintGL() {
     pickRenderer_->processDeferredPicks();
 
     if (hasSurfaceCache_ && surfaceRebuildDirty_) {
+        ScopedVisibilityTimer timer("paintGL visibility rebuild phase");
         rebuildSurfaceFromCache();
         surfaceRebuildDirty_ = false;
     }
-    if (needsUpload_) uploadMesh();
-    rebuildPartVisibilityIbo();
-    if (needsColorUpload_) uploadColors();
-    if (edgeVisibilityDirty_) rebuildEdgeIbo();
+    if (needsUpload_) {
+        ScopedVisibilityTimer timer("uploadMesh");
+        uploadMesh();
+    }
+    if (partVisibilityDirty_) {
+        ScopedVisibilityTimer timer("rebuildPartVisibilityIbo");
+        rebuildPartVisibilityIbo();
+    }
+    if (needsColorUpload_) {
+        ScopedVisibilityTimer timer("uploadColors");
+        uploadColors();
+    }
+    if (edgeVisibilityDirty_) {
+        ScopedVisibilityTimer timer("rebuildEdgeIbo");
+        rebuildEdgeIbo();
+    }
 
     renderBackground();
 
@@ -1098,6 +1182,7 @@ void GLWidget::paintGL() {
     glm::vec3 eyePos = cam_.eye();
     shader_->setUniformValue("uViewPos", QVector3D(eyePos.x, eyePos.y, eyePos.z));
     shader_->setUniformValue("uPointHighlight", false);
+    shader_->setUniformValue("uPointSize", 1.0f);
     shader_->setUniformValue("uContourMode", useVertexColor_ && colorBarVisible_);
     shader_->setUniformValue("uScalarMin", scalarMin_);
     shader_->setUniformValue("uScalarMax", scalarMax_);

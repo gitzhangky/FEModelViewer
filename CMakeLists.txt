@@ -547,6 +547,7 @@ if(BUILD_TESTING)
     add_test(NAME node_highlight_shader_spherical
         COMMAND ${CMAKE_COMMAND}
             "-DSHADER_FILE=${CMAKE_CURRENT_SOURCE_DIR}/shaders/scene.frag"
+            "-DVERTEX_SHADER_FILE=${CMAKE_CURRENT_SOURCE_DIR}/shaders/scene.vert"
             "-DSELECTION_RENDERER_FILE=${CMAKE_CURRENT_SOURCE_DIR}/SelectionRenderer.cpp"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check_node_highlight_shader.cmake"
     )
