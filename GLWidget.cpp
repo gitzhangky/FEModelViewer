@@ -932,10 +932,19 @@ void GLWidget::initializeGL() {
 
     // 查询驱动支持的最大线宽，后续所有 glLineWidth 走 setLineWidthClamped 钳制，
     // 避免在严格 Core Profile（如 macOS，仅支持 1.0）上请求非法线宽。
+    // 注意：Core Profile 下 GL_ALIASED_LINE_WIDTH_RANGE 常被驱动报告为 [1,1]，
+    // 但此处已启用 GL_LINE_SMOOTH，实际生效的是抗锯齿线宽范围
+    // GL_SMOOTH_LINE_WIDTH_RANGE（多数 Windows 驱动支持到 ~10）。两者取较大者，
+    // 否则 Windows 上高亮线会被误钳到 1px 而显得过细。
     {
-        GLfloat range[2] = {1.0f, 1.0f};
-        glGetFloatv(GL_ALIASED_LINE_WIDTH_RANGE, range);
-        maxLineWidth_ = (range[1] >= 1.0f) ? range[1] : 1.0f;
+#ifndef GL_SMOOTH_LINE_WIDTH_RANGE
+#define GL_SMOOTH_LINE_WIDTH_RANGE 0x0B22
+#endif
+        GLfloat aliased[2] = {1.0f, 1.0f};
+        glGetFloatv(GL_ALIASED_LINE_WIDTH_RANGE, aliased);
+        GLfloat smooth[2] = {1.0f, 1.0f};
+        glGetFloatv(GL_SMOOTH_LINE_WIDTH_RANGE, smooth);
+        maxLineWidth_ = std::max({1.0f, aliased[1], smooth[1]});
     }
 
     // 启动 FPS 计时器

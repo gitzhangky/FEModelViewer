@@ -114,7 +114,7 @@ void SelectionRenderer::render(QOpenGLShaderProgram& shader) {
     if (selHlMode_ == 1) {
         ScopedBlend blend(&w_, true);
         w_.glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-        glPointSize(10.0f);
+        glPointSize(14.0f);
         w_.glDrawArrays(GL_POINTS, 0, selEdgeVertCount_);
         glPointSize(1.0f);
     } else {
