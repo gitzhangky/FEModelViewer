@@ -442,73 +442,73 @@ if(BUILD_TESTING)
         ENVIRONMENT "FERENDER_TEST_DATA_DIR=${CMAKE_CURRENT_SOURCE_DIR}/examples/data"
     )
 
-    qt5_wrap_cpp(TEST_RESULT_PANEL_MOC_SRCS ResultPanel.h)
-    add_executable(test_result_panel
-        tests/test_result_panel.cpp
-        ResultPanel.cpp
-        ${TEST_RESULT_PANEL_MOC_SRCS}
-    )
-    set_target_properties(test_result_panel PROPERTIES AUTOMOC OFF)
-    target_link_libraries(test_result_panel PRIVATE FERender Qt5::Core Qt5::Gui Qt5::Widgets)
-    add_test(NAME result_panel
-        COMMAND test_result_panel
-    )
-
-    qt5_wrap_cpp(TEST_PARTS_PANEL_MOC_SRCS PartsPanel.h)
-    add_executable(test_parts_panel
-        tests/test_parts_panel.cpp
-        PartsPanel.cpp
-        ${TEST_PARTS_PANEL_MOC_SRCS}
-    )
-    set_target_properties(test_parts_panel PROPERTIES AUTOMOC OFF)
-    target_link_libraries(test_parts_panel PRIVATE FERender Qt5::Core Qt5::Gui Qt5::Widgets)
-    add_test(NAME parts_panel
-        COMMAND test_parts_panel
-    )
-
-    qt5_wrap_cpp(TEST_FE_MODEL_PANEL_MOC_SRCS FEModelPanel.h)
-    add_executable(test_fe_model_panel
-        tests/test_fe_model_panel.cpp
-        FEModelPanel.cpp
-        ${TEST_FE_MODEL_PANEL_MOC_SRCS}
-    )
-    set_target_properties(test_fe_model_panel PROPERTIES AUTOMOC OFF)
-    target_link_libraries(test_fe_model_panel PRIVATE FERender Qt5::Core Qt5::Gui Qt5::Widgets)
-    add_test(NAME fe_model_panel
-        COMMAND test_fe_model_panel
-    )
-
-    qt5_wrap_cpp(TEST_MAIN_WINDOW_LINKAGE_MOC_SRCS
-        MainWindow.h
-        FEModelPanel.h
-        PartsPanel.h
-        ResultPanel.h
-        ControlPanel.h
-        MonitorPanel.h
-        ExportPanel.h
-        DisplayPanel.h
-        AppearancePanel.h
-    )
-    add_executable(test_main_window_linkage
-        tests/test_main_window_linkage.cpp
-        MainWindow.cpp
-        FEModelPanel.cpp
-        PartsPanel.cpp
-        ResultPanel.cpp
-        ControlPanel.cpp
-        MonitorPanel.cpp
-        ExportPanel.cpp
-        DisplayPanel.cpp
-        AppearancePanel.cpp
-        ${TEST_MAIN_WINDOW_LINKAGE_MOC_SRCS}
-    )
-    set_target_properties(test_main_window_linkage PROPERTIES AUTOMOC OFF)
-    target_link_libraries(test_main_window_linkage PRIVATE FERender Qt5::Core Qt5::Gui Qt5::Widgets)
-    add_test(NAME main_window_linkage
-        COMMAND test_main_window_linkage
-    )
-
     if(FEMODELVIEWER_BUILD_OPTIONAL_TESTS)
+        qt5_wrap_cpp(TEST_RESULT_PANEL_MOC_SRCS ResultPanel.h)
+        add_executable(test_result_panel
+            tests/test_result_panel.cpp
+            ResultPanel.cpp
+            ${TEST_RESULT_PANEL_MOC_SRCS}
+        )
+        set_target_properties(test_result_panel PROPERTIES AUTOMOC OFF)
+        target_link_libraries(test_result_panel PRIVATE FERender Qt5::Core Qt5::Gui Qt5::Widgets)
+        add_test(NAME result_panel
+            COMMAND test_result_panel
+        )
+
+        qt5_wrap_cpp(TEST_PARTS_PANEL_MOC_SRCS PartsPanel.h)
+        add_executable(test_parts_panel
+            tests/test_parts_panel.cpp
+            PartsPanel.cpp
+            ${TEST_PARTS_PANEL_MOC_SRCS}
+        )
+        set_target_properties(test_parts_panel PROPERTIES AUTOMOC OFF)
+        target_link_libraries(test_parts_panel PRIVATE FERender Qt5::Core Qt5::Gui Qt5::Widgets)
+        add_test(NAME parts_panel
+            COMMAND test_parts_panel
+        )
+
+        qt5_wrap_cpp(TEST_FE_MODEL_PANEL_MOC_SRCS FEModelPanel.h)
+        add_executable(test_fe_model_panel
+            tests/test_fe_model_panel.cpp
+            FEModelPanel.cpp
+            ${TEST_FE_MODEL_PANEL_MOC_SRCS}
+        )
+        set_target_properties(test_fe_model_panel PROPERTIES AUTOMOC OFF)
+        target_link_libraries(test_fe_model_panel PRIVATE FERender Qt5::Core Qt5::Gui Qt5::Widgets)
+        add_test(NAME fe_model_panel
+            COMMAND test_fe_model_panel
+        )
+
+        qt5_wrap_cpp(TEST_MAIN_WINDOW_LINKAGE_MOC_SRCS
+            MainWindow.h
+            FEModelPanel.h
+            PartsPanel.h
+            ResultPanel.h
+            ControlPanel.h
+            MonitorPanel.h
+            ExportPanel.h
+            DisplayPanel.h
+            AppearancePanel.h
+        )
+        add_executable(test_main_window_linkage
+            tests/test_main_window_linkage.cpp
+            MainWindow.cpp
+            FEModelPanel.cpp
+            PartsPanel.cpp
+            ResultPanel.cpp
+            ControlPanel.cpp
+            MonitorPanel.cpp
+            ExportPanel.cpp
+            DisplayPanel.cpp
+            AppearancePanel.cpp
+            ${TEST_MAIN_WINDOW_LINKAGE_MOC_SRCS}
+        )
+        set_target_properties(test_main_window_linkage PROPERTIES AUTOMOC OFF)
+        target_link_libraries(test_main_window_linkage PRIVATE FERender Qt5::Core Qt5::Gui Qt5::Widgets)
+        add_test(NAME main_window_linkage
+            COMMAND test_main_window_linkage
+        )
+
         add_executable(test_pivot_interaction
             tests/test_pivot_interaction.cpp
         )
